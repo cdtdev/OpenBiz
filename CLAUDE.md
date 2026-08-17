@@ -128,6 +128,25 @@ Current candidates, none yet load-bearing:
 
 Adopting any of these as load-bearing requires a spike task and an ADR recording what was measured.
 
+### Design for assistability, from the first phase
+
+LLM agents arrive in Phase 10, but the shape they need must exist long before that — and it costs
+nothing to build it correctly the first time.
+
+**Any path that changes a vocabulary takes *candidates*, not just direct writes.** A candidate is a
+proposed change carrying its provenance, its source, and a confidence where one is meaningful, which
+a human reviews before it lands. This is the same shape whether the candidate came from a CSV
+import, a discovery match against another vocabulary, a bulk edit, or an LLM agent.
+
+Build it once, in Phase 2, and Phase 10 slots in behind an existing seam. Build direct writes now
+and every import, discovery, and agent path has to be retrofitted later. So: when you implement
+something that mutates a vocabulary, ask whether a machine might one day propose that change, and
+if so, put the candidate-and-review seam in now.
+
+This is not a licence to build LLM code early with no caller — that is exactly the "built but no
+production caller" failure of §4. It is an instruction about **interface shape**, not about adding
+functionality.
+
 ### Explainability is a first-class feature
 
 Every inference, validation failure, and auto-applied rule must be able to answer **"why?"** with a
@@ -166,8 +185,16 @@ audit) may later be a separately-licensed layer, so the core must stay cleanly r
 - **Forbidden in the core:** GPL, LGPL, AGPL, SSPL, and any non-commercial or source-available
   licence. This rules out Blazegraph and Virtuoso OSS — no real loss, since Oxigraph, RDF4J, and
   Jena are all permissive.
-- Every new dependency gets a licence check. `cargo deny` enforces this in CI; if you add a dep and
-  CI fails on licence, **remove the dep** — do not weaken the policy.
+- Every new dependency gets a licence check. `cargo deny` enforces this in CI. If you add an
+  *optional* dep and CI fails on licence, **remove the dep** — do not weaken the policy.
+- **If a dependency we genuinely cannot avoid (Oxigraph, horned-owl, and their transitive tree)
+  carries a licence that is merely *unlisted* rather than forbidden**, that is a decision, not a
+  wall. Judge it: if it is permissive in substance (`Unicode-DFS-2016`, `BSD-*`, `OpenSSL`,
+  `BSL-1.0`, `Zlib` and similar), add it to `deny.toml` **in the same commit as an ADR recording
+  what it is and why it is compatible with open core**. If it is copyleft — GPL, LGPL, AGPL, SSPL,
+  or source-available — the answer is still no: record it in `BLOCKED.md` and stop, because that
+  one is a commercial decision a human has to make.
+  Never add a licence to the allow list without the ADR. A silent widening is how this policy dies.
 
 ---
 
