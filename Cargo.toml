@@ -9,6 +9,10 @@ rust-version = "1.90"
 license = "Apache-2.0"
 repository = "https://github.com/cdtdev/OpenBiz"
 authors = ["OpenBiz contributors"]
+# OpenBiz ships as an application, not as crates.io libraries. This also lets cargo-deny's
+# `allow-wildcard-paths` apply — it deliberately does not exempt publishable crates, since
+# crates.io forbids path dependencies.
+publish = false
 
 [workspace.dependencies]
 openbiz-api = { path = "crates/openbiz-api" }

@@ -40,7 +40,9 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Config from a file as well as the environment (only `OPENBIZ_*` env vars are read today)
 - [x] GitHub Actions CI: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, UI build
 - [x] `cargo deny` licence policy enforcing `CLAUDE.md` §5, wired into CI
-- [ ] Branch protection on `main` plus auto-merge-on-green, so the loop cannot merge red
+- [ ] Branch protection on `main` so the loop *cannot* merge red — **BLOCKED**, needs GitHub Pro or
+      a public repo. See `BLOCKED.md`. The loop watches checks itself as a workaround, which is a
+      convention rather than an enforced rule
 - [x] Author the iteration driver prompt and the `/openbiz-status` + `/openbiz-control` skills
 
 ---

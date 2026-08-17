@@ -42,9 +42,15 @@ jobs:
 
       # Enforces CLAUDE.md §5. If this fails on a new dependency, remove the dependency —
       # do not loosen deny.toml.
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      #
+      # Installed onto the normal runner rather than using cargo-deny-action: that action runs in a
+      # musl container which does not honour our rust-toolchain.toml, and the resulting toolchain
+      # mismatch made cargo-deny fail to resolve workspace dependency inheritance.
+      - uses: taiki-e/install-action@v2
         with:
-          command: check licenses bans sources
+          tool: cargo-deny
+
+      - run: cargo deny check licenses bans sources
 
   ui:
     name: UI
