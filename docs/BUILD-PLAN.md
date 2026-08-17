@@ -3,14 +3,15 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** Phase 0 nearly complete — workspace, server, embedded UI, harness, and the design for
-the methodology engine, LLM integration, and enterprise awareness (ADRs 0001–0004). 28 tests
-passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`, and the UI typecheck/build are
-green. **The single binary is real:** the release binary serves the full interface with `ui/dist`
-deleted from disk, checked by CI.
+**Status:** Phase 0 complete except for one blocked item — workspace, server, embedded UI, layered
+configuration, harness, and the design for the methodology engine, LLM integration, and enterprise
+awareness (ADRs 0001–0005). 45 tests passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`,
+and the UI typecheck/build are green. **The single binary is real:** the release binary serves the
+full interface with `ui/dist` deleted from disk, checked by CI.
 
-**Current position:** Phase 0 (Harness & ground). Two items remain: file-based config, and branch
-protection (blocked, needs a human — see `BLOCKED.md`). Phase 1 has not started.
+**Current position:** Phase 0 (Harness & ground). Every item is done except branch protection, which
+is blocked on a human decision (see `BLOCKED.md`) and will not clear inside the loop. **Phase 1
+(RDF core & store) starts next**, with `openbiz-store`'s Oxigraph lifecycle.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -24,6 +25,16 @@ draft — write it to `docs/PROPOSED.md` under "LLM assistance opportunities" wi
 problem it solves. By the time Phase 10 arrives its agent list should reflect what was learned
 building Phases 1–9, not the guesses made on day one. **Do not pull Phase 10 forward** to service
 these notes; recording the opportunity is the whole task.
+
+**Standing instruction from the product owner** (`FEEDBACK-LOG.md`, 2026-08-18): **parity is
+failure.** Before building any item, answer *"what do the incumbents do badly here, and what would
+be materially better?"* — not "does the incumbent have this" — and write the answer into the item or
+the commit. Working a competitor's feature list as a checklist is the specific failure mode; the
+question is always what the *user* is trying to accomplish. If the honest answer is "here we can
+only match", say so in `docs/PROPOSED.md` rather than shipping parity quietly. This never licenses
+scope creep and never overrides `CLAUDE.md` §1 or §4. The every-25th-iteration product-owner pass
+re-reads the charter's wedge table row by row and asks whether what we built is *better* yet, or
+merely present.
 
 Phases are ordered by dependency, not importance. Phase 3 (the interface) is deliberately early:
 the interface is a core differentiator, and building it late means retrofitting every API to it.
@@ -50,7 +61,13 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [x] Test that the server serves the embedded UI at `/`
       > Proven the hard way: a `Single binary` CI job deletes `ui/dist` and `ui/node_modules`, then
       > starts the release binary and curls it. See `adr/0004`.
-- [ ] Config from a file as well as the environment (only `OPENBIZ_*` env vars are read today)
+- [x] Config from a file as well as the environment
+      > **Better, not parity:** the incumbents' weakness here is not the file format, it is that a
+      > deployment's *effective* configuration is unknowable — spread across layers, with a
+      > misspelled key silently ignored. So an unrecognised key is a hard error naming the line and
+      > the keys we accept, and every setting carries its provenance: the startup log and the bind
+      > failure both say which of the default, the file, or the variable won. See `adr/0005` and
+      > `docs/CONFIGURATION.md`.
 - [x] GitHub Actions CI: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, UI build
 - [x] `cargo deny` licence policy enforcing `CLAUDE.md` §5, wired into CI
 - [ ] Branch protection on `main` so the loop *cannot* merge red — **BLOCKED**, needs GitHub Pro or

@@ -68,3 +68,65 @@ look competent disables the one signal that catches a stuck loop.
   related unknown is binary size: two files embed for free, and I have no measurement of what a real
   design system's `ui/dist` does to size, compile time, or the "cold start under a few seconds"
   commitment in §1.5.
+
+## Iteration 2 — 2026-08-18
+- **Took:** Phase 0 — "Config from a file as well as the environment (only `OPENBIZ_*` env vars are
+  read today)". The last unblocked item in Phase 0.
+- **Did:** configuration is now three documented layers — defaults → TOML file → environment — and
+  every effective value carries **where it came from**. `OPENBIZ_CONFIG` names a file; absent that,
+  `openbiz.toml` in the working directory, whose absence is normal and silent. An explicitly named
+  file that is missing is a hard error, because an explicit request must never degrade to the
+  defaults. Applied the new standing direction ("parity is failure") before building: the
+  incumbents' weakness here is not the file format, it is that a deployment's *effective*
+  configuration is unknowable — spread across an app-server descriptor, properties files, and a
+  triplestore config, with a misspelled key silently ignored. So two things beat parity rather than
+  matching it. (1) An unrecognised key **fails the load**, with TOML's span naming the line and
+  serde naming the keys we accept. (2) Every setting is a `Setting<T>` carrying a `Source`
+  (`Default` / `File(path)` / `Env(name)`); `main.rs` logs one line of provenance per setting before
+  it binds, and the bind failure now reads `failed to bind 0.0.0.0:80, from
+  /etc/openbiz/openbiz.toml` rather than naming only the address that did not work. A blank value is
+  an error naming its source, not an absence. `Deref`/`Display` forward, so provenance costs call
+  sites nothing.
+- **Tests:** 28 → 45. Sixteen in `crates/openbiz-server/src/config.rs`: precedence per layer and
+  per setting, partial files, `OPENBIZ_CONFIG` selection against a decoy default file, missing
+  default vs missing explicit file, unknown key, malformed TOML, wrong type, blank value from each
+  of the three sources, comments, and the provenance report. `cargo fmt`, `clippy -D warnings`,
+  `cargo test --workspace`, and `cargo deny check licenses bans sources` all green; `toml` and
+  `tempfile` needed **no** widening of the §5 allow list. The UI did not change, so its build was
+  not re-run. Beyond the suite: verified all four failure paths by hand against the real binary and
+  corrected `docs/CONFIGURATION.md` where my documented log line did not match what it actually
+  emits.
+- **Learned:** two things. (1) The unknown-key test passed the first time it ran, which is not
+  evidence — so I deleted `deny_unknown_fields` and confirmed it goes red, then restored it. Every
+  one of these sixteen tests passed on first run because the code was written alongside them; that
+  makes "prove the load-bearing assertion can fail" a step worth doing explicitly rather than a
+  formality, and I should do it for the *most load-bearing* assertion of every item, not only when
+  test-first happens to be natural. (2) Injecting the environment lookup into `Config::resolve` was
+  forced rather than chosen: `std::env::set_var` mutates state shared by every thread in the test
+  binary, so environment-mutating tests are flaky against each other by construction. The good
+  design came out of a constraint, and it left a real hole — `Config::load` itself is now the one
+  untested line of wiring, recorded rather than glossed.
+- **Recorded:** `adr/0005` (precedence, TOML over JSON/YAML, `deny_unknown_fields`, the provenance
+  model, and why `figment`/`config-rs` were rejected on §1.5) and a new `docs/CONFIGURATION.md`.
+  Drained the feedback inbox **first**, before starting work: logged the "parity is failure"
+  standing direction verbatim to `FEEDBACK-LOG.md`, truncated the inbox immediately, then wrote it
+  into `BUILD-PLAN.md` as a standing instruction and opened a "Parity findings" section in
+  `PROPOSED.md` for the honest "we can only match here" cases. `promote-queue.json` was already
+  `[]`. In `UNTESTED.md`: closed the config-file half of the env-only entry and **split out three
+  narrower gaps** rather than letting the closure imply more than it earned — `data_dir` is
+  configured and consumed by nothing, `bind` is validated for shape but not meaning, and
+  `Config::load`'s wiring to the real environment is inspected-only. Two proposals opened
+  (subprocess test for `load`; effective-configuration screen in the Phase 14 admin console). Nil
+  LLM opportunity again, with the reasoning: refusing to interpret a misspelled key is the point of
+  this change, and an LLM guessing at it would be the opposite. One note carried forward — `Source`
+  is the same provenance shape `adr/0002` requires of every LLM proposal, and Phase 10 should not
+  invent a second vocabulary for it.
+- **Still uncertain:** whether "blank is an error" survives contact with real deployments. It is
+  right on principle — an empty `OPENBIZ_BIND=` is a silent ignore wearing a different hat — but
+  `docker compose` interpolating an unset variable to empty is extremely common, and the failure
+  mode is a container that will not start where the incumbents would have shrugged and used the
+  default. I think refusing is correct and I have no evidence either way; the first person to
+  deploy this in a compose file is the test, and there is nobody to ask yet. The narrower version
+  of the same doubt: this iteration decided per-setting validation is "more machinery than the
+  problem" at two settings, and I do not know where that stops being true — Phase 1's `data_dir`
+  alone wants an is-this-a-writable-directory check, so it may be one item away rather than ten.

@@ -85,13 +85,57 @@ Do not delete it — the record of what took how long to close is the signal.
   measure binary size, cold start, and first-paint transfer size, and decide on compression then.
 - **Opened:** iteration 1
 
-### Config is env-only; the file path is unimplemented
+### ~~Config is env-only; the file path is unimplemented~~ — HALF CLOSED, iteration 2
+- **Closed by:** `crates/openbiz-server/src/config.rs` — defaults → TOML file → environment, with
+  documented precedence, `deny_unknown_fields`, blank-value rejection, and a `Source` on every
+  setting. 16 tests; `Config::load` is called by `main.rs`, which logs each setting's provenance
+  and names it in the bind-failure message. Four failure paths verified by hand against the real
+  binary. See `adr/0005` and `docs/CONFIGURATION.md`.
+- **Still open — see the entry below:** the `data_dir` half. Nothing creates or opens that
+  directory yet.
 - **Kind:** partial-coverage
-- **What is proven:** `Config::from_env` reads `OPENBIZ_BIND` and `OPENBIZ_DATA_DIR`, and
-  `Config::default` binds loopback (tested).
-- **What is not:** there is no config-file support despite the Phase 0 item naming it. The
-  `data_dir` field is carried and logged but **no code creates or opens that directory** — it is
-  inert until Phase 1 wires the store.
-- **What would close it:** implement file config with documented precedence, and have the store
-  actually use `data_dir`.
-- **Opened:** Phase 0 hand-build (pre-iteration-1)
+- **Opened:** Phase 0 hand-build (pre-iteration-1) · **Config-file half closed:** iteration 2
+
+### `data_dir` is configured, logged, and used by nothing
+- **Kind:** no-production-caller
+- **What is proven:** `data_dir` is read from the defaults, a file, or `OPENBIZ_DATA_DIR`, is
+  rejected when blank, carries its provenance, and is logged at startup.
+- **What is not:** **no code creates, opens, or writes that directory.** A user who sets it to an
+  unwritable path, a path that does not exist, or a file rather than a directory gets a clean
+  startup and no warning — the setting is inert until Phase 1 wires the store. This is the honest
+  reading of `CLAUDE.md` §4 clause 1: a value with no consumer is not a feature.
+- **What would close it:** the first Phase 1 item (`openbiz-store` Oxigraph lifecycle — open, close,
+  durable path, graceful shutdown), which is the next item in the plan.
+- **Opened:** iteration 2 (carved out of the entry above)
+
+### Configuration is validated for shape, not for meaning
+- **Kind:** partial-coverage
+- **What is proven:** unknown keys, malformed TOML, wrongly-typed values, blank values, and a
+  missing explicitly-named file all fail with a message naming the source. Precedence across all
+  three layers is tested per setting, including that one key in a file does not change the
+  provenance of another.
+- **What is not:** `bind` is only checked for being non-blank. `OPENBIZ_BIND=not-an-address` is
+  accepted by the loader and fails later at `TcpListener::bind` — a clear error, but later than it
+  needs to be, and it is the only setting where the bind attempt happens to be a validator. No
+  setting has a range, enum, or path check, and there is no mechanism for one. A non-UTF-8
+  `OPENBIZ_CONFIG` path is treated as unset by `std::env::var().ok()` rather than reported, which is
+  a silent ignore of exactly the kind the rest of this module refuses.
+- **What would close it:** a per-setting validation hook run during `Config::resolve`, so the error
+  carries the `Source` like the blank-value one does. Worth doing when the settings count justifies
+  it — with two settings a hook is more machinery than the problem.
+- **Opened:** iteration 2
+
+### Configuration precedence is untested against the real process environment
+- **Kind:** partial-coverage
+- **What is proven:** `Config::resolve` is tested exhaustively with an injected environment lookup,
+  and the four headline failure paths were run by hand against the real binary with real env vars
+  and real files.
+- **What is not:** `Config::load` — the ten-line function that supplies `std::env::var` and the
+  default path — has no automated test. It cannot easily have one: `std::env::set_var` mutates
+  state shared by every thread in the test binary, and Rust 2024 marks it `unsafe` for that reason.
+  So the wiring between the tested core and the real environment is inspected-only, and a typo in a
+  variable name inside `load` would pass CI.
+- **What would close it:** an integration test that spawns the binary as a subprocess with a
+  controlled environment and asserts on its startup log — the same shape as
+  `tests/serves_embedded_ui.rs`. Cheap; deferred only to keep this iteration to one item.
+- **Opened:** iteration 2

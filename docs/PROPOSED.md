@@ -56,6 +56,48 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   makes CI slower and adds a network dependency to the *build*, never to the product.
 - **Suggested phase:** Phase 3, alongside the accessibility item it would share a harness with.
 
+### Test `Config::load` against a real process environment via a subprocess
+- **Status:** proposed.
+- **Gap:** `Config::resolve` is tested exhaustively with an injected environment, but `Config::load`
+  — the wiring that supplies `std::env::var` and the default path — has no automated test, because
+  `std::env::set_var` mutates state shared across the test binary's threads. A typo in a variable
+  name inside `load` would pass CI. The four failure paths were verified by hand this iteration,
+  which is not a regression test.
+- **Why load-bearing:** modestly, but it grows. Every phase adds settings, and each one widens the
+  untested gap between the tested merge and the real environment. The same harness would let us
+  assert on the startup provenance log, which is now a user-facing contract documented in
+  `docs/CONFIGURATION.md` and asserted nowhere.
+- **Cost & impact:** well under an iteration. Spawn the release binary as a subprocess with a
+  controlled environment and a temporary directory, assert on its stderr — the same shape as
+  `tests/serves_embedded_ui.rs`. No new dependency.
+- **Suggested phase:** Phase 0, or folded into the first Phase 1 item that makes `data_dir` real.
+
+### Show the effective configuration and its provenance in the admin console
+- **Status:** proposed.
+- **Gap:** `Setting`/`Source` know where every value came from, but that answer is only reachable in
+  the startup log and in error messages. An operator debugging a running server has to find the log
+  from process start, which in a container may be long gone.
+- **Why load-bearing:** nice-to-have on its own; genuinely valuable as part of the Phase 14 admin
+  console, where it is the difference between "the settings screen" the incumbents ship and a screen
+  that answers *why* a value is what it is. Needs authentication first — effective configuration is
+  not public information, so this cannot land before Phase 6.
+- **Cost & impact:** small once the console exists; a read-only endpoint and a table. Must redact:
+  by Phase 10 the config will hold LLM provider credentials, which `CLAUDE.md` §14 says never go in
+  logs — so this screen must show a credential's *source* without its *value*.
+- **Suggested phase:** Phase 14, with the admin console.
+
+---
+
+## Parity findings
+
+Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
+we can only match"** — recorded per the product owner's standing direction (`FEEDBACK-LOG.md`,
+2026-08-18) rather than shipped quietly as parity.
+
+_None yet. Iteration 2 (layered configuration) found a real "better": the incumbents' weakness is not
+the file format but that a deployment's effective configuration is unknowable, so provenance on every
+setting and a hard error on an unrecognised key beat parity rather than matching it. See `adr/0005`._
+
 ---
 
 ## LLM assistance opportunities
@@ -70,3 +112,12 @@ does not promote them.
 _Iteration 1 (embedded UI): none found. Serving static assets is deterministic transport work with
 no judgement in it, no natural-language content, and nothing that mutates a vocabulary — so there is
 no candidate seam here either. Recorded as a genuine nil return rather than padded._
+
+_Iteration 2 (layered configuration): none found. Parsing a two-key TOML file is deterministic, and
+an LLM guessing what a misspelled key "probably meant" is the opposite of what this change is for —
+the value here comes from refusing to interpret. Configuration mutates no vocabulary, so there is no
+candidate seam. One adjacent observation worth carrying to Phase 10 rather than a proposal in itself:
+`Source` is a small, concrete instance of the provenance shape that `adr/0002` requires on every LLM
+proposal — "which layer produced this value" and "which model, prompt version, and inputs produced
+this suggestion" are the same question, and the Phase 10 proposal model should not invent a second
+vocabulary for it._
