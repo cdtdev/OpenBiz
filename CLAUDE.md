@@ -33,6 +33,9 @@ structural, not cosmetic. Each is one of our pillars:
 | Dated, dense, joyless UI | **Visually stunning and modern.** Design is a feature, not a coat of paint. |
 | Governance bolted on after the fact | **Governance is the substrate** — review, approval, provenance, and versioning are in the core model. |
 | Proprietary, opaque change history | **GitHub-native.** Vocabularies are code: branches, PRs, reviewable diffs, CI validation. |
+| No guidance — the tool assumes you already know how to build an ontology | **The method is in the product.** A guided lifecycle always answers "where am I, what next, what is blocking me", and a Solution Advisor routes you to the right artifact type before you start. See `docs/METHODOLOGY.md`. |
+| "AI features" with no provenance and no way to refuse them | **Assistance is optional, auditable, and never writes.** Agents emit proposals a human approves; every call is a logged egress event; the default provider is none. See `adr/0002`. |
+| Easy to create a tenth overlapping vocabulary, hard to find the nine that exist | **Discovery precedes creation.** Reuse, mapping, and extension rank above creating new, which requires a recorded justification. See `adr/0003`. |
 
 ### Non-negotiables
 
@@ -49,6 +52,15 @@ via `docs/PROPOSED.md`.
 4. **Apache-2.0 open core.** See §5 — the licence rules bind every dependency you add.
 5. **Lightweight.** Cold start under a few seconds, modest memory at rest. Every dependency is a
    liability; justify it.
+6. **Assistance is optional and never authoritative.** No core capability may require an LLM, and no
+   model output may reach a vocabulary without human approval. Every LLM-assisted path has a working
+   manual path; an air-gapped deployment loses assistance and nothing else. Sending vocabulary
+   content to an external provider is a **data-egress event** — it is opt-in, per-vocabulary,
+   audited, and refusable.
+7. **Reuse outranks creation.** Discovery runs before creation, not as a feature the user must
+   remember. Creating something new when something existing would serve requires a recorded
+   justification. A tool that makes new vocabularies cheap and existing ones invisible is a silo
+   generator, which is the problem we exist to solve.
 
 ---
 
@@ -86,8 +98,14 @@ crates/
   openbiz-skos/            SKOS + SKOS-XL domain model, concept tree, integrity conditions
   openbiz-owl/             OWL 2 via horned-owl; Reasoner trait; EL + RL engines
   openbiz-validate/        SHACL: Validator trait, rule packs (ISO 25964, Z39.19)
+  openbiz-lifecycle/       methodology packs, project state, gate evaluation, Solution Advisor
+  openbiz-llm/             LlmProvider trait, providers, agents, proposal model
+  openbiz-discovery/       DiscoveryProvider trait, connectors, matching, vocabulary registry
   openbiz-git/             vocabulary-as-code: serialise to Turtle, branch/PR, GitHub API
   openbiz-api/             shared HTTP/JSON types, OpenAPI generation
+tools/
+  openbiz-llm-shim/        DEV ONLY: OpenAI-compatible HTTP facade over the Claude CLI.
+                           Never shipped in the product binary; excluded from release builds.
 ui/                        React + TS + Vite frontend
 docs/                      charter satellites, ADRs, and the loop's ledgers
 ```
@@ -95,10 +113,11 @@ docs/                      charter satellites, ADRs, and the loop's ledgers
 ### Engine dependencies are behind our own traits
 
 The Rust semantic-web ecosystem is younger than the JVM's. That is an accepted, deliberate cost of
-the single-binary commitment — but it must not become a trap. **Never call a third-party reasoner
-or validator directly from application code.** Every one sits behind a trait we own
-(`Reasoner`, `Validator`), so a crate that stalls or proves wrong can be swapped or replaced with
-an in-house implementation without touching callers.
+the single-binary commitment — but it must not become a trap. **Never call a third-party engine
+directly from application code.** Every one sits behind a trait we own — `Reasoner`, `Validator`,
+`LlmProvider`, `DiscoveryProvider` — so a crate or vendor that stalls, changes terms, or proves
+wrong can be swapped without touching callers. The rule applies with most force to `LlmProvider`,
+where the vendor landscape moves fastest and lock-in is most expensive.
 
 Current candidates, none yet load-bearing:
 - `oxigraph` — store and SPARQL. **Known risk:** query evaluation is explicitly not yet optimised

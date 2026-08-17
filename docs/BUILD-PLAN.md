@@ -3,14 +3,15 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** Phase 0 nearly complete — workspace, server, UI, and harness landed. 15 tests passing;
+**Status:** Phase 0 nearly complete — workspace, server, UI, harness, and the design for the
+methodology engine, LLM integration, and enterprise awareness (ADRs 0001–0003). 15 tests passing;
 `cargo fmt`, `cargo clippy -D warnings`, and the UI typecheck/build are green.
 
-**Current position:** Phase 0 (Harness & ground). Two items remain: embedding the built UI into the
-binary, and branch protection. Phase 1 has not started.
+**Current position:** Phase 0 (Harness & ground). Three items remain: embedding the built UI,
+file-based config, and branch protection (blocked). Phase 1 has not started.
 
-**How to work this plan.** Take the next unchecked item in the current phase. If it turns out to be
-much larger than it reads, split it in place into smaller `- [ ]` items and do the first — do not
+**How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
+out to be much larger than it reads, split it in place into smaller items and do the first — do not
 silently half-do it. If you find work that *should* exist but is not here, it goes in
 `docs/PROPOSED.md` for a human to promote. You do not add items to this file yourself.
 
@@ -30,9 +31,11 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [x] Seed this build plan
 - [x] Create the loop ledgers: `UNTESTED.md`, `BLOCKED.md`, `PROPOSED.md`, `LOOP-LOG.md`
 - [x] Apache-2.0 `LICENSE` and `README.md`
-- [x] Cargo workspace with the seven crates from `CLAUDE.md` §3, each compiling
+- [x] Cargo workspace with the initial seven crates, each compiling
 - [x] Axum server with `/healthz`, structured `tracing`, and config from env
 - [x] React + TS + Vite UI skeleton that typechecks and builds
+- [x] Research KOS development methodologies and design the methodology engine, LLM integration, and
+      enterprise awareness (`docs/METHODOLOGY.md`, ADRs 0001–0003)
 - [ ] Embed the built UI into the binary via `rust-embed` and serve it from the server
       > The UI builds to `ui/dist` but **nothing serves it** — the single-binary promise in
       > `CLAUDE.md` §1 is not yet met. Recorded in `UNTESTED.md`.
@@ -86,6 +89,9 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Concept IRI minting: configurable patterns, collision detection, opaque-vs-readable policy
 - [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement
 - [ ] Deprecation lifecycle preserving history rather than deleting — auditors need the trail
+- [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation
+      > The hook lands here so the creation path is **built around discovery** rather than
+      > retrofitted. Enterprise and public sources arrive in Phase 12 (`adr/0003`).
 
 ---
 
@@ -111,8 +117,8 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 ## Phase 4 — Validation & rule packs
 
-> Enables: governance that is machine-checked rather than hoped for. This is where editorial
-> best practice stops being a PDF nobody reads.
+> Enables: governance that is machine-checked rather than hoped for — **and Phase 7's gates**, which
+> are SHACL shapes (`adr/0001`).
 
 - [ ] **Spike:** evaluate `oxirs-shacl` vs `shacl_validation` vs in-house against the W3C SHACL
       test suite. Record coverage, performance, and licence in an ADR before choosing
@@ -148,7 +154,8 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 ## Phase 6 — Governance & workflow
 
-> Enables: the reason an enterprise buys this rather than using Protégé for free.
+> Enables: the reason an enterprise buys this rather than using Protégé for free. Also the approval
+> path every LLM proposal flows through (Phase 10).
 
 - [ ] Identity and RBAC: roles modelled on VocBench's editorial separation (see `COMPETITIVE.md`)
 - [ ] Per-vocabulary and per-scheme permissions
@@ -162,7 +169,43 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 ---
 
-## Phase 7 — GitHub-native vocabulary-as-code
+## Phase 7 — Lifecycle & methodology
+
+> Enables: "where am I, what next, what is blocking me" — and routing a newcomer to the right
+> artifact type before they build the wrong one. Design in `docs/METHODOLOGY.md` and `adr/0001`.
+> Depends on Phase 4 (gates are SHACL) and Phase 6 (roles, states, audit).
+
+- [ ] `openbiz-lifecycle` crate: methodology pack model as a **scenario graph**, not a linear phase
+      list — NeOn's nine scenarios branch and recombine, and a linear model cannot express them
+- [ ] Pack RDF vocabulary, Turtle loader, and validation *of packs themselves*
+- [ ] Project state: bound pack, current phase/scenario, activity completion, history
+- [ ] Gate evaluation via SHACL — exit criteria as shapes, failures linked to the **specific
+      offending concepts**, never an opaque "not ready"
+- [ ] Gate override, role-gated, with a recorded reason surfaced in the audit trail and the Compass
+- [ ] Project Compass UI: phase ribbon, next action, blocking criteria, honest progress, and a
+      visible marker when a phase was passed by override rather than satisfied
+- [ ] Pack: `z39-19-taxonomy` (authority lists and taxonomies)
+- [ ] Pack: `iso-25964-thesaurus`
+- [ ] Pack: `noy-mcguinness-101` (the seven steps; gentlest on-ramp)
+- [ ] Pack: `methontology` (staged, with continuous support activities)
+- [ ] Pack: `neon` (nine scenarios; the enterprise default because it is built around reuse)
+- [ ] Pack: `lot` (requirements → implementation → publication → maintenance)
+- [ ] Pack: `samod` (milestones, modelet, bag of tests — its test cases map onto our SHACL shapes
+      and SPARQL competency-question checks)
+- [ ] Competency questions as first-class requirements: define, attach, verify via SPARQL
+- [ ] Solution Advisor: the diagnostic interview, phrased so a subject-matter expert can answer
+      every question without knowing what SKOS is
+- [ ] Advisor routing to artifact type + pack + starting template, with stated reasoning
+- [ ] Advisor consults discovery **first** and can recommend building nothing (`adr/0003`)
+- [ ] Solution Brief: versioned, revisable, diffable record of the decision and rejected alternatives
+- [ ] Escalation: authority list → taxonomy → thesaurus, guided migration
+- [ ] Escalation: thesaurus → ontology as **guided reinterpretation, never one-click** — a per-concept
+      decision that keeps the SKOS vocabulary alongside the ontology rather than replacing it
+- [ ] Custom pack authoring so an organisation can encode its own governance standard
+
+---
+
+## Phase 8 — GitHub-native vocabulary-as-code
 
 > Enables: the structural answer to "no visible roadmap, no reviewable history". This is the pillar
 > the incumbents cannot copy without changing how they build.
@@ -180,7 +223,7 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 ---
 
-## Phase 8 — Ontology (OWL 2) authoring
+## Phase 9 — Ontology (OWL 2) authoring
 
 > Enables: the "ontologies" half of the pitch. Measured against Protégé, which is the benchmark
 > users arrive with.
@@ -196,7 +239,42 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 ---
 
-## Phase 9 — Interop & migration
+## Phase 10 — LLM & agent assistance
+
+> Enables: the acceleration, without becoming a dependency. Design in `adr/0002`.
+> **Every item here must degrade cleanly to `NullProvider`.** Depends on Phase 6 for the approval
+> path proposals flow through.
+
+- [ ] `openbiz-llm` crate: `LlmProvider` trait and `NullProvider` as the **default**
+- [ ] `AnthropicProvider` — Anthropic Messages API
+- [ ] `OpenAiCompatibleProvider` — one implementation covering Azure OpenAI, vLLM, Ollama, LiteLLM,
+      and gateway-fronted Bedrock, including **local models for air-gapped sites**
+- [ ] `tools/openbiz-llm-shim`: dev-only OpenAI-compatible HTTP facade over `claude -p`, excluded
+      from release builds and never present in the product binary
+- [ ] Prove dev and production exercise the **same code path** — only the base URL differs
+- [ ] Proposal model: an agent run emits suggested changes that a human reviews, edits, and approves
+      through the Phase 6 workflow. **No path from model output to committed vocabulary.**
+- [ ] PROV-O provenance on every proposal: model, prompt template version, timestamp, requesting
+      user, inputs, cited sources
+- [ ] Per-vocabulary LLM policy: off · local-only · named external provider
+- [ ] Egress audit log, plus disclosure in the UI **before the first call**, not buried in settings
+- [ ] Prompt templates as versioned git artifacts, not string literals
+- [ ] Golden evaluation sets per agent, and a harness the loop can run to catch regressions
+- [ ] Agent: **note consolidation** — unstructured notes, glossaries, and spreadsheets into candidate
+      concepts with labels, definitions, and proposed relations
+- [ ] Agent: candidate term extraction from a document corpus
+- [ ] Agent: definition drafting in house style, with sources
+- [ ] Agent: near-synonym and duplicate detection
+- [ ] Agent: mapping suggestion between vocabularies (feeds Phase 12)
+- [ ] Agent: translation drafting for multilingual vocabularies
+- [ ] Agent: competency question generation and gap-spotting
+- [ ] Agent: change-request impact summary for reviewers
+- [ ] Agent awareness of lifecycle position — suggest what the *current phase* actually needs
+- [ ] Verify every LLM-assisted path has a working manual path, with `NullProvider` in CI
+
+---
+
+## Phase 11 — Interop & migration
 
 > Enables: displacing an incumbent. Nobody starts empty — the migration path *is* the sale.
 
@@ -212,7 +290,38 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 ---
 
-## Phase 10 — Scale & performance
+## Phase 12 — Enterprise awareness & anti-silo
+
+> Enables: the reason a CDO buys this for the *organisation* rather than for one team. Design in
+> `adr/0003`. Depends on Phase 2 (mappings) and Phase 11 (import machinery for connectors).
+
+- [ ] `openbiz-discovery` crate: full `DiscoveryProvider` implementations beyond the Phase 2 local hook
+- [ ] Discovery on the creation path for **both** vocabulary creation and concept creation —
+      asynchronous, never blocking typing
+- [ ] Reuse ladder: use · map · extend · fork · create-new, with a recorded justification naming
+      what was found and why nothing fitted
+- [ ] **Measure that reuse is fewer interactions than creating new.** If it is not, the ladder is
+      decoration
+- [ ] Federated OpenBiz peer discovery
+- [ ] Arbitrary SPARQL endpoint provider
+- [ ] Public registry providers: EuroVoc, AGROVOC, LCSH, schema.org, IPTC
+- [ ] Connector: SharePoint managed-metadata term store (a major real-world silo source)
+- [ ] Connector: Microsoft Purview
+- [ ] Connector: Collibra
+- [ ] Connector: Alation
+- [ ] Connector: DataHub / OpenMetadata
+- [ ] Connector: Confluence and wiki glossaries
+- [ ] Enterprise vocabulary registry: catalog every KOS in the organisation **including ones OpenBiz
+      does not manage** — you cannot de-silo what you cannot see
+- [ ] Standing overlap and duplication report across all known vocabularies
+- [ ] Consolidation workflow for detected overlaps
+- [ ] Lexical and structural matching baseline that works with **no LLM** (recall improves with one)
+- [ ] An unavailable source degrades to "source unavailable" and never blocks creation
+- [ ] Air-gapped mode: local and peer discovery only, no external calls
+
+---
+
+## Phase 13 — Scale & performance
 
 > Enables: surviving procurement. Enterprise vocabularies are large and evaluations are adversarial.
 
@@ -223,10 +332,11 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Cold start under a few seconds with a large store attached
 - [ ] Memory ceiling documented and enforced under load
 - [ ] Address whatever the Phase 1 Oxigraph benchmark spike found
+- [ ] Discovery and gate evaluation stay interactive on large vocabularies
 
 ---
 
-## Phase 11 — Enterprise hardening
+## Phase 14 — Enterprise hardening
 
 > Enables: passing security review, which is where good products die.
 
@@ -241,19 +351,24 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Upgrade path with tested store migrations across versions
 - [ ] Threat model documented; dependency and container scanning in CI
 - [ ] Admin console: users, roles, backups, system health
+- [ ] Secrets handling for LLM and connector credentials — never in the store, never in logs
 
 ---
 
-## Phase 12 — Out of loop scope
+## Phase 15 — Out of loop scope
 
 > Requires a human, real infrastructure, or a commercial decision. `CLAUDE.md` §8. **The loop does
 > not attempt these** — they are recorded here so the plan stays honest about total remaining work.
 
 - [ ] Validate SAML and SCIM against a real enterprise IdP
+- [ ] Enterprise connector credentials and test tenants (SharePoint, Purview, Collibra, Alation)
+- [ ] Commercial terms and data-processing agreements for hosted LLM providers
 - [ ] Third-party penetration test
 - [ ] Load testing on representative server hardware
 - [ ] Design review by a professional designer against the Phase 3 goal
-- [ ] Usability testing with practising taxonomists
+- [ ] Usability testing with practising taxonomists — **including whether the reuse ladder's
+      justification prompt is genuinely read or merely clicked through** (`adr/0003`)
+- [ ] Validation of the methodology packs by practitioners who use those methodologies
 - [ ] Pricing, packaging, and the open-core boundary
 - [ ] Trademark and brand
 - [ ] Public release and distribution
