@@ -33,6 +33,18 @@ OpenBiz takes the opposite position on every one of those:
   not bolted on. Every inference and every validation failure explains *why*.
 - **GitHub-native.** Vocabularies are code. Branches, pull requests, reviewable concept-level
   diffs, and CI validation — with a clean fallback to plain git for air-gapped deployments.
+- **The method is in the product.** A guided lifecycle always answers *where am I, what next, what
+  is blocking me* — with methodology packs for Z39.19, ISO 25964, NeOn, LOT, SAMOD, METHONTOLOGY,
+  and Noy & McGuinness. A Solution Advisor routes you to the right artifact type *before* you build
+  the wrong one, and is willing to tell you to build nothing at all.
+- **Discovery before creation.** Before you make a new vocabulary or concept, OpenBiz searches what
+  your organisation and the public standards bodies already have. Reuse, mapping, and extension rank
+  above creating new — which requires a recorded justification. A tool that makes new vocabularies
+  cheap and existing ones invisible is a silo generator.
+- **Optional, auditable assistance.** LLM agents consolidate notes, draft definitions, and propose
+  mappings — but they emit *proposals a human approves*, never writes. Every call is a logged data-
+  egress event you can refuse per vocabulary. The default provider is none, and nothing in the core
+  requires one.
 - **The roadmap is the repo.** The backlog, the architecture decisions, and the known gaps are all
   in git, in the open.
 
