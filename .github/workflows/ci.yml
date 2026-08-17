@@ -25,6 +25,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `ui/dist` is embedded into the binary at compile time, so the Rust suite needs it present
+      # to assert against the real Vite output rather than build.rs's placeholder.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build the UI for embedding
+        working-directory: ui
+        run: npm ci && npm run build
+
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -70,3 +82,53 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+
+  single-binary:
+    name: Single binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build the UI
+        working-directory: ui
+        run: npm ci && npm run build
+
+      - name: Build the release binary
+        run: cargo build --release --bin openbiz
+
+      # The non-negotiable in CLAUDE.md §1 is that the binary is self-contained. Deleting the
+      # build artefacts it was compiled from and *then* asking it to serve the interface is the
+      # only check that actually proves it, rather than proving the filesystem still has a copy.
+      - name: Delete the UI build artefacts
+        run: rm -rf ui/dist ui/node_modules
+
+      - name: Serve the UI from the binary alone
+        run: |
+          set -euo pipefail
+          ./target/release/openbiz &
+          server=$!
+          trap 'kill "$server"' EXIT
+
+          for _ in $(seq 30); do
+            curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:8080/healthz | grep -q '"status":"ok"'
+
+          shell=$(curl -fsS http://127.0.0.1:8080/)
+          echo "$shell"
+          echo "$shell" | grep -q 'id="root"'
+
+          if echo "$shell" | grep -q 'UI not built'; then
+            echo "::error::the binary shipped build.rs's placeholder, not the real UI" >&2
+            exit 1
+          fi

@@ -25,6 +25,10 @@ openbiz-validate = { path = "crates/openbiz-validate" }
 anyhow = "1"
 axum = "0.8"
 http-body-util = "0.1"
+mime_guess = "2"
+# `debug-embed` makes debug builds embed rather than read `ui/dist` from disk, so the tests prove
+# the binary is self-contained instead of proving the filesystem works (CLAUDE.md §1). See ADR 0004.
+rust-embed = { version = "8", features = ["debug-embed", "include-exclude"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
