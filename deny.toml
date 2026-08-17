@@ -20,10 +20,18 @@ allow = [
     "Unlicense",
 ]
 confidence-threshold = 0.9
+# The allow list above is aspirational — it covers licences we will accept as the dependency tree
+# grows. Do not prune it to match today's tree; that would just churn every time a crate is added.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
+# Wildcard versions are banned for external crates: an unpinned third-party dependency can change
+# licence or behaviour underneath us.
 wildcards = "deny"
+# ...but our own `crates/*` are path dependencies, which cargo resolves as `*` by definition.
+# Without this, the policy fails on the workspace's internal wiring rather than on a real risk.
+allow-wildcard-paths = true
 
 [advisories]
 version = 2
