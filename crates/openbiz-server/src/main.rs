@@ -11,11 +11,24 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = Config::from_env();
+    let config = Config::load().context("failed to load configuration")?;
 
-    let listener = tokio::net::TcpListener::bind(&config.bind)
+    // Log the provenance of every setting before doing anything with it. An operator debugging a
+    // deployment should never have to guess which of the defaults, the file, and the environment
+    // won — that guess is most of the pain of configuring the incumbents.
+    for (key, setting) in config.settings() {
+        tracing::info!(setting = key, value = %setting, source = %setting.source(), "configuration");
+    }
+
+    let listener = tokio::net::TcpListener::bind(config.bind.value())
         .await
-        .with_context(|| format!("failed to bind {}", config.bind))?;
+        .with_context(|| {
+            format!(
+                "failed to bind {}, from {}",
+                config.bind,
+                config.bind.source()
+            )
+        })?;
 
     tracing::info!(bind = %config.bind, data_dir = %config.data_dir, "OpenBiz starting");
 

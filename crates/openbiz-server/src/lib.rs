@@ -7,39 +7,10 @@
 use axum::{routing::get, Json, Router};
 use openbiz_api::Health;
 
+mod config;
 mod ui;
 
-/// Server configuration.
-#[derive(Debug, Clone)]
-pub struct Config {
-    /// Address to bind, e.g. `127.0.0.1:8080`.
-    pub bind: String,
-    /// Directory holding the RDF store and backups.
-    pub data_dir: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:8080".to_owned(),
-            data_dir: "./data".to_owned(),
-        }
-    }
-}
-
-impl Config {
-    /// Read configuration from the environment, falling back to [`Default`].
-    ///
-    /// Deliberately minimal: a self-hosted product must start with no configuration at all, and
-    /// every required setting is one more step between download and a running server.
-    pub fn from_env() -> Self {
-        let default = Self::default();
-        Self {
-            bind: std::env::var("OPENBIZ_BIND").unwrap_or(default.bind),
-            data_dir: std::env::var("OPENBIZ_DATA_DIR").unwrap_or(default.data_dir),
-        }
-    }
-}
+pub use config::{Config, ConfigError, Setting, Source};
 
 /// Build the application router.
 ///
@@ -97,11 +68,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn config_defaults_to_loopback() {
-        // A self-hosted server must not default to a public interface.
-        assert!(Config::default().bind.starts_with("127.0.0.1"));
     }
 }

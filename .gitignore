@@ -13,6 +13,10 @@ ui/.vite/
 /data/
 *.oxigraph/
 
+# A local configuration file is a developer's own deployment, not the project's. The documented
+# example lives in docs/CONFIGURATION.md.
+/openbiz.toml
+
 # Environment & secrets — never commit
 .env
 .env.*
