@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Node / frontend
+node_modules/
+ui/dist/
+ui/.vite/
+*.tsbuildinfo
+
+# OpenBiz runtime data (embedded Oxigraph store, backups)
+/data/
+*.oxigraph/
+
+# Environment & secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Loop scratch
+/.loop-scratch/

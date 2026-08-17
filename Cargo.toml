@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/cdtdev/OpenBiz"
+authors = ["OpenBiz contributors"]
+
+[workspace.dependencies]
+openbiz-api = { path = "crates/openbiz-api" }
+openbiz-git = { path = "crates/openbiz-git" }
+openbiz-owl = { path = "crates/openbiz-owl" }
+openbiz-skos = { path = "crates/openbiz-skos" }
+openbiz-store = { path = "crates/openbiz-store" }
+openbiz-validate = { path = "crates/openbiz-validate" }
+
+anyhow = "1"
+axum = "0.8"
+http-body-util = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

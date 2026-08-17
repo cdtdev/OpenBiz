@@ -1,0 +1,11 @@
+[package]
+name = "openbiz-validate"
+description = "SHACL validation and governance rule packs for OpenBiz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true

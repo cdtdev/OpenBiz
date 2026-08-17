@@ -1,0 +1,29 @@
+[package]
+name = "openbiz-server"
+description = "OpenBiz server — the single binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "openbiz"
+path = "src/main.rs"
+
+# Engine crates are added here as the composition root starts wiring them (Phase 1 onward).
+# Declaring a dependency before there is a caller for it is exactly the "built but no production
+# caller" pattern CLAUDE.md §4 rules out, so this list stays honest about what is actually used.
+[dependencies]
+openbiz-api.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+serde_json.workspace = true
+tower.workspace = true

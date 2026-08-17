@@ -1,0 +1,34 @@
+# Licence policy — enforces CLAUDE.md §5.
+#
+# If CI fails here because a new dependency carries a forbidden licence, REMOVE THE DEPENDENCY.
+# Do not add an exception to make the build pass. The open-core model depends on the core staying
+# cleanly relicensable, and a single GPL/AGPL transitive dep breaks that.
+
+[licenses]
+version = 2
+# Permissive only. Deliberately excludes GPL, LGPL, AGPL, SSPL, and source-available licences.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,12 @@
+# The build loop runs on Windows; CI runs on Linux. Normalise to LF in the repository so
+# `cargo fmt --check` and diffs behave identically on both.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+Cargo.lock linguist-generated
+ui/package-lock.json linguist-generated
