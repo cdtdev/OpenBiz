@@ -3,17 +3,27 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** Phase 0 nearly complete — workspace, server, UI, harness, and the design for the
-methodology engine, LLM integration, and enterprise awareness (ADRs 0001–0003). 15 tests passing;
-`cargo fmt`, `cargo clippy -D warnings`, and the UI typecheck/build are green.
+**Status:** Phase 0 nearly complete — workspace, server, embedded UI, harness, and the design for
+the methodology engine, LLM integration, and enterprise awareness (ADRs 0001–0004). 28 tests
+passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`, and the UI typecheck/build are
+green. **The single binary is real:** the release binary serves the full interface with `ui/dist`
+deleted from disk, checked by CI.
 
-**Current position:** Phase 0 (Harness & ground). Three items remain: embedding the built UI,
-file-based config, and branch protection (blocked). Phase 1 has not started.
+**Current position:** Phase 0 (Harness & ground). Two items remain: file-based config, and branch
+protection (blocked, needs a human — see `BLOCKED.md`). Phase 1 has not started.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
 silently half-do it. If you find work that *should* exist but is not here, it goes in
 `docs/PROPOSED.md` for a human to promote. You do not add items to this file yourself.
+
+**Standing instruction from the product owner** (`FEEDBACK-LOG.md`, 2026-08-18): in *every* phase,
+when you notice a place where LLM assistance would materially help — a tedious editorial task, a
+judgement needing recall across thousands of concepts, a translation, a mapping, a definition to
+draft — write it to `docs/PROPOSED.md` under "LLM assistance opportunities" with the concrete user
+problem it solves. By the time Phase 10 arrives its agent list should reflect what was learned
+building Phases 1–9, not the guesses made on day one. **Do not pull Phase 10 forward** to service
+these notes; recording the opportunity is the whole task.
 
 Phases are ordered by dependency, not importance. Phase 3 (the interface) is deliberately early:
 the interface is a core differentiator, and building it late means retrofitting every API to it.
@@ -36,10 +46,10 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [x] React + TS + Vite UI skeleton that typechecks and builds
 - [x] Research KOS development methodologies and design the methodology engine, LLM integration, and
       enterprise awareness (`docs/METHODOLOGY.md`, ADRs 0001–0003)
-- [ ] Embed the built UI into the binary via `rust-embed` and serve it from the server
-      > The UI builds to `ui/dist` but **nothing serves it** — the single-binary promise in
-      > `CLAUDE.md` §1 is not yet met. Recorded in `UNTESTED.md`.
-- [ ] Test that the server serves the embedded UI at `/`
+- [x] Embed the built UI into the binary via `rust-embed` and serve it from the server
+- [x] Test that the server serves the embedded UI at `/`
+      > Proven the hard way: a `Single binary` CI job deletes `ui/dist` and `ui/node_modules`, then
+      > starts the release binary and curls it. See `adr/0004`.
 - [ ] Config from a file as well as the environment (only `OPENBIZ_*` env vars are read today)
 - [x] GitHub Actions CI: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, UI build
 - [x] `cargo deny` licence policy enforcing `CLAUDE.md` §5, wired into CI
@@ -76,6 +86,14 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 > Enables: the product's core noun. Everything a taxonomist does lands here.
 
+- [ ] **Candidate seam:** every path that mutates a vocabulary takes a *candidate* — a proposed
+      change carrying provenance, source, and a confidence where one is meaningful — reviewed before
+      it lands. One shape for a CSV import, a discovery match, a bulk edit, and a Phase 10 agent.
+      > Added on product-owner instruction (`FEEDBACK-LOG.md`, 2026-08-18), which names it the
+      > highest-value near-term work for LLM integration. It is `CLAUDE.md` §3 "design for
+      > assistability" made concrete, and it is **interface shape, not new functionality** — do not
+      > build agents or an `LlmProvider` behind it. Build this **before** the mutation items below,
+      > or every one of them needs retrofitting.
 - [ ] SKOS core model: `Concept`, `ConceptScheme`, `Collection`, `OrderedCollection`
 - [ ] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
 - [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy

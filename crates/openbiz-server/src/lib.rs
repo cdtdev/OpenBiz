@@ -7,6 +7,8 @@
 use axum::{routing::get, Json, Router};
 use openbiz_api::Health;
 
+mod ui;
+
 /// Server configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -40,8 +42,15 @@ impl Config {
 }
 
 /// Build the application router.
+///
+/// Everything the API does not claim falls through to the embedded UI (see [`ui`]), which is what
+/// makes the single binary in `CLAUDE.md` §1 a fact rather than an intention. Using a
+/// `MethodRouter` as the fallback service — rather than a bare handler — keeps writes to unknown
+/// paths a 405 instead of quietly answering a POST with the HTML shell.
 pub fn app() -> Router {
-    Router::new().route("/healthz", get(healthz))
+    Router::new()
+        .route("/healthz", get(healthz))
+        .fallback_service(get(ui::serve))
 }
 
 /// Liveness and readiness probe.
@@ -77,14 +86,17 @@ mod tests {
         assert!(!health.version.is_empty());
     }
 
+    /// Routes the API does not claim now fall through to the embedded UI rather than 404ing —
+    /// the SPA owns its own URL space. The narrower 404 contract that still holds (unmatched
+    /// `/api/…` and missing `/assets/…`) is asserted in [`crate::ui`]'s tests.
     #[tokio::test]
-    async fn unknown_routes_are_not_found() {
+    async fn unknown_routes_fall_through_to_the_ui() {
         let response = app()
             .oneshot(Request::builder().uri("/nope").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]
