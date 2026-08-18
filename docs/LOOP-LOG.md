@@ -1552,3 +1552,85 @@ look competent disables the one signal that catches a stuck loop.
   in the build says so to the person downloading the file. That is the third time in four
   iterations that where an entailment lives has been the open question, which by iteration 18's
   own rule makes it a design decision to take rather than a doubt to keep recording.
+
+## Iteration 22 — 2026-08-18
+- **SKOS-XL, the labelling half.** A label is now a resource with an IRI of its own, so a
+  thesaurus can record who created it, when, and what it stands for — which is the reason ISO
+  25964 needs SKOS-XL and the reason `CLAUDE.md` §2 lists it as part of the authoring model rather
+  than an extra. The fixture in the end-to-end test carries `dcterms:created` and `dcterms:creator`
+  on a label, because that is what the feature is *for*, not because the model reads them.
+- **I split the item and built the half everything else depends on.** Appendix B has three parts:
+  B.2 the class, B.3 the labelling properties and the dumbing-down, B.4 `skosxl:labelRelation`.
+  B.4 is now its own plan item. The specification says of it that it "is not intended to be used
+  directly, but rather as an extension point", nothing in the authoring path depends on it, and
+  everything depends on the chains — so doing both in one item would have been the "much bigger
+  than it reads" case rather than a coherent one.
+- **The numbering in the plan was right and my memory of it was not.** I fetched the specification
+  rather than recalling it, again, and the appendix runs **S47–S62**, not S55–S57 as the plan's
+  note read at a glance — S55–S57 are the three property chains specifically, which is what the
+  note actually said and what I would have got wrong if I had skimmed it. The document was
+  stripped to text and grepped, so every quotation in `SkosRule::statement` is the specification's
+  wording and not a paraphrase.
+- **The decision that took the work: Appendix B states no integrity conditions at all.** §1.7 sets
+  out the structure every section follows and names "Integrity Conditions" as one of its parts;
+  §4.4, §5.4, §8.4, §9.4 and §10.4 each have one. B.2.2, B.3.2 and B.4.2 are all headed "Class and
+  Property Definitions". So unlike S13 and S14 — where iteration 21 could point at a heading — the
+  severity of every SKOS-XL finding is a decision I had to take and write down. `adr/0021` has the
+  table, one row per rule, saying whose judgement each is: **the specification's** for two literal
+  forms, because Examples 76–79 are marked "(not consistent)" outright; **ours** for the two
+  disjointness rules, because a resource in two disjoint classes is a contradiction and
+  `IllFormed` means "SKOS permits it and we disagree", which would be false.
+- **The one I am most glad I got right: a label with *no* literal form is not inconsistent.** S52
+  makes `skosxl:Label` a sub-class of a restriction on `skosxl:literalForm` **cardinality exactly
+  1**, and the tempting reading is that a label with none is broken. Under OWL's open-world
+  assumption it is not — the restriction entails a form *exists*, it does not require the graph to
+  state one — so a partial export, a federated query, or a half-finished import would all have
+  been refused by the obvious reading. Two forms *is* a contradiction, because both cannot be the
+  one value. Same axiom, two halves, opposite answers; a test asserts they stay opposite.
+- **An asymmetry I would have called a bug in our code, and it is the specification's.** An IRI as
+  a `skosxl:literalForm` is inconsistent; an IRI as a `skos:prefLabel` is merely ill-formed. S49
+  makes the first an `owl:DatatypeProperty`, whose values are literals by definition. S10 makes the
+  second an `owl:AnnotationProperty`, and OWL 2 annotation properties take IRIs quite legally. One
+  test asserts both in the same body so the next reader sees the contrast rather than the
+  inconsistency.
+- **Where the dumbed-down labels live is the whole design, and a test caught me getting it wrong.**
+  They go into the *same* map as asserted labels, each carrying a `LabelOrigin`, because B.3.4.2
+  says Examples 84–87 are inconsistent **because of** S13 and S14 — conditions on that map. Keeping
+  them in a separate view would have reported Example 84 as a clean vocabulary. The test that
+  failed was the one asserting an asserted label is never restated as a derived one: I had written
+  `BTreeMap::insert(..).is_none()`, which inserts *and then* tells you what it replaced, so the
+  origin was being overwritten and a derivation recorded for a fact the graph had stated outright.
+  That is the same rule `entail_class` has held since iteration 20 and I re-broke it one layer up.
+- **Tests: 429 Rust (from 402) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny`, and the
+  UI untouched. Thirteen of the new tests are Appendix B's own numbered examples — 75, 76–79, 80,
+  81, 82 and 83, 84–87 — each asserted to be what the specification marks it. The suite was proven
+  to **discriminate** before it was trusted: five mutations each turned it red — the dumbing-down
+  disabled (6 unit and 2 end-to-end), S52's multiple-form check disabled (2), S48's disjointness
+  rows broken (10), a non-plain literal form accepted (1), and a missing literal form reclassified
+  as inconsistent (1).
+- **Recorded:** `adr/0021`; two new `UNTESTED.md` entries and one amended for the second time; one
+  `PROPOSED.md` entry amended and its urgency raised. None closed. The two new ones are B.4 being
+  unread — so we must not claim SKOS-XL without qualification — and the export gap below.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T22:20Z. Checked
+  before writing this header, per iterations 16, 17, 18, 20 and 21.
+- **Still uncertain:** whether `openbiz inspect` reporting a class count of `skosxl:Label 0` on
+  every plain-SKOS vocabulary is the right shape, or the first crack in a report that has to grow
+  a row per class forever. It is defensible today — the row tells a reader we looked, which is the
+  distinction the whole build is careful about, and the `skos-xl labels:` section is omitted
+  entirely so the noise is one line and not five. But Phase 2 has mapping properties, semantic
+  relations and documentation properties still to come, Phase 4 has SHACL, and every one of them
+  will want to say "and here is what I found of mine, including none". A report that answers "what
+  is this vocabulary?" cannot be a list of everything we know how to look for; at some point the
+  zero rows have to collapse into one line saying what was searched for and not found, and I do
+  not know where that point is. I have not designed it because one row is not yet a problem, and
+  that is exactly the reasoning that would justify never designing it.
+  The sharper doubt is one I escalated rather than sat on. Iterations 18, 20 and 21 all ended
+  wondering where entailments live; SKOS-XL turns that from a question into a defect with a name.
+  A thesaurus authored in SKOS-XL has **no `skos:prefLabel` statements at all**, so the file
+  `openbiz export` hands a customer is, to every generic RDF tool on earth, an unlabelled
+  thesaurus — while `openbiz inspect` on the same store lists every label and counts the languages.
+  Not a missing `rdfs:label` beside a `skos:prefLabel`, as S11 was: no labels. Both behaviours were
+  argued for individually and both are still defensible individually, and together they are
+  indefensible. So I have raised the urgency on the existing `PROPOSED.md` entry rather than
+  writing a fourth "still uncertain" about it — by iteration 18's own rule that is a decision to
+  take, and by `CLAUDE.md` §7 it is not mine to promote.

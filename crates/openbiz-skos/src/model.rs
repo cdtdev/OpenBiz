@@ -44,7 +44,10 @@
 //!
 //! - **Inconsistent** — the graph violates a SKOS *integrity condition*. Only S9 and S37 are
 //!   integrity conditions among the core classes, and the specification says so by putting them
-//!   under a heading of that name. A vocabulary in this state is not a SKOS vocabulary.
+//!   under a heading of that name. A vocabulary in this state is not a SKOS vocabulary. The
+//!   SKOS-XL statements this module applies are classified in the [`xl`](crate::xl) module, which
+//!   also records why: Appendix B has no "Integrity Conditions" heading at all, so two of its
+//!   three inconsistencies are ours by reading and one is the specification's own word.
 //! - **Ill-formed** — SKOS itself permits it, but it is almost certainly a mistake. A cyclic or
 //!   truncated `rdf:List` behind `skos:memberList` is the case that matters. [RDF-SEMANTICS]
 //!   §3.3.3, cited by the SKOS Reference §9.6.2, explicitly allows a semantic extension to impose
@@ -63,6 +66,7 @@ use std::fmt;
 
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::ns;
+use crate::xl::{LabelOrigin, SKOSXL_LITERAL_FORM};
 
 /// `rdf:type`.
 pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -84,10 +88,12 @@ pub const SKOS_MEMBER: &str = "http://www.w3.org/2004/02/skos/core#member";
 /// `skos:memberList`.
 pub const SKOS_MEMBER_LIST: &str = "http://www.w3.org/2004/02/skos/core#memberList";
 
-/// One of the four classes of the SKOS core model.
+/// One of the four classes of the SKOS core model, or SKOS-XL's fifth.
 ///
-/// SKOS-XL's `skosxl:Label` is a fifth class and is not here: it is its own build-plan item, and
-/// adding it as a placeholder would make [`CoreModel`] report on something it does not understand.
+/// `skosxl:Label` is here rather than in a model of its own because S48 makes it disjoint with
+/// three of the four below, and a disjointness check can only be run over classes that share a
+/// map. Its namespace is the one thing that differs, so [`SkosClass::iri`] asks the class rather
+/// than assuming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SkosClass {
     /// `skos:Concept` — a unit of thought. S1.
@@ -98,42 +104,62 @@ pub enum SkosClass {
     Collection,
     /// `skos:OrderedCollection` — a collection whose members have a meaningful order. S28, S29.
     OrderedCollection,
+    /// `skosxl:Label` — a label with an IRI of its own, so a thesaurus can say things about it.
+    /// Appendix B.2, S47, S48, S52.
+    Label,
 }
 
 impl SkosClass {
     /// Every class, in a stable order.
-    pub const ALL: [SkosClass; 4] = [
+    pub const ALL: [SkosClass; 5] = [
         SkosClass::Concept,
         SkosClass::ConceptScheme,
         SkosClass::Collection,
         SkosClass::OrderedCollection,
+        SkosClass::Label,
     ];
 
     /// The class's IRI.
     pub fn iri(self) -> String {
-        format!("{}{}", ns::SKOS, self.local_name())
+        format!("{}{}", self.namespace(), self.local_name())
     }
 
-    /// The local name within the SKOS namespace.
+    /// The namespace the class is defined in — SKOS for four of them, SKOS-XL for `Label`.
+    pub fn namespace(self) -> &'static str {
+        match self {
+            SkosClass::Label => ns::SKOSXL,
+            _ => ns::SKOS,
+        }
+    }
+
+    /// The prefix a report writes before the local name.
+    fn prefix(self) -> &'static str {
+        match self {
+            SkosClass::Label => "skosxl",
+            _ => "skos",
+        }
+    }
+
+    /// The local name within the class's namespace.
     pub fn local_name(self) -> &'static str {
         match self {
             SkosClass::Concept => "Concept",
             SkosClass::ConceptScheme => "ConceptScheme",
             SkosClass::Collection => "Collection",
             SkosClass::OrderedCollection => "OrderedCollection",
+            SkosClass::Label => "Label",
         }
     }
 
-    /// The class an IRI names, or `None` if it names something outside the SKOS core model.
+    /// The class an IRI names, or `None` if it names something outside the SKOS+XL data model.
     ///
     /// A vocabulary is full of `rdf:type` statements about classes that are not ours — `owl:Class`
     /// and `owl:Ontology` are both explicitly permitted alongside SKOS types by Examples 3 and 7 —
     /// so this returning `None` is the ordinary case, not an error.
     pub fn from_iri(iri: &str) -> Option<Self> {
-        let local = iri.strip_prefix(ns::SKOS)?;
         SkosClass::ALL
             .into_iter()
-            .find(|class| class.local_name() == local)
+            .find(|class| iri.strip_prefix(class.namespace()) == Some(class.local_name()))
     }
 
     /// The class this one is a sub-class of, with the rule that says so.
@@ -150,7 +176,7 @@ impl SkosClass {
 
 impl fmt::Display for SkosClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "skos:{}", self.local_name())
+        write!(f, "{}:{}", self.prefix(), self.local_name())
     }
 }
 
@@ -179,6 +205,17 @@ pub enum SkosRule {
     S37,
     S3,
     S30,
+    S48,
+    S49,
+    S50,
+    S51,
+    S52,
+    S53,
+    S54,
+    S55,
+    S56,
+    S57,
+    S58,
 }
 
 impl SkosRule {
@@ -201,6 +238,17 @@ impl SkosRule {
             SkosRule::S33 => "S33",
             SkosRule::S36 => "S36",
             SkosRule::S37 => "S37",
+            SkosRule::S48 => "S48",
+            SkosRule::S49 => "S49",
+            SkosRule::S50 => "S50",
+            SkosRule::S51 => "S51",
+            SkosRule::S52 => "S52",
+            SkosRule::S53 => "S53",
+            SkosRule::S54 => "S54",
+            SkosRule::S55 => "S55",
+            SkosRule::S56 => "S56",
+            SkosRule::S57 => "S57",
+            SkosRule::S58 => "S58",
         }
     }
 
@@ -244,6 +292,43 @@ impl SkosRule {
             }
             SkosRule::S37 => {
                 "skos:Collection is disjoint with each of skos:Concept and skos:ConceptScheme."
+            }
+            SkosRule::S48 => {
+                "skosxl:Label is disjoint with each of skos:Concept, skos:ConceptScheme and \
+                 skos:Collection."
+            }
+            SkosRule::S49 => "skosxl:literalForm is an instance of owl:DatatypeProperty.",
+            SkosRule::S50 => "The rdfs:domain of skosxl:literalForm is the class skosxl:Label.",
+            SkosRule::S51 => {
+                "The rdfs:range of skosxl:literalForm is the class of RDF plain literals."
+            }
+            SkosRule::S52 => {
+                "skosxl:Label is a sub-class of a restriction on skosxl:literalForm cardinality \
+                 exactly 1."
+            }
+            SkosRule::S53 => {
+                "skosxl:prefLabel, skosxl:altLabel and skosxl:hiddenLabel are each instances of \
+                 owl:ObjectProperty."
+            }
+            SkosRule::S54 => {
+                "The rdfs:range of each of skosxl:prefLabel, skosxl:altLabel and \
+                 skosxl:hiddenLabel is the class skosxl:Label."
+            }
+            SkosRule::S55 => {
+                "The property chain (skosxl:prefLabel, skosxl:literalForm) is a sub-property of \
+                 skos:prefLabel."
+            }
+            SkosRule::S56 => {
+                "The property chain (skosxl:altLabel, skosxl:literalForm) is a sub-property of \
+                 skos:altLabel."
+            }
+            SkosRule::S57 => {
+                "The property chain (skosxl:hiddenLabel, skosxl:literalForm) is a sub-property of \
+                 skos:hiddenLabel."
+            }
+            SkosRule::S58 => {
+                "skosxl:prefLabel, skosxl:altLabel and skosxl:hiddenLabel are pairwise disjoint \
+                 properties."
             }
         }
     }
@@ -607,7 +692,7 @@ pub enum Finding {
         /// What it was given.
         value: Term,
     },
-    /// An object property was given a literal value. S3 or S30.
+    /// An object property was given a literal value. S3, S30 or S53.
     LiteralOnObjectProperty {
         /// The subject.
         subject: Node,
@@ -617,6 +702,67 @@ pub enum Finding {
         literal: Literal,
         /// The specification statement that makes the property an object property.
         rule: SkosRule,
+    },
+    /// A datatype property was given an IRI or a blank node. S49.
+    ///
+    /// The mirror of [`Finding::LiteralOnObjectProperty`], and inconsistent for the same reason:
+    /// the values of an `owl:DatatypeProperty` are literals by definition. This is *not* how a
+    /// node under `skos:prefLabel` is treated, and the difference is the specification's — S10
+    /// makes that an `owl:AnnotationProperty`, and OWL 2 annotation properties take IRIs legally.
+    NodeOnDatatypeProperty {
+        /// The subject.
+        subject: Node,
+        /// The property, as a CURIE.
+        property: String,
+        /// The node it was given.
+        node: Node,
+        /// The specification statement that makes the property a datatype property.
+        rule: SkosRule,
+    },
+    /// An `skosxl:Label` has more than one `skosxl:literalForm`. S52.
+    ///
+    /// The specification's own word for this is "not consistent" — Examples 76, 77, 78 and 79 are
+    /// each marked so, and 78 makes the point that `"love"@en-GB` and `"love"@en-US` are two forms
+    /// and not one. A label has exactly one, so two cannot both be it.
+    MultipleLiteralForms {
+        /// The label resource.
+        label: Node,
+        /// The competing forms, in a stable order.
+        forms: Vec<String>,
+    },
+    /// An `skosxl:Label` has no `skosxl:literalForm`. S52 — **and this is not an inconsistency.**
+    ///
+    /// "Cardinality exactly 1" entails that a form exists; under OWL's open-world assumption it
+    /// does not require the graph to state it. A partial export or a half-finished import
+    /// legitimately produces one. Reported because a label an author cannot read is still a
+    /// problem they need told about, and reported as ours.
+    NoLiteralForm {
+        /// The label resource.
+        label: Node,
+    },
+    /// A `skosxl:literalForm` was given a literal that is not an RDF plain literal. S51.
+    ///
+    /// Handled as S12's case is, and the analogy is ours: §5.6.2's "an application may reject such
+    /// data but is not required to" is said about §5 and is not restated in Appendix B. The value
+    /// is discarded, so the label dumbs down to nothing rather than to a plain label that would
+    /// then be S12's finding one step later.
+    NonPlainLiteralForm {
+        /// The label resource.
+        label: Node,
+        /// What it was given.
+        value: Literal,
+    },
+    /// One resource carries the same `skosxl:Label` under two XL labelling properties. S58.
+    ///
+    /// The same *resource*, not merely the same literal form: two distinct labels sharing a form
+    /// are Example 85's case, which is caught by S13 after the chains have dumbed them down.
+    XlLabelPropertiesClash {
+        /// The labelled resource.
+        resource: Node,
+        /// The label resource they share.
+        label: Node,
+        /// The properties that carry it, in a stable order.
+        kinds: Vec<LabelKind>,
     },
 }
 
@@ -630,9 +776,18 @@ impl Finding {
             Finding::MultiplePreferredLabels { .. } | Finding::LabelPropertiesClash { .. } => {
                 Severity::Inconsistent
             }
+            // Appendix B has no "Integrity Conditions" heading, so two of these three are
+            // classified by us. The specification marks Examples 76–79 "(not consistent)", which
+            // settles `MultipleLiteralForms` outright; a violated disjointness is a contradiction
+            // whatever heading it sits under. See the `xl` module.
+            Finding::NodeOnDatatypeProperty { .. }
+            | Finding::MultipleLiteralForms { .. }
+            | Finding::XlLabelPropertiesClash { .. } => Severity::Inconsistent,
             Finding::DefectiveMemberList { .. }
             | Finding::MultipleMemberLists { .. }
-            | Finding::NonPlainLiteralLabel { .. } => Severity::IllFormed,
+            | Finding::NonPlainLiteralLabel { .. }
+            | Finding::NoLiteralForm { .. }
+            | Finding::NonPlainLiteralForm { .. } => Severity::IllFormed,
         }
     }
 }
@@ -719,6 +874,55 @@ impl fmt::Display for Finding {
                 "{subject} {property} {literal}, but the value of an object property cannot be a \
                  literal\n    and {rule}",
             ),
+            Finding::NodeOnDatatypeProperty {
+                subject,
+                property,
+                node,
+                rule,
+            } => write!(
+                f,
+                "{subject} {property} {node}, but the value of a datatype property cannot be an \
+                 IRI or a blank node\n    and {rule}",
+            ),
+            Finding::MultipleLiteralForms { label, forms } => write!(
+                f,
+                "{label} has {} skosxl:literalForm values: {}\n    and {}\n    Appendix B.2.3 \
+                 marks Examples 76\u{2013}79 \"not consistent\" for exactly this, including \
+                 \"love\"@en-GB beside \"love\"@en-US",
+                forms.len(),
+                forms.join(", "),
+                SkosRule::S52,
+            ),
+            Finding::NoLiteralForm { label } => write!(
+                f,
+                "{label} is a skosxl:Label with no skosxl:literalForm, so nothing can read it\n    \
+                 and {}\n    SKOS-XL permits this — \"cardinality exactly 1\" entails that a form \
+                 exists but, under OWL's open-world assumption, does not require the graph to \
+                 state it — so this is our judgement, not the specification's",
+                SkosRule::S52,
+            ),
+            Finding::NonPlainLiteralForm { label, value } => write!(
+                f,
+                "the skosxl:literalForm of {label} is {value}, which is not an RDF plain \
+                 literal\n    and {}\n    Appendix B states no integrity conditions and does not \
+                 restate \u{a7}5.6.2's \"may reject such data but is not required to\", so \
+                 treating this as S12's case is our judgement rather than the specification's",
+                SkosRule::S51,
+            ),
+            Finding::XlLabelPropertiesClash {
+                resource,
+                label,
+                kinds,
+            } => write!(
+                f,
+                "{resource} carries {label} under {}\n    and {}",
+                kinds
+                    .iter()
+                    .map(|kind| format!("skosxl:{}", kind.local_name()))
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                SkosRule::S58,
+            ),
         }
     }
 }
@@ -750,7 +954,9 @@ pub struct Resource {
     has_top_concept: BTreeSet<Node>,
     members: BTreeSet<Node>,
     member_lists: Vec<MemberList>,
-    labels: BTreeMap<LexicalLabel, BTreeSet<LabelKind>>,
+    labels: BTreeMap<LexicalLabel, BTreeMap<LabelKind, LabelOrigin>>,
+    literal_forms: BTreeSet<Literal>,
+    xl_labels: BTreeMap<Node, BTreeSet<LabelKind>>,
 }
 
 impl Resource {
@@ -789,18 +995,52 @@ impl Resource {
         &self.member_lists
     }
 
-    /// Every label it carries, and which properties carry each one.
+    /// Every label it carries, which properties carry each one, and where each came from.
     ///
     /// Ordered by language tag and then by lexical form, so iterating groups a resource's labels
     /// by language. A label under more than one property is a [`Finding::LabelPropertiesClash`];
     /// the map keeps it once, with both kinds, rather than reporting it twice.
-    pub fn labels(&self) -> &BTreeMap<LexicalLabel, BTreeSet<LabelKind>> {
+    ///
+    /// **A label dumbed down from SKOS-XL is in here too**, carrying a
+    /// [`LabelOrigin::DumbedDown`]. That is what makes Appendix B's Examples 84–87 come out
+    /// inconsistent — B.3.4.2 says they are inconsistent because of S13 and S14, which are
+    /// conditions on the labels this map holds.
+    pub fn labels(&self) -> &BTreeMap<LexicalLabel, BTreeMap<LabelKind, LabelOrigin>> {
         &self.labels
     }
 
-    /// Its labels of one kind, in the same order.
+    /// Its labels of one kind, in the same order, whichever way they arrived.
     pub fn labels_of(&self, kind: LabelKind) -> impl Iterator<Item = &LexicalLabel> {
         self.labels
+            .iter()
+            .filter(move |(_, kinds)| kinds.contains_key(&kind))
+            .map(|(label, _)| label)
+    }
+
+    /// Where one of its labels came from, if it carries that label under that property.
+    pub fn label_origin(&self, label: &LexicalLabel, kind: LabelKind) -> Option<LabelOrigin> {
+        self.labels.get(label)?.get(&kind).copied()
+    }
+
+    /// The values of `skosxl:literalForm` on this resource, if it is an `skosxl:Label`.
+    ///
+    /// Raw literals, not [`LexicalLabel`]s, and deliberately: S52 counts *values of the property*,
+    /// so a form that is not a plain literal still competes for the one slot the restriction
+    /// allows. It is a [`Finding::NonPlainLiteralForm`] as well, and it does not dumb down.
+    pub fn literal_forms(&self) -> &BTreeSet<Literal> {
+        &self.literal_forms
+    }
+
+    /// The `skosxl:Label` resources this one is labelled with, and under which properties.
+    ///
+    /// Empty for a vocabulary authored in plain SKOS, which is most of them.
+    pub fn xl_labels(&self) -> &BTreeMap<Node, BTreeSet<LabelKind>> {
+        &self.xl_labels
+    }
+
+    /// Its `skosxl:Label` resources of one kind, in a stable order.
+    pub fn xl_labels_of(&self, kind: LabelKind) -> impl Iterator<Item = &Node> {
+        self.xl_labels
             .iter()
             .filter(move |(_, kinds)| kinds.contains(&kind))
             .map(|(label, _)| label)
@@ -915,7 +1155,7 @@ impl CoreModel {
                         hidden: 0,
                         resources_with_preferred: 0,
                     });
-                for kind in kinds {
+                for kind in kinds.keys() {
                     match kind {
                         LabelKind::Preferred => {
                             entry.preferred += 1;
@@ -961,6 +1201,8 @@ pub struct CoreModelBuilder {
     first: BTreeMap<Node, Vec<Term>>,
     rest: BTreeMap<Node, Vec<Term>>,
     labels: BTreeMap<Node, BTreeMap<LexicalLabel, BTreeSet<LabelKind>>>,
+    literal_form: BTreeMap<Node, BTreeSet<Literal>>,
+    xl_labels: BTreeMap<Node, BTreeMap<Node, BTreeSet<LabelKind>>>,
     findings: Vec<Finding>,
     statements_read: usize,
 }
@@ -1009,6 +1251,37 @@ impl CoreModelBuilder {
                 self.object_property(subject, &predicate, object, SkosRule::S30, |b, s, o| {
                     b.member_list.entry(s).or_default().insert(o);
                 })
+            }
+            SKOSXL_LITERAL_FORM => match object {
+                // S49 makes this an owl:DatatypeProperty, so a node here is a contradiction and
+                // not merely odd — unlike `skos:prefLabel`, which S10 makes an annotation
+                // property. The value is dropped, so it competes for neither S52's one slot nor
+                // S51's plainness: it was never a literal to begin with.
+                Term::Node(node) => self.findings.push(Finding::NodeOnDatatypeProperty {
+                    subject,
+                    property: curie(&predicate),
+                    node,
+                    rule: SkosRule::S49,
+                }),
+                Term::Literal(literal) => {
+                    self.literal_form
+                        .entry(subject)
+                        .or_default()
+                        .insert(literal);
+                }
+            },
+            _ if LabelKind::from_xl_iri(&predicate).is_some() => {
+                // Unreachable `None`, as below: the guard has already matched the IRI.
+                if let Some(kind) = LabelKind::from_xl_iri(&predicate) {
+                    self.object_property(subject, &predicate, object, SkosRule::S53, |b, s, o| {
+                        b.xl_labels
+                            .entry(s)
+                            .or_default()
+                            .entry(o)
+                            .or_default()
+                            .insert(kind);
+                    })
+                }
             }
             _ if LabelKind::from_iri(&predicate).is_some() => {
                 // Unreachable `None` — the guard has already matched the IRI. Written as a `let`
@@ -1101,10 +1374,169 @@ impl CoreModelBuilder {
         Self::entail_super_classes(&mut model);
         self.resolve_member_lists(&mut model);
         self.attach_labels(&mut model);
+        // The SKOS-XL passes run in the order the specification's dependencies do: the classes
+        // first (S50, S54), then the forms those classes constrain (S51, S52), then the chains
+        // that need a form to dumb down (S55–S57, S58). Disjointness runs after all of it because
+        // S48 has to see a `skosxl:Label` established by S50 or S54, not only by `rdf:type`; the
+        // label conditions run last because S13 and S14 are what the chains feed, and B.3.4.2
+        // says Examples 84–87 are inconsistent *because of* them.
+        self.apply_xl_class_rules(&mut model);
+        self.resolve_literal_forms(&mut model);
+        self.entail_dumbed_down_labels(&mut model);
         Self::check_disjointness(&mut model);
         Self::check_label_conditions(&mut model);
 
         model
+    }
+
+    /// S50 and S54 — the two rules that make something a `skosxl:Label` without an `rdf:type`.
+    ///
+    /// S50 is the domain of `skosxl:literalForm`; S54 is the range of the three XL labelling
+    /// properties. Between them, Example 84 needs no `rdf:type` statement at all and still has
+    /// two labels — which is why it is written without one.
+    fn apply_xl_class_rules(&mut self, model: &mut CoreModel) {
+        for (label, forms) in &self.literal_form {
+            let Some(form) = forms.iter().next() else {
+                continue;
+            };
+            entail_class(
+                model,
+                label,
+                SkosClass::Label,
+                SkosRule::S50,
+                &format!("{label} skosxl:literalForm {form}"),
+            );
+        }
+
+        for (resource, labels) in &self.xl_labels {
+            for (label, kinds) in labels {
+                let Some(kind) = kinds.iter().next() else {
+                    continue;
+                };
+                entail_class(
+                    model,
+                    label,
+                    SkosClass::Label,
+                    SkosRule::S54,
+                    &format!("{resource} skosxl:{} {label}", kind.local_name()),
+                );
+            }
+        }
+    }
+
+    /// S51 and S52 — what a label's literal form must be, and how many of them there are.
+    ///
+    /// Runs over every resource that is an `skosxl:Label`, so the "no literal form" case reaches
+    /// a label established by S54 as well as one stated with `rdf:type`. A resource carrying a
+    /// `skosxl:literalForm` is a label under S50, so the two sets are the same set.
+    fn resolve_literal_forms(&mut self, model: &mut CoreModel) {
+        let mut found = Vec::new();
+        let labels: Vec<Node> = model
+            .instances_of(SkosClass::Label)
+            .map(|(node, _)| node.clone())
+            .collect();
+
+        for label in labels {
+            let forms = self.literal_form.remove(&label).unwrap_or_default();
+
+            if forms.is_empty() {
+                found.push(Finding::NoLiteralForm {
+                    label: label.clone(),
+                });
+            } else if forms.len() > 1 {
+                found.push(Finding::MultipleLiteralForms {
+                    label: label.clone(),
+                    forms: forms.iter().map(ToString::to_string).collect(),
+                });
+            }
+
+            for form in &forms {
+                if LexicalLabel::of_literal(form).is_none() {
+                    found.push(Finding::NonPlainLiteralForm {
+                        label: label.clone(),
+                        value: form.clone(),
+                    });
+                }
+            }
+
+            model.resources.entry(label).or_default().literal_forms = forms;
+        }
+
+        model.findings.extend(found);
+    }
+
+    /// S55, S56, S57 — dumbing an XL label down to the plain SKOS label it stands for.
+    ///
+    /// Only a **well-formed** label dumbs down: one plain literal form, no more and no fewer. A
+    /// label with two forms would otherwise produce two plain labels and so a second, derived
+    /// finding for a fault already reported once, and there is no principled way to choose which
+    /// of the two the concept is really called.
+    ///
+    /// S58 is checked here because it needs the same map: a label resource carried under two of
+    /// the three XL properties, which is a different fault from two label resources sharing a
+    /// literal form (Example 85, caught by S13 after this pass).
+    fn entail_dumbed_down_labels(&mut self, model: &mut CoreModel) {
+        for (resource, labels) in std::mem::take(&mut self.xl_labels) {
+            for (label, kinds) in labels {
+                if kinds.len() > 1 {
+                    model.findings.push(Finding::XlLabelPropertiesClash {
+                        resource: resource.clone(),
+                        label: label.clone(),
+                        kinds: kinds.iter().copied().collect(),
+                    });
+                }
+
+                let form = model
+                    .resources
+                    .get(&label)
+                    .filter(|held| held.literal_forms.len() == 1)
+                    .and_then(|held| held.literal_forms.iter().next())
+                    .and_then(LexicalLabel::of_literal);
+
+                model
+                    .resources
+                    .entry(resource.clone())
+                    .or_default()
+                    .xl_labels
+                    .insert(label.clone(), kinds.clone());
+
+                let Some(plain) = form else {
+                    continue;
+                };
+                for kind in kinds {
+                    let rule = kind.dumbing_down_rule();
+                    // An asserted label is never overwritten by a dumbed-down one, exactly as an
+                    // asserted class is never overwritten by an entailed one: the graph said it,
+                    // so claiming to have deduced it would be a derivation nobody needed.
+                    let concluded = {
+                        let held = model
+                            .resources
+                            .entry(resource.clone())
+                            .or_default()
+                            .labels
+                            .entry(plain.clone())
+                            .or_default();
+                        match held.entry(kind) {
+                            std::collections::btree_map::Entry::Vacant(slot) => {
+                                slot.insert(LabelOrigin::DumbedDown(rule));
+                                true
+                            }
+                            std::collections::btree_map::Entry::Occupied(_) => false,
+                        }
+                    };
+                    if concluded {
+                        model.derivations.push(Derivation {
+                            conclusion: format!("{resource} skos:{} {plain}", kind.local_name()),
+                            premise: format!(
+                                "{resource} skosxl:{} {label}, whose skosxl:literalForm is {plain}",
+                                kind.local_name()
+                            ),
+                            rule,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     /// Hand each resource the labels read for it.
@@ -1115,7 +1547,16 @@ impl CoreModelBuilder {
     /// would miscount every vocabulary that labels its own concept scheme, which is most of them.
     fn attach_labels(&mut self, model: &mut CoreModel) {
         for (node, labels) in std::mem::take(&mut self.labels) {
-            model.resources.entry(node).or_default().labels = labels;
+            model.resources.entry(node).or_default().labels = labels
+                .into_iter()
+                .map(|(label, kinds)| {
+                    let origins = kinds
+                        .into_iter()
+                        .map(|kind| (kind, LabelOrigin::Asserted))
+                        .collect();
+                    (label, origins)
+                })
+                .collect();
         }
     }
 
@@ -1134,7 +1575,7 @@ impl CoreModelBuilder {
                     found.push(Finding::LabelPropertiesClash {
                         resource: node.clone(),
                         label: label.clone(),
-                        kinds: kinds.iter().copied().collect(),
+                        kinds: kinds.keys().copied().collect(),
                     });
                 }
             }
@@ -1432,7 +1873,7 @@ impl CoreModelBuilder {
 
     /// S9 and S37 — the two integrity conditions among the core classes.
     fn check_disjointness(model: &mut CoreModel) {
-        const DISJOINT: [(SkosClass, SkosClass, SkosRule); 3] = [
+        const DISJOINT: [(SkosClass, SkosClass, SkosRule); 6] = [
             (SkosClass::ConceptScheme, SkosClass::Concept, SkosRule::S9),
             (SkosClass::Collection, SkosClass::Concept, SkosRule::S37),
             (
@@ -1440,6 +1881,13 @@ impl CoreModelBuilder {
                 SkosClass::ConceptScheme,
                 SkosRule::S37,
             ),
+            // S48. `skos:OrderedCollection` is absent on purpose and is not an omission: it is a
+            // sub-class of `skos:Collection` under S29, which this pass has already entailed, so
+            // an ordered collection that is also a label is caught by the row above with the
+            // citation the specification actually states.
+            (SkosClass::Label, SkosClass::Concept, SkosRule::S48),
+            (SkosClass::Label, SkosClass::ConceptScheme, SkosRule::S48),
+            (SkosClass::Label, SkosClass::Collection, SkosRule::S48),
         ];
 
         let mut found = Vec::new();
@@ -1585,9 +2033,19 @@ mod tests {
             SkosClass::from_iri("http://www.w3.org/2002/07/owl#Class"),
             None
         );
-        // Right namespace, not one of ours: SKOS-XL's Label is a separate build-plan item.
+        // The two namespaces are not interchangeable. `skosxl:Label` is the class; there is no
+        // `skos:Label`, and reading one as the other would put a label in the SKOS core model.
+        assert_eq!(
+            SkosClass::from_iri(&format!("{}Label", ns::SKOSXL)),
+            Some(SkosClass::Label)
+        );
         assert_eq!(SkosClass::from_iri(&skos("Label")), None);
-        assert_eq!(SkosClass::from_iri(&format!("{}Label", ns::SKOSXL)), None);
+        assert_eq!(
+            SkosClass::from_iri(&format!("{}Concept", ns::SKOSXL)),
+            None,
+            "skos:Concept is not in the SKOS-XL namespace"
+        );
+        assert_eq!(SkosClass::Label.to_string(), "skosxl:Label");
     }
 
     // --- The specification's own examples -------------------------------------------------
@@ -2764,5 +3222,597 @@ mod tests {
             None
         );
         assert!(model.is_consistent());
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // SKOS-XL — SKOS Reference Appendix B. Every test whose name carries an example number is
+    // that example, asserted to be what the specification marks it: "(consistent)", "(not
+    // consistent)", "(entailment)" or "(non-entailment)". Appendix B states no integrity
+    // conditions of its own, so where the specification does not use the word "consistent" the
+    // classification is ours and the test says which it is testing.
+    // ---------------------------------------------------------------------------------------
+
+    /// `<subject> skosxl:<kind> <label>`.
+    fn xl_labelled(subject: &Node, kind: LabelKind, label: &Node) -> Statement {
+        Statement::new(subject.clone(), kind.xl_property_iri(), label.clone())
+    }
+
+    /// `<label> skosxl:literalForm <form>`.
+    fn literal_form(label: &Node, form: Term) -> Statement {
+        Statement::new(label.clone(), SKOSXL_LITERAL_FORM, form)
+    }
+
+    /// Only the derivations produced by an S55–S57 chain, rendered.
+    ///
+    /// The class entailments S50 and S54 are derivations too, so "nothing was dumbed down" has to
+    /// be asserted against the chains rather than against the whole list.
+    fn dumbing_down(model: &CoreModel) -> Vec<String> {
+        model
+            .derivations()
+            .iter()
+            .filter(|derivation| {
+                matches!(
+                    derivation.rule,
+                    SkosRule::S55 | SkosRule::S56 | SkosRule::S57
+                )
+            })
+            .map(|derivation| format!("{} [{}]", derivation.conclusion, derivation.rule.number()))
+            .collect()
+    }
+
+    /// The plain labels a resource ended up with, rendered with the kind and where each came from.
+    fn plain_labels(model: &CoreModel, node: &Node) -> Vec<String> {
+        let Some(resource) = model.resource(node) else {
+            return Vec::new();
+        };
+        resource
+            .labels()
+            .iter()
+            .flat_map(|(label, kinds)| {
+                kinds
+                    .iter()
+                    .map(move |(kind, origin)| format!("{kind} {label} ({origin})"))
+            })
+            .collect()
+    }
+
+    /// Example 75 — a label with a literal form. Consistent.
+    #[test]
+    fn example_75_a_label_with_one_literal_form_is_consistent() {
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            literal_form(&a, tagged("love", "en")),
+        ]);
+
+        let label = model.resource(&a).expect("the label");
+        assert!(label.is_a(SkosClass::Label));
+        assert_eq!(label.literal_forms().len(), 1);
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+    }
+
+    /// Examples 76, 77, 78 and 79 — all four are marked "(not consistent)" for the same reason:
+    /// an `skosxl:Label` is described with two different literal forms, and S52 allows one.
+    ///
+    /// 78 is the one worth having in a suite. `"love"@en-GB` and `"love"@en-US` differ only in
+    /// their tags, and a model that bucketed forms by language before counting them — which is
+    /// exactly what S14 does for plain labels — would call it consistent.
+    #[test]
+    fn examples_76_to_79_two_literal_forms_are_not_consistent() {
+        for (name, first, second) in [
+            ("76", plain("love"), plain("adoration")),
+            ("77", tagged("love", "en"), tagged("love", "fr")),
+            ("78", tagged("love", "en-GB"), tagged("love", "en-US")),
+            (
+                "79",
+                tagged("\u{6771}", "ja-Hani"),
+                tagged("\u{3072}\u{304c}\u{3057}", "ja-Hira"),
+            ),
+        ] {
+            let b = ex("B");
+            let model = CoreModel::from_statements(vec![
+                typed(&b, SkosClass::Label),
+                literal_form(&b, first),
+                literal_form(&b, second),
+            ]);
+
+            assert!(
+                !model.is_consistent(),
+                "Example {name} must not be consistent"
+            );
+            assert_eq!(
+                findings_matching(&model, "skosxl:literalForm values").len(),
+                1,
+                "Example {name}: {:?}",
+                model.findings()
+            );
+        }
+    }
+
+    /// The same form twice is one form, so it is consistent. RDF graphs are sets, and S52 counts
+    /// values of the property rather than statements — the contrast that makes Example 76 mean
+    /// what it says.
+    #[test]
+    fn the_same_literal_form_stated_twice_is_one_form() {
+        let b = ex("B");
+        let model = CoreModel::from_statements(vec![
+            typed(&b, SkosClass::Label),
+            literal_form(&b, tagged("love", "en")),
+            literal_form(&b, tagged("love", "en")),
+        ]);
+
+        assert_eq!(
+            model.resource(&b).expect("the label").literal_forms().len(),
+            1
+        );
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// Example 80 — two labels with the same literal form are *not* entailed to be the same
+    /// resource. B.2.4.1: the function from labels to literals is not injective.
+    #[test]
+    fn example_80_two_labels_sharing_a_form_are_not_the_same_resource() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![
+            literal_form(&a, tagged("love", "en")),
+            literal_form(&b, tagged("love", "en")),
+        ]);
+
+        assert_ne!(model.resource(&a), None);
+        assert_ne!(model.resource(&b), None);
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| derivation.conclusion.contains("sameAs")),
+            "no identity may be concluded: {:?}",
+            model.derivations()
+        );
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// Example 81 — a label may be a member of a concept scheme. Consistent.
+    ///
+    /// S4 makes the *object* of `skos:inScheme` a concept scheme; it says nothing about the
+    /// subject, so the label stays a label and S48 is not touched. A model that entailed a class
+    /// for the subject would turn this consistent example into a disjointness violation.
+    #[test]
+    fn example_81_a_label_may_be_in_a_concept_scheme() {
+        let (a, scheme) = (ex("A"), ex("MyScheme"));
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            literal_form(&a, tagged("love", "en")),
+            s(&a, SKOS_IN_SCHEME, &scheme),
+        ]);
+
+        let label = model.resource(&a).expect("the label");
+        assert!(label.is_a(SkosClass::Label));
+        assert!(!label.is_a(SkosClass::Concept));
+        assert_eq!(names(label.in_schemes()), vec![scheme.to_string()]);
+        assert!(model
+            .resource(&scheme)
+            .expect("the scheme")
+            .is_a(SkosClass::ConceptScheme));
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// Examples 82 and 83 — the whole point of SKOS-XL, in one test.
+    ///
+    /// 82 says the three XL labelling properties together are consistent; 83 says that same graph
+    /// *entails* the three plain SKOS labels. Asserting them separately would let the model pass
+    /// 82 by ignoring SKOS-XL entirely.
+    #[test]
+    fn examples_82_and_83_xl_labels_dumb_down_to_plain_skos_labels() {
+        let love = ex("Love");
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements(vec![
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            xl_labelled(&love, LabelKind::Alternative, &b),
+            xl_labelled(&love, LabelKind::Hidden, &c),
+            typed(&a, SkosClass::Label),
+            literal_form(&a, tagged("love", "en")),
+            typed(&b, SkosClass::Label),
+            literal_form(&b, tagged("adoration", "en")),
+            typed(&c, SkosClass::Label),
+            literal_form(&c, tagged("luv", "en")),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        assert_eq!(
+            plain_labels(&model, &love),
+            vec![
+                // Ordered by language tag and then lexical form, which is why the alternative
+                // comes first: "adoration" < "love" < "luv".
+                "skos:altLabel \"adoration\"@en (from SKOS-XL, S56)",
+                "skos:prefLabel \"love\"@en (from SKOS-XL, S55)",
+                "skos:hiddenLabel \"luv\"@en (from SKOS-XL, S57)",
+            ]
+        );
+
+        // Each of the three is explained, and by the chain that licensed that one — not by S55
+        // three times over, which would be true only for the preferred label.
+        assert_eq!(
+            dumbing_down(&model),
+            vec![
+                "<http://example.com/ns/Love> skos:prefLabel \"love\"@en [S55]",
+                "<http://example.com/ns/Love> skos:altLabel \"adoration\"@en [S56]",
+                "<http://example.com/ns/Love> skos:hiddenLabel \"luv\"@en [S57]",
+            ]
+        );
+        assert!(model.derivations()[0]
+            .premise
+            .contains("skosxl:prefLabel <http://example.com/ns/A>"));
+    }
+
+    /// Example 84 — two preferred XL labels in one language. Not consistent, under S14, which is
+    /// a condition on the *plain* labels the chains produced.
+    #[test]
+    fn example_84_two_preferred_xl_labels_in_one_language_are_not_consistent() {
+        let love = ex("Love");
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            xl_labelled(&love, LabelKind::Preferred, &b),
+            literal_form(&a, tagged("love", "en")),
+            literal_form(&b, tagged("adoration", "en")),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let s14 = findings_matching(&model, "S14");
+        assert_eq!(s14.len(), 1, "{:?}", model.findings());
+        assert!(
+            s14[0].contains("\"adoration\"@en, \"love\"@en"),
+            "{}",
+            s14[0]
+        );
+        // Neither label was typed. S50 is what makes them labels, and without it there would be
+        // no literal form to dumb down and the example would come out consistent.
+        assert!(model
+            .resource(&a)
+            .expect("the label")
+            .is_a(SkosClass::Label));
+    }
+
+    /// Examples 85, 86 and 87 — two *different* XL labels with the same literal form, under two
+    /// different properties. Not consistent, under S13.
+    ///
+    /// S58 is deliberately not what catches these: the two label resources are distinct, so no
+    /// property pair shares a value. It is the dumbed-down plain labels that clash, which is
+    /// precisely what B.3.4.2 says.
+    #[test]
+    fn examples_85_to_87_two_labels_sharing_a_form_across_properties_are_not_consistent() {
+        for (name, first, second) in [
+            ("85", LabelKind::Preferred, LabelKind::Alternative),
+            ("86", LabelKind::Alternative, LabelKind::Hidden),
+            ("87", LabelKind::Preferred, LabelKind::Hidden),
+        ] {
+            let love = ex("Love");
+            let (a, b) = (ex("A"), ex("B"));
+            let model = CoreModel::from_statements(vec![
+                xl_labelled(&love, first, &a),
+                xl_labelled(&love, second, &b),
+                literal_form(&a, tagged("love", "en")),
+                literal_form(&b, tagged("love", "en")),
+            ]);
+
+            assert!(
+                !model.is_consistent(),
+                "Example {name} must not be consistent"
+            );
+            assert_eq!(
+                findings_matching(&model, "S13").len(),
+                1,
+                "Example {name}: {:?}",
+                model.findings()
+            );
+            assert!(
+                findings_matching(&model, "S58").is_empty(),
+                "Example {name} is S13's case, not S58's: {:?}",
+                model.findings()
+            );
+        }
+    }
+
+    /// S58 — one label resource under two XL properties. Inconsistent, and a different fault from
+    /// Example 85's, which is why both are checked.
+    #[test]
+    fn s58_one_label_under_two_xl_properties_is_inconsistent() {
+        let love = ex("Love");
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            xl_labelled(&love, LabelKind::Alternative, &a),
+            literal_form(&a, tagged("love", "en")),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let s58 = findings_matching(&model, "S58");
+        assert_eq!(s58.len(), 1, "{:?}", model.findings());
+        assert!(
+            s58[0].contains("skosxl:prefLabel and skosxl:altLabel"),
+            "{}",
+            s58[0]
+        );
+        // And it also clashes once dumbed down, because one literal is now under two plain
+        // properties. Two findings for one fault, each with its own true citation.
+        assert_eq!(findings_matching(&model, "S13").len(), 1);
+    }
+
+    /// S48 — `skosxl:Label` is disjoint with each of the three core classes.
+    #[test]
+    fn s48_a_label_may_not_also_be_a_concept_scheme_or_collection() {
+        for class in [
+            SkosClass::Concept,
+            SkosClass::ConceptScheme,
+            SkosClass::Collection,
+        ] {
+            let a = ex("A");
+            let model = CoreModel::from_statements(vec![
+                typed(&a, SkosClass::Label),
+                typed(&a, class),
+                literal_form(&a, tagged("love", "en")),
+            ]);
+
+            assert!(
+                !model.is_consistent(),
+                "{class} must be disjoint with skosxl:Label"
+            );
+            assert_eq!(
+                findings_matching(&model, "S48").len(),
+                1,
+                "{class}: {:?}",
+                model.findings()
+            );
+        }
+    }
+
+    /// An *ordered* collection that is also a label is caught under S37, not S48 — because S29
+    /// has already made it a collection, and S48's own wording names `skos:Collection`.
+    #[test]
+    fn an_ordered_collection_that_is_a_label_is_reported_under_the_rule_that_says_so() {
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            typed(&a, SkosClass::OrderedCollection),
+            literal_form(&a, tagged("love", "en")),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let s48 = findings_matching(&model, "S48");
+        assert_eq!(s48.len(), 1, "{:?}", model.findings());
+        assert!(
+            s48[0].contains("skos:Collection (inferred, S29)"),
+            "{}",
+            s48[0]
+        );
+    }
+
+    /// S54 — being the object of an XL labelling property makes something a label, with no
+    /// `rdf:type` anywhere. Example 84 relies on this and states no types at all.
+    #[test]
+    fn s54_the_object_of_an_xl_labelling_property_is_a_label() {
+        let love = ex("Love");
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![xl_labelled(&love, LabelKind::Hidden, &a)]);
+
+        assert_eq!(
+            model
+                .resource(&a)
+                .expect("the label")
+                .classes()
+                .get(&SkosClass::Label),
+            Some(&ClassOrigin::Entailed(SkosRule::S54))
+        );
+        assert_eq!(
+            model
+                .resource(&love)
+                .expect("the concept")
+                .xl_labels_of(LabelKind::Hidden)
+                .collect::<Vec<_>>(),
+            vec![&a]
+        );
+    }
+
+    /// S52 — a label with no literal form. **Ill-formed, not inconsistent**, and the distinction
+    /// is the test: "cardinality exactly 1" entails a form exists, it does not require the graph
+    /// to state one, so a partial export is not a broken vocabulary.
+    #[test]
+    fn s52_a_label_with_no_literal_form_is_ill_formed_and_still_consistent() {
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![typed(&a, SkosClass::Label)]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert_eq!(model.findings().len(), 1);
+        assert_eq!(model.findings()[0].severity(), Severity::IllFormed);
+        assert!(
+            findings_matching(&model, "open-world assumption").len() == 1,
+            "the reason must be in the report: {:?}",
+            model.findings()
+        );
+    }
+
+    /// S51 — a literal form that is not a plain literal is reported and **does not dumb down**.
+    ///
+    /// Dumbing it down would produce a `skos:prefLabel` that is S12's finding one step later, so
+    /// the same fault would be reported twice under two rules and the concept would appear to
+    /// have a preferred label it cannot display.
+    #[test]
+    fn s51_a_typed_literal_form_is_ill_formed_and_does_not_dumb_down() {
+        let love = ex("Love");
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            literal_form(
+                &a,
+                Term::Literal(Literal {
+                    value: "4".to_owned(),
+                    language: None,
+                    datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                }),
+            ),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert_eq!(
+            findings_matching(&model, "S51").len(),
+            1,
+            "{:?}",
+            model.findings()
+        );
+        assert!(plain_labels(&model, &love).is_empty());
+        assert!(dumbing_down(&model).is_empty(), "{:?}", model.derivations());
+        // Kept on the label all the same: it is what the graph says, and S52 counts it.
+        assert_eq!(
+            model.resource(&a).expect("the label").literal_forms().len(),
+            1
+        );
+    }
+
+    /// S49 — `skosxl:literalForm` is an `owl:DatatypeProperty`, so an IRI is a contradiction.
+    ///
+    /// The contrast with `skos:prefLabel` is the specification's, not ours: S10 makes that an
+    /// `owl:AnnotationProperty`, whose values may legally be IRIs, so the same shape of mistake
+    /// is ill-formed there and inconsistent here.
+    #[test]
+    fn s49_a_node_as_a_literal_form_is_inconsistent_unlike_a_node_as_a_plain_label() {
+        let (a, elsewhere) = (ex("A"), ex("Elsewhere"));
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            s(&a, SKOSXL_LITERAL_FORM, &elsewhere),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        assert_eq!(
+            findings_matching(&model, "S49").len(),
+            1,
+            "{:?}",
+            model.findings()
+        );
+
+        let plain = CoreModel::from_statements(vec![Statement::new(
+            ex("Cat"),
+            LabelKind::Preferred.property_iri(),
+            elsewhere,
+        )]);
+        assert!(
+            plain.is_consistent(),
+            "S10 permits an IRI on an annotation property"
+        );
+        assert_eq!(plain.findings()[0].severity(), Severity::IllFormed);
+    }
+
+    /// A literal on an XL labelling property is inconsistent under S53, as on any object property.
+    #[test]
+    fn s53_a_literal_on_an_xl_labelling_property_is_inconsistent() {
+        let model = CoreModel::from_statements(vec![Statement::new(
+            ex("Love"),
+            LabelKind::Preferred.xl_property_iri(),
+            tagged("love", "en"),
+        )]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        assert_eq!(
+            findings_matching(&model, "S53").len(),
+            1,
+            "{:?}",
+            model.findings()
+        );
+    }
+
+    /// A label with two forms does not dumb down either — there is no principled way to choose
+    /// which of the two the concept is really called, and inventing one would put a label the
+    /// author never wrote in front of them.
+    #[test]
+    fn a_label_with_two_literal_forms_does_not_dumb_down() {
+        let love = ex("Love");
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            literal_form(&a, tagged("love", "en")),
+            literal_form(&a, tagged("adoration", "en")),
+        ]);
+
+        assert!(
+            plain_labels(&model, &love).is_empty(),
+            "{:?}",
+            plain_labels(&model, &love)
+        );
+        assert!(dumbing_down(&model).is_empty(), "{:?}", model.derivations());
+        assert_eq!(findings_matching(&model, "S52").len(), 1);
+    }
+
+    /// An asserted plain label is never restated as a dumbed-down one, exactly as an asserted
+    /// class is never overwritten by an entailed one.
+    #[test]
+    fn an_asserted_plain_label_keeps_its_origin_when_xl_says_the_same_thing() {
+        let love = ex("Love");
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            labelled(&love, LabelKind::Preferred, tagged("love", "en")),
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            literal_form(&a, tagged("love", "en")),
+        ]);
+
+        assert_eq!(
+            plain_labels(&model, &love),
+            vec!["skos:prefLabel \"love\"@en (asserted)"]
+        );
+        assert!(dumbing_down(&model).is_empty(), "{:?}", model.derivations());
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// A dumbed-down label is counted in the coverage a multilingual programme reads, because to
+    /// the person asking "how much of this is in French?" an XL label is a French label.
+    #[test]
+    fn dumbed_down_labels_count_towards_language_coverage() {
+        let love = ex("Love");
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            typed(&love, SkosClass::Concept),
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            literal_form(&a, tagged("amour", "fr")),
+        ]);
+
+        let coverage = model.label_coverage();
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0].language.as_deref(), Some("fr"));
+        assert_eq!(coverage[0].preferred, 1);
+        assert_eq!(coverage[0].resources_with_preferred, 1);
+        assert_eq!(
+            model
+                .resource(&love)
+                .expect("the concept")
+                .preferred_label_in("fr")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("\"amour\"@fr")
+        );
+    }
+
+    /// The order statements arrive in does not change the answer, for SKOS-XL as for the rest.
+    ///
+    /// This is the assertion that would catch a pass reading a literal form before it was stored,
+    /// which is the failure a streaming builder invites.
+    #[test]
+    fn a_skos_xl_vocabulary_reads_the_same_in_either_direction() {
+        let love = ex("Love");
+        let (a, b) = (ex("A"), ex("B"));
+        let statements = vec![
+            typed(&love, SkosClass::Concept),
+            xl_labelled(&love, LabelKind::Preferred, &a),
+            xl_labelled(&love, LabelKind::Alternative, &b),
+            literal_form(&a, tagged("love", "en")),
+            typed(&b, SkosClass::Label),
+            literal_form(&b, tagged("adoration", "en")),
+        ];
+
+        let forwards = CoreModel::from_statements(statements.clone());
+        let backwards = CoreModel::from_statements(statements.into_iter().rev());
+
+        assert_eq!(forwards.resources, backwards.resources);
+        assert_eq!(forwards.findings, backwards.findings);
+        assert_eq!(plain_labels(&forwards, &love).len(), 2);
     }
 }

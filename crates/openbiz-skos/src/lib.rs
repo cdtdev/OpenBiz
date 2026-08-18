@@ -7,6 +7,7 @@
 
 mod labels;
 mod model;
+mod xl;
 
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
@@ -17,6 +18,10 @@ pub use model::{
     Node, Resource, Severity, SkosClass, SkosRule, Statement, Term, RDF_FIRST, RDF_NIL, RDF_REST,
     RDF_TYPE, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER, SKOS_MEMBER_LIST,
     SKOS_TOP_CONCEPT_OF,
+};
+pub use xl::{
+    LabelOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL, SKOSXL_LITERAL_FORM,
+    SKOSXL_PREF_LABEL,
 };
 
 /// Namespace IRIs used throughout the SKOS model.
