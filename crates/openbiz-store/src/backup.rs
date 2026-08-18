@@ -39,8 +39,9 @@
 //!   interleaves two histories with no way to separate them afterwards.
 //! - A file with no store stamp ([`StoreError::NotABackup`]) — most likely an *export* of one
 //!   vocabulary, which would restore as content with no registry.
-//! - A stamp this build does not read ([`StoreError::RestoreFormatTooNew`],
-//!   [`StoreError::RestoreNeedsMigration`]).
+//! - A stamp from a build newer than this one ([`StoreError::RestoreFormatTooNew`]), or an older
+//!   one this build has no migration chain for ([`StoreError::RestoreNoMigrationPath`]). An older
+//!   stamp that *is* reachable is migrated forward inside the restoring transaction instead.
 //! - A statement in no graph, in a graph named by a blank node, or in a graph IRI that breaks the
 //!   [`GraphId`] invariants ([`StoreError::RestoreRefused`]).
 //! - Content in a graph the file's own registry does not list, or a registry this build could not
@@ -57,8 +58,8 @@ use oxigraph::io::{RdfParser, RdfSerializer};
 use oxigraph::model::{GraphName, NamedOrBlankNode, Quad, Term};
 
 use crate::{
-    graphs_in, named_node, GraphId, GraphKind, RdfSyntax, Store, StoreError, Transaction,
-    FORMAT_VERSION, FORMAT_VERSION_IRI, STORE_IRI, SYSTEM_GRAPH_IRI,
+    graphs_in, named_node, GraphId, GraphKind, MigrationReport, RdfSyntax, Store, StoreError,
+    Transaction, FORMAT_VERSION, FORMAT_VERSION_IRI, STORE_IRI, SYSTEM_GRAPH_IRI,
 };
 
 /// The syntax a backup is written in, and the only one restore reads.
@@ -95,10 +96,11 @@ impl BackupReport {
 }
 
 /// What a restore reconstructed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreReport {
     quads: u64,
     graphs: usize,
+    migrations: MigrationReport,
 }
 
 impl RestoreReport {
@@ -114,6 +116,16 @@ impl RestoreReport {
     /// Graphs the restored registry lists, including OpenBiz's own.
     pub fn graphs(&self) -> usize {
         self.graphs
+    }
+
+    /// What restoring the file did to its store format.
+    ///
+    /// Empty when the backup was written by this build. When it was not, the file's contents were
+    /// brought forward by the same migration chain [`Store::open`] runs, inside the same
+    /// transaction that wrote them — so a backup that cannot be migrated restores nothing at all
+    /// rather than restoring a store in a shape this build misreads.
+    pub fn migrations(&self) -> &MigrationReport {
+        &self.migrations
     }
 }
 
@@ -218,7 +230,26 @@ impl Store {
 
             txn.restore(&batch)?;
 
-            check_stamp(&stamps)?;
+            // Migrate the *file's* contents, not the target store's stamp: the target stamped
+            // itself at the current version when it was opened, and the shape that needs bringing
+            // forward is the one that just arrived from disk. Running inside this transaction is
+            // what makes an unmigratable backup restore nothing rather than something.
+            let file_version = check_stamp(&stamps)?;
+            let migrations = crate::migrate::migrate(txn, file_version, self.path()).map_err(
+                |error| match error {
+                    StoreError::NoMigrationPath {
+                        found,
+                        supported,
+                        missing,
+                        ..
+                    } => StoreError::RestoreNoMigrationPath {
+                        found,
+                        supported,
+                        missing,
+                    },
+                    other => other,
+                },
+            )?;
 
             // Read the registry back through the *same* code `Store::open` and `Store::graphs`
             // use, inside the transaction that just wrote it. This is the check that makes the
@@ -241,6 +272,7 @@ impl Store {
             Ok(RestoreReport {
                 quads,
                 graphs: registry.len(),
+                migrations,
             })
         })
     }
@@ -330,8 +362,13 @@ fn graph_iri(quad: &Quad) -> Result<&str, StoreError> {
     }
 }
 
-/// Decide what the file's format stamp means for this build.
-fn check_stamp(stamps: &[Term]) -> Result<(), StoreError> {
+/// Read the file's format stamp, refusing anything that is not a single version this build could
+/// act on.
+///
+/// A version *older* than this build's is returned rather than refused: the caller migrates it.
+/// A version newer than this build's is refused here, because there is nothing to be done with a
+/// shape we have never seen.
+fn check_stamp(stamps: &[Term]) -> Result<u32, StoreError> {
     let found = match stamps {
         [] => {
             return Err(StoreError::NotABackup {
@@ -368,17 +405,14 @@ fn check_stamp(stamps: &[Term]) -> Result<(), StoreError> {
         }
     };
 
-    match found.cmp(&FORMAT_VERSION) {
-        std::cmp::Ordering::Greater => Err(StoreError::RestoreFormatTooNew {
+    if found > FORMAT_VERSION {
+        return Err(StoreError::RestoreFormatTooNew {
             found,
             supported: FORMAT_VERSION,
-        }),
-        std::cmp::Ordering::Less => Err(StoreError::RestoreNeedsMigration {
-            found,
-            supported: FORMAT_VERSION,
-        }),
-        std::cmp::Ordering::Equal => Ok(()),
+        });
     }
+
+    Ok(found)
 }
 
 /// Turn the parser's failure into ours, keeping the position when it gave one.
@@ -694,20 +728,110 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_from_an_older_build_says_it_needs_a_migration() {
+    fn a_backup_from_a_version_with_no_migration_out_of_it_is_refused_whole() {
         let dir = temp_dir();
         let store = Store::open(dir.path()).expect("open the store");
 
+        // Version 0 never existed and never will have a migration, so it stands in for the real
+        // case: a build that reads a version it has lost the step for. The refusal must name the
+        // *missing* version, because that is what identifies the release an operator needs.
         let backup = format!(
             "<{STORE_IRI}> <{FORMAT_VERSION_IRI}> \
-             \"0\"^^<http://www.w3.org/2001/XMLSchema#integer> <{SYSTEM_GRAPH_IRI}> .\n"
+             \"0\"^^<http://www.w3.org/2001/XMLSchema#integer> <{SYSTEM_GRAPH_IRI}> .\n\
+             <https://example.org/vocab> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:openbiz:Graph> \
+             <{SYSTEM_GRAPH_IRI}> .\n"
         );
         let error = store
             .restore(backup.as_bytes())
-            .expect_err("an older format must be refused until migration exists");
+            .expect_err("a version with no migration out of it must be refused");
         assert!(
-            matches!(error, StoreError::RestoreNeedsMigration { found: 0, .. }),
+            matches!(
+                error,
+                StoreError::RestoreNoMigrationPath {
+                    found: 0,
+                    missing: 0,
+                    ..
+                }
+            ),
             "unexpected error: {error}"
+        );
+        assert!(
+            error.to_string().contains("upgrade one release at a time"),
+            "refusing is not enough; the message must say what to do: {error}"
+        );
+
+        // Refused *whole*: the vocabulary registration in the file must not have landed.
+        assert_eq!(
+            store.graphs().expect("read the registry"),
+            vec![GraphId::system()],
+            "a refused restore left something behind"
+        );
+    }
+
+    #[test]
+    fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
+        let source = temp_dir();
+        let backup = {
+            // A version-1 store, written as a version-1 build would have: content, a registry for
+            // the vocabulary, a stamp of 1, and *no* registry entry for the system graph — which
+            // is precisely the invariant version 2 exists to guarantee.
+            let store = populated(source.path());
+            let mut backup = Vec::new();
+            store.backup(&mut backup).expect("back the store up");
+            store.close().expect("a clean close");
+
+            let text = String::from_utf8(backup).expect("N-Quads is UTF-8");
+            let downgraded: String = text
+                .lines()
+                .filter(|line| {
+                    !line.contains(FORMAT_VERSION_IRI)
+                        && !line.starts_with(&format!("<{SYSTEM_GRAPH_IRI}>"))
+                })
+                .map(|line| format!("{line}\n"))
+                .collect();
+            format!(
+                "{downgraded}<{STORE_IRI}> <{FORMAT_VERSION_IRI}> \
+                 \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> <{SYSTEM_GRAPH_IRI}> .\n"
+            )
+        };
+
+        let target_dir = temp_dir();
+        let target = Store::open(target_dir.path()).expect("open the target store");
+        let report = target
+            .restore(backup.as_bytes())
+            .expect("an older backup restores");
+
+        assert!(
+            report.migrations().migrated(),
+            "a version-1 backup must be reported as migrated, not silently accepted"
+        );
+        assert_eq!(report.migrations().previous_version(), 1);
+        assert_eq!(report.migrations().current_version(), FORMAT_VERSION);
+        assert_eq!(
+            report
+                .migrations()
+                .steps()
+                .iter()
+                .map(|step| step.id)
+                .collect::<Vec<_>>(),
+            vec!["0002-register-system-graph"]
+        );
+
+        // The content survived, and the store the migration produced is one we open again
+        // without further work.
+        assert!(target
+            .graphs()
+            .expect("read the registry")
+            .iter()
+            .any(|graph| graph.iri() == "https://example.org/animals"));
+        target.close().expect("a clean close");
+
+        let reopened = Store::open(target_dir.path()).expect("reopen the restored store");
+        assert_eq!(reopened.format_version(), FORMAT_VERSION);
+        assert!(
+            !reopened.migrations().migrated(),
+            "the migration must be a one-off, not something every open repeats"
         );
     }
 

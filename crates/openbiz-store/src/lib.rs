@@ -34,13 +34,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use oxigraph::io::RdfSerializer;
-use oxigraph::model::vocab::{rdf, xsd};
+use oxigraph::model::vocab::rdf;
 use oxigraph::model::{GraphName, Literal, NamedNode, NamedNodeRef, Quad, Term};
 use oxigraph::store::Store as Backend;
 use thiserror::Error;
 
 mod backup;
 mod graph;
+/// How a store written by an older OpenBiz becomes one this build reads: the migration chain, the
+/// records it leaves behind, and why it refuses rather than skips. See the module documentation.
+mod migrate;
 mod query;
 mod results;
 /// Conformance of the line-based exports against the specifications' own grammars. Test-only:
@@ -64,6 +67,7 @@ mod scale;
 mod literal_precision;
 
 pub use backup::{BackupReport, RestoreReport, BACKUP_SYNTAX};
+pub use migrate::{Migration, MigrationReport, MigrationStep};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;
@@ -80,9 +84,15 @@ pub const STORE_SUBDIR: &str = "store";
 
 /// On-disk format version this build reads and writes.
 ///
-/// Bump this only alongside a migration. A store carrying a *higher* version is refused, because
-/// an older build silently reading a newer layout is the failure that loses data.
-pub const FORMAT_VERSION: u32 = 1;
+/// Bump this only alongside a migration in [`migrate`]. A store carrying a *higher* version is
+/// refused, because an older build silently reading a newer layout is the failure that loses
+/// data; a *lower* one is migrated forward, and a lower one with no migration out of it is
+/// refused rather than opened optimistically. The chain is checked to be unbroken from 1 to here
+/// by a test, so bumping this alone fails the build rather than a customer's store.
+///
+/// **2** — the system graph is guaranteed to be in the graph registry. Version 1 stamped stores
+/// written before the registry existed.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Subject describing the store itself, within the system graph.
 const STORE_IRI: &str = "urn:openbiz:store";
@@ -142,6 +152,24 @@ pub enum StoreError {
         found: u32,
         /// The highest version this build understands.
         supported: u32,
+    },
+    /// The store predates this build and there is no migration chain that reaches it.
+    #[error(
+        "the store at {} is at format version {found}, and this build (format version \
+         {supported}) has no migration out of version {missing}; open it with the OpenBiz that \
+         wrote it and upgrade one release at a time, or restore a backup into a fresh data \
+         directory",
+        path.display()
+    )]
+    NoMigrationPath {
+        /// The path that was refused.
+        path: PathBuf,
+        /// The version found on disk.
+        found: u32,
+        /// The version this build writes.
+        supported: u32,
+        /// The first version with no migration out of it.
+        missing: u32,
     },
     /// The store's own metadata is not what this build wrote.
     #[error("the store at {} has unreadable metadata: {detail}", path.display())]
@@ -228,7 +256,8 @@ pub enum StoreError {
     /// destructive reading — "this overwrote my vocabulary" — impossible rather than merely
     /// unlikely.
     #[error(
-        "the store at {} is not empty, and a restore replaces a whole store rather than merging          into one; restore into a fresh data directory instead",
+        "the store at {} is not empty, and a restore replaces a whole store rather than merging \
+         into one; restore into a fresh data directory instead",
         path.display()
     )]
     RestoreNotEmpty {
@@ -247,7 +276,8 @@ pub enum StoreError {
     },
     /// The backup was written by a newer OpenBiz than this one.
     #[error(
-        "the backup was written by a newer OpenBiz (format version {found}); this build reads up          to version {supported}. Restore it with that build, or upgrade this one"
+        "the backup was written by a newer OpenBiz (format version {found}); this build reads up \
+         to version {supported}. Restore it with that build, or upgrade this one"
     )]
     RestoreFormatTooNew {
         /// The version found in the file.
@@ -255,15 +285,19 @@ pub enum StoreError {
         /// The highest version this build understands.
         supported: u32,
     },
-    /// The backup predates this build's store format.
+    /// The backup predates this build's store format and no migration chain reaches it.
     #[error(
-        "the backup is in store format version {found} and this build writes version          {supported}; migrating an older backup is not implemented yet, so restoring it would          produce a store this build reads incorrectly"
+        "the backup is in store format version {found} and this build writes version \
+         {supported}, but there is no migration out of version {missing}; restore it with the \
+         OpenBiz that wrote it and upgrade one release at a time"
     )]
-    RestoreNeedsMigration {
+    RestoreNoMigrationPath {
         /// The version found in the file.
         found: u32,
         /// The version this build writes.
         supported: u32,
+        /// The first version with no migration out of it.
+        missing: u32,
     },
     /// The backup describes a store this build would refuse to open.
     ///
@@ -344,6 +378,8 @@ pub struct Store {
     backend: Backend,
     path: PathBuf,
     format_version: u32,
+    /// What opening this store did to its format, kept so the caller can log it after the fact.
+    migrations: MigrationReport,
     /// Serialises write transactions, so a read-modify-write is atomic against other writers.
     ///
     /// The backend does **not** do this for us. Its transaction is a snapshot plus an in-memory
@@ -404,9 +440,15 @@ impl Store {
     /// fresh host would otherwise fail on the parent rather than on anything the operator did
     /// wrong.
     ///
-    /// A new store is stamped with [`FORMAT_VERSION`]; an existing one has its stamp checked. This
-    /// read-back is also what proves the path is durable rather than merely writable — the second
-    /// open of a directory reads what the first one committed.
+    /// A new store is stamped with [`FORMAT_VERSION`]; an existing one has its stamp checked, and
+    /// an older one is **migrated forward** before anything else touches it — see [`migrate`] for
+    /// the chain and for what it records. This read-back is also what proves the path is durable
+    /// rather than merely writable — the second open of a directory reads what the first one
+    /// committed.
+    ///
+    /// An open store is therefore always at [`FORMAT_VERSION`]: every other outcome is an error,
+    /// not a store you have to remember to check the version of. What was done to get there is in
+    /// [`Store::migrations`].
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = data_dir.as_ref().join(STORE_SUBDIR);
 
@@ -423,6 +465,7 @@ impl Store {
             backend,
             path,
             format_version: FORMAT_VERSION,
+            migrations: MigrationReport::none(FORMAT_VERSION),
             writes: Mutex::new(()),
         };
 
@@ -433,17 +476,46 @@ impl Store {
         // disk — a first start is the likeliest moment for a container to be killed, so the gap
         // was not hypothetical.
         //
-        // The system graph is registered on **every** open, not only when the store is created,
-        // so a store written before the registry existed acquires one by being opened. That is
-        // additive, so it needs no format bump and no migration, and an older build reading the
-        // same store simply ignores quads it does not look for.
-        let (format_version, wrote) = store.transaction(|txn| {
-            let (version, stamped) = stamp_or_check_format_version(txn, &store.path)?;
-            let registered = txn.ensure_registered(&GraphId::system())?;
-            Ok((version, stamped || registered))
+        // Any migration runs in the same transaction, so a store that fails half way through an
+        // upgrade is a store that was never upgraded rather than one in a shape no version
+        // describes.
+        let (migrations, wrote) = store.transaction(|txn| {
+            let (migrations, wrote) = match read_format_version(txn, &store.path)? {
+                // A store nobody has stamped is a store nobody has written: create it at the
+                // current version, with the invariants that version promises already in place.
+                // A new store is not "version 1 migrated forward" — it never held the old shape,
+                // so recording a migration against it would be a false entry in an audit trail.
+                None => {
+                    migrate::stamp(txn, FORMAT_VERSION)?;
+                    txn.ensure_registered(&GraphId::system())?;
+                    (MigrationReport::none(FORMAT_VERSION), true)
+                }
+                Some(found) => {
+                    let migrations = migrate::migrate(txn, found, &store.path)?;
+                    let migrated = migrations.migrated();
+                    (migrations, migrated)
+                }
+            };
+
+            // The invariant `FORMAT_VERSION` 2 exists to promise, checked rather than repaired.
+            // Earlier builds re-registered the system graph on every open, which quietly fixed a
+            // store nobody had explained; a governance product should say what it found instead.
+            if !txn.contains_graph(SYSTEM_GRAPH_IRI)? {
+                return Err(StoreError::Corrupt {
+                    path: store.path.clone(),
+                    detail: format!(
+                        "the system graph {SYSTEM_GRAPH_IRI} is not in the graph registry, which \
+                         every store at format version {FORMAT_VERSION} must have; restore a \
+                         backup into a fresh data directory"
+                    ),
+                });
+            }
+
+            Ok((migrations, wrote))
         })?;
 
-        store.format_version = format_version;
+        store.format_version = FORMAT_VERSION;
+        store.migrations = migrations;
 
         if wrote {
             // Flush immediately: the stamp and the registry must survive a hard kill in the
@@ -464,8 +536,24 @@ impl Store {
     }
 
     /// The on-disk format version in force for this store.
+    ///
+    /// Always [`FORMAT_VERSION`] for a store that opened, since anything else is refused or
+    /// migrated. It is kept as a method rather than folded into the constant because what an
+    /// operator wants to see in a log is what *their* store reported, not what the binary
+    /// believes in general.
     pub fn format_version(&self) -> u32 {
         self.format_version
+    }
+
+    /// What opening this store did to its format.
+    ///
+    /// Empty for the overwhelmingly common case of a store already at [`FORMAT_VERSION`]. When it
+    /// is not, it names every migration that ran and why — `CLAUDE.md` §3 requires an
+    /// auto-applied change to be able to explain itself, and a store upgrade is the one the user
+    /// never asked for. The same facts are written into the store's system graph, so the answer
+    /// survives the log line scrolling away.
+    pub fn migrations(&self) -> &MigrationReport {
+        &self.migrations
     }
 
     /// Every graph this store knows about, ordered by IRI.
@@ -712,54 +800,43 @@ fn classify_open(path: &Path, error: oxigraph::store::StorageError) -> StoreErro
     }
 }
 
-/// Read the store's format stamp, writing it first if the store is new.
+/// Read the store's format stamp, if it has one.
 ///
-/// Returns the version in force and whether this call stamped it. Refuses a store from the
-/// future, and refuses one whose stamp is not a single integer — a store with two stamps is one
-/// we cannot reason about, and guessing which is right is how a migration corrupts data.
+/// `None` means nothing has ever stamped this directory, which is how a *new* store is
+/// recognised — a distinction that matters, because a new store is created at the current version
+/// rather than migrated up to it.
+///
+/// Refuses a store whose stamp is not a single integer. A store with two stamps is one we cannot
+/// reason about, and guessing which is right is how a migration corrupts data. It does **not**
+/// refuse a store from the future — [`migrate::migrate`] does, so that the refusal lives beside
+/// the code that would otherwise act on the version.
 ///
 /// Runs inside the caller's transaction so that refusing a store is a decision taken against a
-/// single consistent snapshot, and so that a stamp written here commits together with the system
-/// graph's registry entry rather than as a separate write that a kill could land without it.
-fn stamp_or_check_format_version(
+/// single consistent snapshot, and so that a stamp written afterwards commits together with the
+/// system graph's registry entry rather than as a separate write that a kill could land without
+/// it.
+fn read_format_version(
     transaction: &mut Transaction<'_>,
     path: &Path,
-) -> Result<(u32, bool), StoreError> {
-    let subject = named_node(STORE_IRI);
-    let predicate = named_node(FORMAT_VERSION_IRI);
-
+) -> Result<Option<u32>, StoreError> {
     let found: Vec<Term> = transaction
         .inner
-        .system_quads(Some(subject), predicate)?
+        .system_quads(Some(named_node(STORE_IRI)), named_node(FORMAT_VERSION_IRI))?
         .into_iter()
         .map(|quad| quad.object)
         .collect();
 
     match found.as_slice() {
-        [] => {
-            let version = Literal::new_typed_literal(FORMAT_VERSION.to_string(), xsd::INTEGER);
-            transaction.insert(
-                &GraphId::system(),
-                vec![(subject.into_owned(), predicate.into_owned(), version.into())],
-            )?;
-            Ok((FORMAT_VERSION, true))
-        }
+        [] => Ok(None),
         [Term::Literal(literal)] => {
-            let found = literal
+            literal
                 .value()
                 .parse::<u32>()
+                .map(Some)
                 .map_err(|_| StoreError::Corrupt {
                     path: path.to_path_buf(),
                     detail: format!("format version {:?} is not a number", literal.value()),
-                })?;
-            if found > FORMAT_VERSION {
-                return Err(StoreError::FormatTooNew {
-                    path: path.to_path_buf(),
-                    found,
-                    supported: FORMAT_VERSION,
-                });
-            }
-            Ok((found, false))
+                })
         }
         other => Err(StoreError::Corrupt {
             path: path.to_path_buf(),
@@ -1031,6 +1108,7 @@ const fn named_node(iri: &str) -> NamedNodeRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxigraph::model::vocab::xsd;
     use oxigraph::model::QuadRef;
 
     fn temp_dir() -> tempfile::TempDir {
@@ -1074,12 +1152,169 @@ mod tests {
     /// A store written before the registry existed must acquire one by being opened. If this
     /// needed a format bump then every additive piece of system metadata would need a migration,
     /// and the store would be far harder to evolve than it has to be.
+    /// Turn an open store into what a **format version 1** build left behind: stamped 1, and with
+    /// no registry entry for the system graph — the invariant version 2 exists to guarantee.
+    ///
+    /// Reaches past our own wrapper on purpose. This is simulating a *different build* having
+    /// written the store, which is the one thing our own API is unable to express.
+    fn downgrade_to_version_one(store: &Store) {
+        store
+            .backend
+            .clear_graph(named_node(SYSTEM_GRAPH_IRI))
+            .expect("the system graph is clearable");
+        let version = Literal::new_typed_literal("1", xsd::INTEGER);
+        store
+            .backend
+            .insert(QuadRef::new(
+                named_node(STORE_IRI),
+                named_node(FORMAT_VERSION_IRI),
+                &version,
+                named_node(SYSTEM_GRAPH_IRI),
+            ))
+            .expect("the stamp is rewritable");
+    }
+
     #[test]
-    fn a_store_without_a_registry_gains_one_on_open_without_a_format_bump() {
+    fn a_version_one_store_is_migrated_forward_and_keeps_its_content() {
+        let dir = temp_dir();
+        let graph = vocabulary("https://example.org/animals");
+        let concept = NamedNode::new_unchecked("https://example.org/animals/cat");
+
+        {
+            let store = Store::open(dir.path()).expect("first open");
+            store
+                .create_vocabulary_graph(&graph)
+                .expect("create the vocabulary");
+            store
+                .transaction(|txn| {
+                    txn.insert(
+                        &graph,
+                        vec![(
+                            concept.clone(),
+                            NamedNode::new_unchecked(
+                                "http://www.w3.org/2004/02/skos/core#prefLabel",
+                            ),
+                            Literal::new_language_tagged_literal_unchecked("Cat", "en").into(),
+                        )],
+                    )
+                })
+                .expect("write a concept");
+
+            downgrade_to_version_one(&store);
+            assert!(
+                store.graphs().expect("readable").is_empty(),
+                "the fixture must actually represent a store with no registry"
+            );
+            store.close().expect("a clean close");
+        }
+
+        let store = Store::open(dir.path()).expect("a version-1 store opens");
+
+        assert_eq!(
+            store.format_version(),
+            FORMAT_VERSION,
+            "an open store is always at the current version"
+        );
+        let report = store.migrations();
+        assert!(report.migrated(), "the store should have been migrated");
+        assert_eq!(report.previous_version(), 1);
+        assert_eq!(report.current_version(), FORMAT_VERSION);
+        assert_eq!(
+            report
+                .steps()
+                .iter()
+                .map(|step| step.id)
+                .collect::<Vec<_>>(),
+            vec!["0002-register-system-graph"],
+            "the report must name the step that ran, not just that something did"
+        );
+        assert!(
+            report.to_string().contains("registered the system graph"),
+            "an auto-applied change must be able to say why: {report}"
+        );
+
+        assert_eq!(store.graphs().expect("readable"), vec![GraphId::system()]);
+
+        // The migration touched the registry and nothing else: the vocabulary's own statement is
+        // still there, byte for byte. (The vocabulary's registry entry went with the fixture's
+        // `clear_graph`, which is what a pre-registry store looked like.)
+        let statements: Vec<Quad> = store
+            .backend
+            .quads_for_pattern(
+                Some(concept.as_ref().into()),
+                None,
+                None,
+                Some(named_node(graph.iri()).into()),
+            )
+            .map(|quad| quad.expect("readable"))
+            .collect();
+        assert_eq!(statements.len(), 1, "the migration lost the content");
+    }
+
+    #[test]
+    fn a_migration_runs_once_and_leaves_a_record_a_later_open_can_read() {
         let dir = temp_dir();
 
         {
-            // Strip the registry back out, leaving exactly what a pre-registry build wrote.
+            let store = Store::open(dir.path()).expect("first open");
+            downgrade_to_version_one(&store);
+            store.close().expect("a clean close");
+        }
+
+        {
+            let store = Store::open(dir.path()).expect("a version-1 store opens");
+            assert!(store.migrations().migrated());
+            store.close().expect("a clean close");
+        }
+
+        let store = Store::open(dir.path()).expect("reopen the migrated store");
+        assert!(
+            !store.migrations().migrated(),
+            "a migration must be a one-off; repeating it on every open is the self-heal this \
+             replaced"
+        );
+
+        // The log line has scrolled away by now. The record has not: it is ordinary RDF in the
+        // system graph, so the audit answer comes back from a SPARQL query rather than from a
+        // proprietary log. This is the production reader for what the migration wrote.
+        let mut answer = Vec::new();
+        store
+            .query(
+                &format!(
+                    "SELECT ?id ?why ?at FROM <{SYSTEM_GRAPH_IRI}> WHERE {{ \
+                     <{STORE_IRI}> <urn:openbiz:migrationApplied> ?id . \
+                     ?id <urn:openbiz:migrationDescription> ?why ; \
+                         <urn:openbiz:migrationAt> ?at . }}"
+                ),
+                QueryFormats::default(),
+                QueryLimits::default(),
+                &mut answer,
+            )
+            .expect("the record is queryable");
+
+        let answer = String::from_utf8(answer).expect("JSON is UTF-8");
+        assert!(
+            answer.contains("urn:openbiz:migration:0002-register-system-graph"),
+            "the record does not name the migration: {answer}"
+        );
+        assert!(
+            answer.contains("registered the system graph"),
+            "the record does not say why it ran: {answer}"
+        );
+        assert!(
+            answer.contains("XMLSchema#dateTime"),
+            "the record does not say when it ran: {answer}"
+        );
+    }
+
+    #[test]
+    fn a_current_store_missing_the_system_graph_registration_is_refused_not_repaired() {
+        let dir = temp_dir();
+
+        {
+            // Stamped at the *current* version but violating the invariant that version
+            // promises. Earlier builds quietly re-registered the system graph here; a governance
+            // product should report a store it does not recognise rather than mend it in silence.
             let store = Store::open(dir.path()).expect("first open");
             store
                 .backend
@@ -1095,21 +1330,70 @@ mod tests {
                     named_node(SYSTEM_GRAPH_IRI),
                 ))
                 .expect("the stamp is rewritable");
-            assert!(
-                store.graphs().expect("readable").is_empty(),
-                "the fixture must actually represent a store with no registry"
-            );
             store.close().expect("a clean close");
         }
 
-        let store = Store::open(dir.path()).expect("an older store still opens");
+        let error = Store::open(dir.path()).expect_err("the store must be refused");
 
-        assert_eq!(
-            store.format_version(),
-            FORMAT_VERSION,
-            "acquiring a registry is additive and must not look like a format change"
+        assert!(
+            matches!(error, StoreError::Corrupt { .. }),
+            "unexpected error: {error}"
         );
-        assert_eq!(store.graphs().expect("readable"), vec![GraphId::system()]);
+        assert!(
+            error.to_string().contains("restore a backup"),
+            "refusing is not enough; the message must say what to do: {error}"
+        );
+    }
+
+    #[test]
+    fn a_store_at_a_version_with_no_migration_out_of_it_is_refused() {
+        let dir = temp_dir();
+
+        {
+            // Version 0 never existed, so nothing will ever migrate out of it. It stands in for
+            // the real case: a build that reads a version whose step it has lost.
+            let store = Store::open(dir.path()).expect("first open");
+            let zero = Literal::new_typed_literal("0", xsd::INTEGER);
+            let current = Literal::new_typed_literal(FORMAT_VERSION.to_string(), xsd::INTEGER);
+            store
+                .backend
+                .remove(QuadRef::new(
+                    named_node(STORE_IRI),
+                    named_node(FORMAT_VERSION_IRI),
+                    &current,
+                    named_node(SYSTEM_GRAPH_IRI),
+                ))
+                .expect("the existing stamp is removable");
+            store
+                .backend
+                .insert(QuadRef::new(
+                    named_node(STORE_IRI),
+                    named_node(FORMAT_VERSION_IRI),
+                    &zero,
+                    named_node(SYSTEM_GRAPH_IRI),
+                ))
+                .expect("an older stamp is writable");
+            store.close().expect("a clean close");
+        }
+
+        let error = Store::open(dir.path()).expect_err("the store must be refused");
+
+        assert!(
+            matches!(
+                error,
+                StoreError::NoMigrationPath {
+                    found: 0,
+                    supported: FORMAT_VERSION,
+                    missing: 0,
+                    ..
+                }
+            ),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.to_string().contains("one release at a time"),
+            "refusing is not enough; the message must say what to do: {error}"
+        );
     }
 
     #[test]

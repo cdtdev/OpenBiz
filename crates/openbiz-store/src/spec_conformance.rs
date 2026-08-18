@@ -686,6 +686,7 @@ fn canonical_violations(document: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxigraph::model::vocab::xsd;
     use oxigraph::model::BlankNode;
     use std::collections::BTreeSet;
 

@@ -93,6 +93,22 @@ async fn main() -> anyhow::Result<()> {
         "store open"
     );
 
+    // A store upgrade is the one change to a customer's data nobody asked for, so it is said out
+    // loud rather than inferred from a version number that has quietly moved. `CLAUDE.md` §3
+    // requires an auto-applied change to explain itself; the same facts are in the store's system
+    // graph for the audit that comes later.
+    if store.migrations().migrated() {
+        tracing::warn!(
+            from_version = store.migrations().previous_version(),
+            to_version = store.migrations().current_version(),
+            "{}",
+            store.migrations()
+        );
+        for step in store.migrations().steps() {
+            tracing::info!(migration = step.id, "{}", step.description);
+        }
+    }
+
     match command {
         Command::Backup { file } => one_shot(store, |store| openbiz_server::back_up(store, &file)),
         Command::Restore { file } => one_shot(store, |store| openbiz_server::restore(store, &file)),

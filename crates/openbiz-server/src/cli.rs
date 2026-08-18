@@ -258,8 +258,17 @@ pub fn restore(store: &Store, file: &Path) -> Result<String, CommandError> {
 
     let report = store.restore(BufReader::new(handle))?;
 
+    // An operator restoring a backup taken by an older release needs to be told that the file was
+    // brought forward, and by what. Saying only "restored 12 000 statements" would hide a change
+    // to their data behind a count that looks identical either way.
+    let migrated = if report.migrations().migrated() {
+        format!("; {}", report.migrations())
+    } else {
+        String::new()
+    };
+
     Ok(format!(
-        "restored {} statements into {} graphs, from {}",
+        "restored {} statements into {} graphs, from {}{migrated}",
         report.quads(),
         report.graphs(),
         file.display(),
