@@ -121,7 +121,6 @@ fn etag(file: &EmbeddedFile) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app;
     use axum::http::Request as HttpRequest;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
@@ -135,7 +134,7 @@ mod tests {
         for (name, value) in &headers {
             request = request.header(name, value);
         }
-        app()
+        crate::test_app()
             .oneshot(request.body(Body::empty()).expect("valid test request"))
             .await
             .expect("router is infallible")
@@ -293,7 +292,10 @@ mod tests {
             .body(Body::empty())
             .expect("valid test request");
 
-        let response = app().oneshot(request).await.expect("router is infallible");
+        let response = crate::test_app()
+            .oneshot(request)
+            .await
+            .expect("router is infallible");
 
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }

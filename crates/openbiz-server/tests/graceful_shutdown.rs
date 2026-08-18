@@ -7,7 +7,7 @@
 //! Unix-only. `SIGTERM` is the thing under test, and it does not exist elsewhere.
 #![cfg(unix)]
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -254,4 +254,69 @@ fn the_graph_registry_is_read_at_startup() {
 
     server.signal("TERM");
     assert!(server.wait_for_exit().success());
+}
+
+/// `GET <path>` against a running child, returning the whole response as text.
+///
+/// Hand-rolled over `std::net::TcpStream` rather than pulling in an HTTP client: `Connection:
+/// close` makes read-to-end a complete response, and every dependency is a liability
+/// (`CLAUDE.md` §1.5).
+fn http_get(addr: SocketAddr, path: &str) -> String {
+    let mut stream =
+        TcpStream::connect_timeout(&addr, PATIENCE).expect("connect to the running server");
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .expect("write the request");
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .expect("read the response");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+/// The registry endpoint, served by the **real binary** over a real socket, and then stopped.
+///
+/// Two things are under test that no in-process test reaches. First, that `main` hands the open
+/// store to the router at all — the unit tests build their own router, so a `main` that forgot to
+/// would leave them green. Second, and less obvious: the store is shared with the router through
+/// an `Arc`, and `Store::close` consumes it, so `main` has to reclaim sole ownership after the
+/// drain. Serving a request first is what makes that reclaim meaningful — a connection clones the
+/// state, so this is the only test in which the reclaim can actually fail. If it did, the process
+/// would exit non-zero without logging `store closed cleanly`, silently skipping the flush.
+#[test]
+fn the_graph_registry_is_served_over_http_and_the_store_still_closes_cleanly() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let log = temp.path().join("server.log");
+    let mut server = Server::start(temp.path(), &log, true);
+    let addr = server
+        .listening_on()
+        .expect("the server logged its address");
+
+    let response = http_get(addr, "/api/graphs");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "the binary must serve the registry, got:\n{response}"
+    );
+    assert!(
+        response.contains(r#"{"iri":"urn:openbiz:graph:system","kind":"system"}"#),
+        "the store `main` opened must be the store the handler reads, got:\n{response}"
+    );
+
+    server.signal("TERM");
+    let status = server.wait_for_exit();
+    let log_text = server.log();
+
+    assert!(
+        status.success(),
+        "a server that has served a request must still stop cleanly, got {status}. \
+         Log:\n{log_text}"
+    );
+    assert!(
+        log_text.contains("store closed cleanly"),
+        "the store must still be reclaimed and flushed after the router held a handle. \
+         Log:\n{log_text}"
+    );
 }

@@ -10,23 +10,39 @@
 //! liability (`CLAUDE.md` §1.5).
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
-use openbiz_server::app;
+use openbiz_server::{app, AppState};
+use openbiz_store::{GraphId, Store};
+use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Bind an ephemeral port, serve the real router on it, and return the address.
-async fn start() -> SocketAddr {
+/// Bind an ephemeral port, serve the real router over a real store, and return the address.
+///
+/// The `TempDir` is returned rather than dropped: dropping it would delete the store out from
+/// under the running server, and the resulting failures would look like server bugs.
+async fn start() -> (SocketAddr, TempDir) {
+    let dir = TempDir::new().expect("a temporary data directory");
+    let store = Arc::new(Store::open(dir.path()).expect("a fresh store opens"));
+    store
+        .create_vocabulary_graph(
+            &GraphId::vocabulary("http://example.org/v/animals").expect("a valid IRI"),
+        )
+        .expect("a fresh IRI is registrable");
+
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("bind an ephemeral loopback port");
     let addr = listener.local_addr().expect("listener has a local address");
 
     tokio::spawn(async move {
-        axum::serve(listener, app()).await.expect("serve");
+        axum::serve(listener, app(AppState::new(store)))
+            .await
+            .expect("serve");
     });
 
-    addr
+    (addr, dir)
 }
 
 /// Issue `GET <path>` and return the whole response as text.
@@ -53,7 +69,7 @@ async fn get(addr: SocketAddr, path: &str) -> String {
 
 #[tokio::test]
 async fn a_running_server_serves_the_embedded_ui_and_the_health_probe() {
-    let addr = start().await;
+    let (addr, _dir) = start().await;
 
     let index = get(addr, "/").await;
     assert!(
@@ -79,5 +95,31 @@ async fn a_running_server_serves_the_embedded_ui_and_the_health_probe() {
     assert!(
         health.contains(r#""status":"ok""#),
         "expected an ok health report, got:\n{health}"
+    );
+}
+
+/// The UI's second act is `fetch("/api/graphs")`. Prove the registry reaches a socket, from a real
+/// store, in the JSON the frontend parses — the unit tests drive the router directly and would
+/// stay green if `axum::serve` never carried the state.
+#[tokio::test]
+async fn a_running_server_serves_the_graph_registry_from_its_store() {
+    let (addr, _dir) = start().await;
+
+    let response = get(addr, "/api/graphs").await;
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "expected 200 from /api/graphs, got:\n{response}"
+    );
+    assert!(
+        response.contains("application/json"),
+        "expected a JSON content type, got:\n{response}"
+    );
+    assert!(
+        response.contains(r#"{"iri":"http://example.org/v/animals","kind":"vocabulary"}"#),
+        "expected the vocabulary registered before start, got:\n{response}"
+    );
+    assert!(
+        response.contains(r#"{"iri":"urn:openbiz:graph:system","kind":"system"}"#),
+        "the registry must not hide OpenBiz's own graph; the UI filters, the API does not, got:\n{response}"
     );
 }

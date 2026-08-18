@@ -9,17 +9,23 @@ function abortError() {
 }
 
 /**
- * A `fetch` whose outcome the test decides. It honours the `AbortSignal` the way the real one does
- * — rejecting with an `AbortError` the moment the signal fires, whatever the outcome would have
- * been — because a stub that ignored the signal would let the component's abort handling rot
- * untested while the suite stayed green. It records the signals it was handed so the unmount path
- * can be asserted on.
+ * A `fetch` whose outcome for `/healthz` the test decides. It honours the `AbortSignal` the way the
+ * real one does — rejecting with an `AbortError` the moment the signal fires, whatever the outcome
+ * would have been — because a stub that ignored the signal would let the component's abort handling
+ * rot untested while the suite stayed green. It records the signals handed to the *health* probe so
+ * the unmount path can be asserted on.
+ *
+ * `App` also renders `Vocabularies`, which reads `/api/graphs` on mount. That request always
+ * succeeds here, and with an empty registry: these tests are about the health probe, and a registry
+ * that could also fail would put a second `role="alert"` on the page and make every assertion below
+ * ambiguous. `Vocabularies` has its own suite for its own states.
  */
 function stubFetch(outcome: () => Promise<Response>) {
   const signals: AbortSignal[] = [];
-  const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+  const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
     const signal = init?.signal;
-    if (signal) {
+    if (url === "/healthz" && signal) {
       signals.push(signal);
     }
     return new Promise<Response>((resolve, reject) => {
@@ -28,11 +34,25 @@ function stubFetch(outcome: () => Promise<Response>) {
         return;
       }
       signal?.addEventListener("abort", () => reject(abortError()));
-      outcome().then(resolve, reject);
+      const settle =
+        url === "/healthz"
+          ? outcome()
+          : Promise.resolve(
+              new Response(JSON.stringify({ graphs: [] }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+      settle.then(resolve, reject);
     });
   });
   vi.stubGlobal("fetch", fetch);
   return { fetch, signals };
+}
+
+/** Every URL `fetch` was asked for, in call order. */
+function requested(fetch: ReturnType<typeof vi.fn>): string[] {
+  return fetch.mock.calls.map((call) => String(call[0]));
 }
 
 /** A `fetch` that never answers, leaving the component in its loading state. */
@@ -80,8 +100,7 @@ describe("App", () => {
     const { fetch } = neverSettles();
     render(<App />);
 
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe("/healthz");
+    expect(requested(fetch).filter((url) => url === "/healthz")).toEqual(["/healthz"]);
     expect(screen.getByText("Checking server…")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -169,7 +188,7 @@ describe("App", () => {
     );
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(requested(fetch).filter((url) => url === "/healthz")).toHaveLength(2);
     });
     await flush();
 

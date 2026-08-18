@@ -5,21 +5,24 @@ The backlog and the burn-down. One `- [ ]` per item; check it off only when it m
 
 **Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
 memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is three items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
-the binary, and it now has a **named-graph model with a real enforcement point**: one graph per
+Phase 1 is four items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
+the binary; it has a **named-graph model with a real enforcement point** — one graph per
 vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
-authoring, and a single write choke point that every write — including the store's own format
-stamp — passes through. 84 Rust tests and 10 UI tests passing; `cargo fmt`, `cargo clippy -D
-warnings`, `cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
+authoring, and a single write choke point that every write passes through — and **that model is now
+visible to a user**: `GET /api/graphs` serves the registry, and the interface lists the
+vocabularies in it while keeping OpenBiz's own graphs out of the user's list and counted rather
+than hidden. 97 Rust tests and 22 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+`cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 3 of 11 items done. `GraphId::is_directly_writable()`
-is no longer a rule with no caller — `insert_into` enforces it and `StoreError::NotWritable` is
-returned by a public method. **Next: exposing the graph registry over HTTP and in the UI**, the read
-half only; vocabulary *creation* over HTTP is deliberately not next, because §1.7 requires discovery
-to run before creation and `DiscoveryProvider` does not exist until Phase 2.
+**Current position:** Phase 1 (RDF core & store), 4 of 11 items done. The store is now reachable
+from a browser: `main` shares the open store with the router, `GET /api/graphs` serves the registry
+as JSON, and the interface renders it. **Next: the transactional write API with rollback, and
+concurrent-reader safety under test.** Vocabulary *creation* over HTTP remains deliberately absent —
+§1.7 requires discovery to run before creation and `DiscoveryProvider` does not exist until
+Phase 2 — so `POST /api/graphs` answers 405 rather than being quietly added.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -142,13 +145,23 @@ the interface is a core differentiator, and building it late means retrofitting 
       > refuses a graph the rules say is not directly writable. The registry lives in the system
       > graph and is re-validated on read, so a doctored backup is refused rather than trusted.
       > See `adr/0007`.
-- [ ] Expose the graph registry over HTTP (`GET /api/graphs`) and in the UI — the **read** half.
+- [x] Expose the graph registry over HTTP (`GET /api/graphs`) and in the UI — the **read** half.
       The create half waits on §1.7's discovery-first path, because a "create new" that skips
       `DiscoveryProvider` or records no justification is a charter violation rather than a shortcut
       > Split out of the item above, which was two items wearing one hat: the store model, and
-      > exposing it. `Store::graphs()` today has a production caller (`main.rs` reads the registry
-      > before binding and refuses to start if it cannot describe it), but that is a log line, not a
-      > user-facing surface — see `UNTESTED.md`.
+      > exposing it.
+      > **Better, not parity:** the endpoint returns the *whole* registry, including OpenBiz's own
+      > graphs, and the **UI** is what keeps our bookkeeping out of the user's vocabulary list.
+      > Both halves matter and the incumbents get one or the other wrong. VocBench puts the
+      > triplestore's support graphs in the same list as the user's content, so a subject-matter
+      > expert is asked "which graph does this go in?" and cannot answer. Hiding them in the API
+      > instead would make "what is actually in my store?" unanswerable to an operator — the
+      > opacity §1 exists to attack. So: `kind` is on the wire, the API never omits a row, the
+      > interface shows vocabularies only, and the graphs it holds back are **counted** rather than
+      > silently dropped. The empty state — what every new deployment sees — says that reuse
+      > outranks creation (§1.7) instead of offering a "New vocabulary" button.
+      > `POST /api/graphs` is a 405, not a 404: the registry is deliberately read-only until
+      > `DiscoveryProvider` exists. See `adr/0008`.
 - [ ] Transactional write API with rollback; concurrent-reader safety under test
 - [ ] Parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, JSON-LD — round-trip tested
 - [ ] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)

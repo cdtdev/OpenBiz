@@ -25,9 +25,139 @@ impl Health {
     }
 }
 
+/// How a named graph is used, as it appears on the wire.
+///
+/// Deliberately a *separate* type from `openbiz_store::GraphKind` rather than a re-export. The
+/// wire format is a published contract that a customer's script and our own TypeScript both parse;
+/// the store's enum is an internal model that may gain a variant or rename a token for reasons
+/// that have nothing to do with HTTP. Keeping them apart means the conversion in the server is an
+/// exhaustive `match` — so adding a kind to the store fails the build here until someone decides
+/// what it is called on the wire, instead of silently changing the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GraphKind {
+    /// A user-authored vocabulary.
+    Vocabulary,
+    /// OpenBiz's own metadata. Not a vocabulary, and never presented as one.
+    System,
+    /// Materialised inferences, derived rather than asserted.
+    Inferred,
+}
+
+/// One entry in the graph registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphSummary {
+    /// The graph's IRI.
+    pub iri: String,
+    /// What the graph holds.
+    pub kind: GraphKind,
+}
+
+/// The graph registry, as returned by `GET /api/graphs`.
+///
+/// Every registered graph is listed, including OpenBiz's own. Filtering the store's bookkeeping
+/// out of the *registry* would make this endpoint lie about what the store contains, and an
+/// operator asking "what is in my store" is entitled to the whole answer. Keeping our graphs out
+/// of the places a subject-matter expert works is the **UI's** job, and it can only do it because
+/// `kind` is on the wire.
+///
+/// An object rather than a bare array so the response can gain fields — paging, a total, a
+/// registry revision — without becoming a breaking change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphList {
+    /// Every registered graph, ordered by IRI.
+    pub graphs: Vec<GraphSummary>,
+}
+
+/// The body of any failed API response.
+///
+/// One shape for every error so a client has exactly one thing to parse. `message` is written for
+/// the person reading it, not for a machine to branch on — the status code is the machine-readable
+/// part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiError {
+    /// What went wrong, in words a human can act on.
+    pub message: String,
+}
+
+impl ApiError {
+    /// An error carrying `message`.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tokens are the contract. A rename here is a breaking API change, not a refactor, so
+    /// they are asserted against literal strings rather than against `serde`'s behaviour.
+    #[test]
+    fn graph_kinds_serialise_to_their_documented_tokens() {
+        for (kind, token) in [
+            (GraphKind::Vocabulary, "\"vocabulary\""),
+            (GraphKind::System, "\"system\""),
+            (GraphKind::Inferred, "\"inferred\""),
+        ] {
+            assert_eq!(serde_json::to_string(&kind).expect("serialisable"), token);
+            assert_eq!(
+                serde_json::from_str::<GraphKind>(token).expect("deserialisable"),
+                kind
+            );
+        }
+    }
+
+    /// A token this build does not know must fail loudly. A client — or a future OpenBiz — reading
+    /// a fourth kind as one of these three would misreport a graph's nature, and "is this asserted
+    /// or inferred?" is the question the whole named-graph model exists to answer.
+    #[test]
+    fn an_unknown_graph_kind_is_refused_rather_than_guessed_at() {
+        assert!(serde_json::from_str::<GraphKind>("\"ontology\"").is_err());
+        assert!(serde_json::from_str::<GraphKind>("\"Vocabulary\"").is_err());
+    }
+
+    #[test]
+    fn a_graph_list_round_trips_through_json() {
+        let list = GraphList {
+            graphs: vec![
+                GraphSummary {
+                    iri: "http://example.org/v/1".to_owned(),
+                    kind: GraphKind::Vocabulary,
+                },
+                GraphSummary {
+                    iri: "urn:openbiz:graph:system".to_owned(),
+                    kind: GraphKind::System,
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&list).expect("serialisable");
+        assert_eq!(
+            json,
+            r#"{"graphs":[{"iri":"http://example.org/v/1","kind":"vocabulary"},{"iri":"urn:openbiz:graph:system","kind":"system"}]}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<GraphList>(&json).expect("deserialisable"),
+            list
+        );
+    }
+
+    /// An empty registry is `[]`, never `null` and never an absent key — a client that has to
+    /// handle three encodings of "nothing" will eventually handle one of them wrong.
+    #[test]
+    fn an_empty_graph_list_is_an_empty_array() {
+        let json = serde_json::to_string(&GraphList { graphs: Vec::new() }).expect("serialisable");
+        assert_eq!(json, r#"{"graphs":[]}"#);
+    }
+
+    #[test]
+    fn an_api_error_carries_its_message_under_a_stable_key() {
+        let json = serde_json::to_string(&ApiError::new("the roof is on fire")).expect("ok");
+        assert_eq!(json, r#"{"message":"the roof is on fire"}"#);
+    }
 
     #[test]
     fn ok_health_reports_status_and_version() {

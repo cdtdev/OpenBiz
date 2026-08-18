@@ -71,10 +71,15 @@ Do not delete it — the record of what took how long to close is the signal.
   in `App` is interactive yet, so there is nothing to tab to and no test would be meaningful — but
   the moment Phase 3 adds a control, a keyboard test has to arrive with it, and no mechanism
   currently forces that.
+- **Amended, iteration 6:** it now covers *two* components — `App` and `Vocabularies` — plus the
+  `useProbe` hook they share, at 22 assertions. Every point above still stands unchanged, and (3)
+  has now survived a second component without being tested: `Vocabularies` renders a heading, a
+  list, and paragraphs, so there is still nothing to tab to and `CLAUDE.md` §4.4 is still satisfied
+  **vacuously**. Two iterations of UI have now been added without the clause ever being exercised.
 - **What would close it:** for (1) the Playwright item; for (2) a test that mounts `main.tsx`
   against a document with and without `#root`; for (3) a Phase 3 convention, ideally a lint or a
   shared test helper, that makes an interactive component without a keyboard test fail.
-- **Opened:** iteration 4
+- **Opened:** iteration 4 · **Amended:** iteration 6
 
 ### Nothing renders the UI in a browser
 - **Kind:** environment-limited
@@ -211,10 +216,17 @@ Do not delete it — the record of what took how long to close is the signal.
   means either making the backend reachable or adding `oxigraph` as a dev-dependency of
   `openbiz-server` — and a test-only direct dependency on the engine cuts against `CLAUDE.md` §3,
   so it is not a cost worth paying for one assertion.
+- **Also, since iteration 6:** `GET /api/graphs` has the same shape of gap. `From<StoreError> for
+  Failure` is asserted directly — a constructed `StoreError::Corrupt` becomes a 500 whose body
+  contains neither the customer's IRIs nor their store path, and both mutants (200 instead of 500,
+  and echoing the store's own words) are killed. What is *not* proven is that a real store can
+  actually drive the handler down that branch, for the same fixture reason. In practice it is close
+  to unreachable: `main` refuses to start against a registry it cannot read, so the endpoint only
+  sees one that went bad while the process was running.
 - **What would close it:** a store-layer test helper that writes an arbitrary quad, gated behind a
-  cargo feature the server's tests can enable. Worth doing when a second caller needs it; one
-  assertion does not justify a new public seam.
-- **Opened:** iteration 5
+  cargo feature the server's tests can enable. Now wanted by two callers rather than one, which
+  changes the cost/benefit recorded above — it is worth doing the next time either gap is touched.
+- **Opened:** iteration 5 · **Amended:** iteration 6
 
 ### Registry reads are unmeasured above a handful of graphs
 - **Kind:** partial-coverage
@@ -226,9 +238,17 @@ Do not delete it — the record of what took how long to close is the signal.
   domain per jurisdiction gets there. It also runs on the startup path, so if it is slow it is slow
   in the cold-start budget `CLAUDE.md` §1.5 sets. Nothing has measured it, and `graphs.sort()` is an
   additional O(n log n) on top.
-- **What would close it:** the Phase 1 benchmark spike should register 10k graphs and time both
-  `graphs()` and startup, alongside the query evaluation and `close()` numbers it already owes.
-- **Opened:** iteration 5
+- **Widened, iteration 6:** `GET /api/graphs` reads the registry **on every request**, deliberately
+  and with the reasoning recorded in `adr/0008` §6 — a cache would need invalidating by every future
+  creation, import, and restore path, and a stale "your vocabulary does not exist" is worse than an
+  unmeasured scan. But the consequence is that an unmeasured scan is now on a *hot* path rather than
+  a once-per-process one, and it also serialises the whole registry into a JSON body with no paging.
+  The 4 000-graph deployment gets a 4 000-element response on every page load.
+- **What would close it:** the Phase 1 benchmark spike should register 10k graphs and time
+  `graphs()`, startup, **and the endpoint**, alongside the query evaluation and `close()` numbers it
+  already owes. If the number is bad, the answer is paging or a `?kind=` filter — both API changes,
+  which is why the spike should land before Phase 3 builds an interface on top of this shape.
+- **Opened:** iteration 5 · **Widened:** iteration 6
 
 ### Durability is proven for one quad, not for a vocabulary
 - **Kind:** partial-coverage
@@ -331,3 +351,51 @@ Do not delete it — the record of what took how long to close is the signal.
   `PROPOSED.md`. Deliberately not done here: adding an unrequested CI gate is scope creep, and the
   CC-BY-4.0 call deserves its own ADR rather than a footnote in a test-runner commit.
 - **Opened:** iteration 4
+
+### The JSON API has no authentication, and the error path is shaped around that
+- **Kind:** partial-coverage
+- **What is proven:** `GET /api/graphs` returns 200 with the registry, `POST` returns 405, an
+  unmatched `/api/…` returns 404, and a store failure returns a 500 whose body carries neither the
+  customer's graph IRIs nor their store path — asserted directly, and both mutants killed.
+- **What is not:** **nothing authenticates or authorises this endpoint.** Anyone who can reach the
+  port can enumerate every vocabulary IRI in the deployment. That is the expected state for Phase 1
+  (auth is Phase 7) and it is not a bug, but it is a fact the loop should not lose track of, because
+  a second decision has already been taken *because* of it: `adr/0008` §3 deliberately withholds the
+  store's own error text from the response, which costs real diagnostic value and cuts against
+  `CLAUDE.md` §3's explainability commitment. When Phase 7 lands, that trade should be revisited
+  rather than inherited — an authenticated administrator should get the detail.
+- **What would close it:** Phase 7's authorisation, plus a test that an authenticated administrative
+  caller receives the full store error and an unauthenticated one does not.
+- **Opened:** iteration 6
+
+### `main`'s refusal to close a still-shared store is inspected-only
+- **Kind:** inspected-only
+- **What is proven:** the happy path, and it is proven where it can actually fail.
+  `the_graph_registry_is_served_over_http_and_the_store_still_closes_cleanly` serves a real HTTP
+  request from the real binary — which is what makes a connection clone the shared state — and then
+  signals it, asserting exit zero and `store closed cleanly`. Before this iteration every shutdown
+  test signalled a process that had never served a request, so the reclaim was trivially safe.
+- **What is not:** the *failure* branch. If `Arc::into_inner` returns `None`, `main` bails with an
+  error saying the store could not be closed cleanly, and nothing exercises that: producing it needs
+  a deliberately leaked handle, which we have no way to inject without adding a seam whose only user
+  is the test. So the message an operator would see in the one situation where their writes might
+  not have reached disk has never been printed by a running process.
+- **What would close it:** honestly, little worth its cost today. Revisit if a future feature holds
+  a store handle outside the router — a background materialisation pass, a scheduled backup — since
+  that is when the branch stops being theoretical.
+- **Opened:** iteration 6
+
+### `useProbe` re-fetches on a URL change that no caller makes
+- **Kind:** no-production-caller
+- **What is proven:** the hook fetches once on mount, checks the status before parsing the body,
+  aborts on unmount, and stays silent on an abort — 22 assertions across two components, and the
+  four mutants against those behaviours are killed.
+- **What is not:** its effect depends on `[url]`, so changing the `url` prop would cancel the first
+  request and issue a second. **Nothing changes it** — both call sites pass a string literal — so
+  that branch has no production caller and no test. It is one line and removing it would be worse
+  (a stale response for the old URL is a nastier bug than an unused code path), but it should not be
+  counted as proven behaviour.
+- **What would close it:** the first component that reads a parameterised URL — Phase 2's
+  per-vocabulary views are the likely first — should arrive with a test that changing the URL
+  abandons the first response.
+- **Opened:** iteration 6
