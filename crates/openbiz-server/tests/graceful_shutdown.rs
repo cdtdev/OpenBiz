@@ -79,6 +79,21 @@ impl Server {
             .and_then(|value| value.parse().ok())
     }
 
+    /// Block until `needle` appears in the child's log, or panic.
+    ///
+    /// Waiting on a *log line* rather than on a socket is what makes the test below deterministic:
+    /// the line is written after the thing it announces, so seeing it is proof the thing happened.
+    fn wait_for_log(&self, needle: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while Instant::now() < deadline {
+            if self.log().contains(needle) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("{needle:?} never appeared in the log. Log:\n{}", self.log());
+    }
+
     fn wait_until_serving(&self) {
         let deadline = Instant::now() + PATIENCE;
         while Instant::now() < deadline {
@@ -319,4 +334,71 @@ fn the_graph_registry_is_served_over_http_and_the_store_still_closes_cleanly() {
         "the store must still be reclaimed and flushed after the router held a handle. \
          Log:\n{log_text}"
     );
+}
+
+/// A `SIGTERM` that arrives **before the server is accepting** must still be graceful.
+///
+/// This is a regression test for a real defect, found by CI rather than by reasoning: the stop
+/// signals used to be registered lazily, on the first poll of the future handed to
+/// `axum::serve(..).with_graceful_shutdown(..)`. That poll happens *after* the graph registry is
+/// read and after the listener binds — so the process could log the port it was listening on and
+/// still be killed outright by the kernel's default disposition, because no handler existed yet.
+/// `the_graph_registry_is_read_at_startup` hit exactly that window on a loaded CI runner and
+/// failed with a non-zero exit; the same race is a hard kill on any `docker stop` that lands early.
+///
+/// The test is deterministic rather than a tightened race, and that is the point. `install()` is
+/// synchronous and logs *after* both dispositions are registered, so once "stop signals
+/// registered" is in the log a signal is queued rather than fatal — by construction, for every
+/// caller, not just for this one. The store must still close cleanly, because a stop before the
+/// first request is still a stop.
+#[test]
+fn a_stop_signal_arriving_before_the_server_accepts_is_still_graceful() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let log = temp.path().join("early.log");
+    // Deliberately *not* waiting until it serves: the window under test is before that.
+    let mut server = Server::start(temp.path(), &log, false);
+
+    server.wait_for_log("stop signals registered");
+    server.signal("TERM");
+
+    let status = server.wait_for_exit();
+    assert!(
+        status.success(),
+        "a stop signal after registration must never be a hard kill, however early it lands. \
+         Status: {status}. Log:\n{}",
+        server.log()
+    );
+    assert!(
+        server.log().contains("store closed cleanly"),
+        "a stop before the first request is still a stop, and the store must still be flushed. \
+         Log:\n{}",
+        server.log()
+    );
+}
+
+/// The registration happens before the port is announced, not after.
+///
+/// The ordering is the whole fix, and asserting it on the log is cheap. Without it, an operator
+/// reading "listening=" and issuing `docker stop` is inside the window the test above closes.
+#[test]
+fn the_stop_signals_are_registered_before_the_server_announces_its_port() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let log = temp.path().join("order.log");
+    let mut server = Server::start(temp.path(), &log, true);
+
+    let log_text = server.log();
+    let registered = log_text
+        .find("stop signals registered")
+        .expect("the registration must be logged");
+    let listening = log_text
+        .find("listening=")
+        .expect("the bound port must be logged");
+    assert!(
+        registered < listening,
+        "stop signals must be registered before the port is announced, or a client that reads \
+         the port and stops the server is inside the window. Log:\n{log_text}"
+    );
+
+    server.signal("TERM");
+    assert!(server.wait_for_exit().success());
 }

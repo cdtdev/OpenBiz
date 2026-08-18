@@ -1312,3 +1312,23 @@ Do not delete it — the record of what took how long to close is the signal.
   Raised in `docs/PROPOSED.md` rather than taken here, because it changes what a customer's data
   *is* and that is not a decision to make inside an item about labels.
 - **Opened:** iteration 22
+
+### The window before the stop signals are registered is closed as far as a program can close it
+- **Kind:** partial-coverage
+- **What is proven:** `StopSignals::install()` registers `SIGINT` and `SIGTERM` synchronously, at
+  the top of `serve()`, before the graph registry is read and before the listener binds. Two tests
+  assert it: that the registration is logged before the port is, and that a `SIGTERM` sent as soon
+  as the registration line appears still exits zero and still closes the store. Both were shown to
+  discriminate — moving the registration after the bind fails one, never registering `SIGTERM`
+  fails five.
+- **What is not:** the window from `exec` to that call. Process start, argument parsing, config
+  load and **the store open** all happen first, and a `SIGTERM` during any of them is still a hard
+  kill under the default disposition. No program can register a handler before it runs, so this
+  cannot be closed entirely — but the store open is the slow part and it is on the wrong side of
+  the line. Moving the registration into `main` before the store opens would shrink it further and
+  has not been done, because `install()` would then also run for `openbiz backup` and the other
+  one-shot commands, where a stop *should* be abrupt.
+- **What would close it:** decide whether the one-shot commands want graceful stops too. If they
+  do, `install()` moves to the top of `main` and this shrinks to argument parsing. If they do not,
+  this entry is the floor and should be marked environment-limited instead.
+- **Opened:** iteration 22

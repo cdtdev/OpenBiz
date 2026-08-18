@@ -24,7 +24,7 @@ pub use cli::{
 pub use config::{Config, ConfigError, Setting, Source};
 pub use graphs::AppState;
 pub use inspect::inspect;
-pub use shutdown::shutdown_signal;
+pub use shutdown::StopSignals;
 
 /// Build the application router.
 ///

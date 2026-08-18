@@ -1601,13 +1601,32 @@ look competent disables the one signal that catches a stuck loop.
   `BTreeMap::insert(..).is_none()`, which inserts *and then* tells you what it replaced, so the
   origin was being overwritten and a derivation recorded for a fact the graph had stated outright.
   That is the same rule `entail_class` has held since iteration 20 and I re-broke it one layer up.
-- **Tests: 429 Rust (from 402) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny`, and the
+- **Tests: 432 Rust (from 402) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny`, and the
   UI untouched. Thirteen of the new tests are Appendix B's own numbered examples — 75, 76–79, 80,
   81, 82 and 83, 84–87 — each asserted to be what the specification marks it. The suite was proven
   to **discriminate** before it was trusted: five mutations each turned it red — the dumbing-down
   disabled (6 unit and 2 end-to-end), S52's multiple-form check disabled (2), S48's disjointness
   rows broken (10), a non-plain literal form accepted (1), and a missing literal form reclassified
   as inconsistent (1).
+- **CI went red on something I did not write, and it was a real bug.** `Rust` failed on
+  `the_graph_registry_is_read_at_startup` — a `SIGTERM` test with nothing to do with SKOS-XL,
+  green on this machine and green on every run since iteration 1. It would have been easy and
+  wrong to call it a flake and push again. The stop signals were registered **lazily**, on the
+  first poll of the future handed to `axum::serve(..).with_graceful_shutdown(..)`, and that poll
+  happens *after* the graph registry is read and *after* the listener binds. So the process could
+  log the port it was listening on and still be killed outright, because no `SIGTERM` handler
+  existed yet and the kernel's default disposition is to terminate. A loaded CI runner widened
+  the window enough to hit it; a `docker stop` landing early in a real deployment hits the same
+  one, and hard-kills the store mid-open — the exact failure `shutdown.rs` was written to prevent,
+  in the seconds `shutdown.rs` was not covering.
+  The fix is a `StopSignals` type whose `install()` is **synchronous**: it registers both
+  dispositions and only then returns, called at the top of `serve()` before anything a hard kill
+  would interrupt. It logs after registering, which is what makes the regression test
+  deterministic rather than a tightened race — once "stop signals registered" is in the log, a
+  signal is queued rather than fatal, by construction. Two new tests, and both mutations turned
+  them red: registering after the port is announced (1 failure) and never registering `SIGTERM`
+  at all (5). Fixing it on the branch is what the driver requires and it is the one case where an
+  iteration should not stop at one item.
 - **Recorded:** `adr/0021`; two new `UNTESTED.md` entries and one amended for the second time; one
   `PROPOSED.md` entry amended and its urgency raised. None closed. The two new ones are B.4 being
   unread — so we must not claim SKOS-XL without qualification — and the export gap below.
