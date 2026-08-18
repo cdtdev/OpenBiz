@@ -429,6 +429,36 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   restore in `UNTESTED.md` first, so the decision is taken against a number.
 - **Suggested phase:** Phase 1.
 
+### Keep a store fixture from every released format version, from the first release on
+- **Status:** proposed.
+- **Gap:** the migration tests build their "version 1" store by degrading a version-2 one — clearing
+  the system graph and rewriting the stamp. That is our *belief* about what version 1 looked like,
+  written by the same build that reads it. Version 1 never shipped, so today the gap is theoretical.
+  From the first release it stops being theoretical: every later migration will be tested against a
+  fixture the current build invented rather than against a store a real build wrote.
+- **Why load-bearing:** a migration is the one operation that runs on data we did not write, at the
+  moment an operator is least able to recover, and it is the operation most likely to be tested only
+  against its own assumptions. A corpus of real per-version fixtures is the only thing that makes
+  "we migrate from 1.2" a claim rather than a hope. It is cheap to start and impossible to backfill —
+  once a release is gone, so is the store it wrote.
+- **Cost & impact:** near zero per release (one `openbiz backup` of a small seeded store, committed
+  as a fixture), and it wants a decision now because the cost of starting late is total. Needs a
+  release process, which does not exist yet — hence a proposal, not an item.
+- **Suggested phase:** Phase 1.
+
+### Decide and document how many store-format versions back a build migrates from
+- **Status:** proposed.
+- **Gap:** the migration chain refuses a store it has no path for and tells the operator to "upgrade
+  one release at a time". Nothing says how far back the chain will ever reach, and nothing guarantees
+  the intermediate builds are obtainable — which is what makes that instruction actionable or empty.
+- **Why load-bearing:** an enterprise buyer running an air-gapped, self-hosted deployment upgrades
+  in jumps, sometimes years apart. "Which versions can I upgrade from?" is a question they ask
+  before signing, not after. It is also the constraint that decides whether an old migration may
+  ever be deleted, which is a code-lifetime question the loop will otherwise answer by accident.
+- **Cost & impact:** a paragraph of policy plus, possibly, a `docs/` page. The policy is a
+  commercial and support commitment, so it is a human's call (`CLAUDE.md` §8), not the loop's.
+- **Suggested phase:** Phase 1.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here

@@ -31,10 +31,29 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// graph's registration; the vocabulary's registration; and two statements of actual content.
 const BACKUP: &str = concat!(
     "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
-    "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
+    "<urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions/emea> ",
+    "<http://www.w3.org/2004/02/skos/core#prefLabel> \"Europe, Middle East and Africa\"@en ",
+    "<https://example.org/regions> .\n",
+    "<https://example.org/regions/emea> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://www.w3.org/2004/02/skos/core#Concept> <https://example.org/regions> .\n",
+);
+
+/// The same store as [`BACKUP`], as a **format version 1** build would have written it: stamped 1,
+/// and with no registry entry for the system graph — the invariant version 2 exists to guarantee.
+///
+/// Restoring this is the end-to-end proof that an older backup is migrated as it is read, through
+/// the real binary rather than through the store's own tests.
+const BACKUP_VERSION_1: &str = concat!(
+    "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
+    "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
     "<https://example.org/regions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
@@ -171,6 +190,12 @@ fn a_restored_backup_is_a_vocabulary_the_running_server_serves() {
     let data_dir = temp.path().join("data");
     std::fs::create_dir(&data_dir).expect("create the data directory");
     let file = temp.path().join("yesterday.nq");
+    assert_eq!(
+        openbiz_store::FORMAT_VERSION,
+        2,
+        "the fixture is a version-2 backup; bumping the format means writing the fixture for the \
+         new one and adding an older-format test beside it, not editing this number"
+    );
     std::fs::write(&file, BACKUP).expect("write the backup fixture");
 
     let restore = run(
@@ -257,6 +282,111 @@ fn a_restored_backup_is_a_vocabulary_the_running_server_serves() {
     assert_eq!(
         lines, expected,
         "the backup of a restored store is not the file it was restored from"
+    );
+}
+
+/// An operator restoring last year's backup onto this year's build: the file is brought forward
+/// as it is read, the command says so, and the store that results is one the server serves.
+#[test]
+fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let data_dir = temp.path().join("data");
+    std::fs::create_dir(&data_dir).expect("create the data directory");
+    let file = temp.path().join("last-year.nq");
+    std::fs::write(&file, BACKUP_VERSION_1).expect("write the backup fixture");
+
+    let restore = run(
+        &data_dir,
+        &["restore", file.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        restore.status.success(),
+        "restore failed: {}{}",
+        stdout(&restore),
+        stderr(&restore)
+    );
+
+    // The operator is told their data was changed, and by what. A count alone would look
+    // identical whether or not the file had been migrated.
+    let said = stdout(&restore);
+    assert!(
+        said.contains("restored 4 statements into 2 graphs"),
+        "restore must report what it did, got {said:?}"
+    );
+    assert!(
+        said.contains("migrated the store format from version 1 to 2"),
+        "a migration must be reported, not silently performed: {said:?}"
+    );
+    assert!(
+        said.contains("registered the system graph"),
+        "the report must say *why* the migration ran: {said:?}"
+    );
+    assert_eq!(
+        said.lines().count(),
+        1,
+        "stdout is the result, and the logs belong on stderr: {said:?}"
+    );
+
+    // The migrated store is one the server opens without further work, and the vocabulary is
+    // there — including the system-graph registration the file did not carry.
+    let server = Server::start(&data_dir);
+    let graphs = server.get("/api/graphs");
+    assert!(
+        graphs.contains(r#"{"iri":"https://example.org/regions","kind":"vocabulary"}"#),
+        "the restored vocabulary must be in the registry the server serves: {graphs}"
+    );
+    assert!(
+        graphs.contains(r#"{"iri":"urn:openbiz:graph:system","kind":"system"}"#),
+        "the migration must have registered the system graph the file did not list: {graphs}"
+    );
+    server.stop();
+
+    // And the migration is *in the store*, not only in a log line that has scrolled away: a
+    // backup of the migrated store carries the record and the new stamp.
+    let second = temp.path().join("today.nq");
+    let backup = run(
+        &data_dir,
+        &["backup", second.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        backup.status.success(),
+        "backup failed: {}{}",
+        stdout(&backup),
+        stderr(&backup)
+    );
+    let written = std::fs::read_to_string(&second).expect("read the backup back");
+    assert!(
+        written.contains(
+            "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
+             \"2\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+        ),
+        "the migrated store must be stamped at the current version: {written}"
+    );
+    assert!(
+        written.contains("urn:openbiz:migration:0002-register-system-graph"),
+        "the migration must have left a record in the store: {written}"
+    );
+    assert!(
+        written.contains("XMLSchema#dateTime"),
+        "the record must say when the migration ran: {written}"
+    );
+    assert!(
+        written.contains("Europe, Middle East and Africa"),
+        "the content must have survived the migration: {written}"
+    );
+
+    // Opening it again is a no-op: a migration is a one-off, not something every start repeats.
+    let again = run(
+        &data_dir,
+        &[
+            "backup",
+            temp.path().join("t.nq").to_str().expect("a UTF-8 path"),
+        ],
+    );
+    assert!(
+        !stderr(&again).contains("migrated the store format"),
+        "the migration ran a second time: {}",
+        stderr(&again)
     );
 }
 

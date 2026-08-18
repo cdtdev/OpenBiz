@@ -104,6 +104,23 @@ What they refuse, and why:
   build, statements in a graph the file's own registry does not list. All of it is checked inside
   one transaction, so a refused restore leaves the target store exactly as it was.
 
+**A backup from an older build is migrated as it is restored**, in the same transaction that reads
+it — so a file this build cannot bring forward restores *nothing* rather than something it would
+misread. When that happens the command says so and says why, because "restored 12 000 statements"
+looks identical whether or not your data was changed on the way in:
+
+```
+restored 4 statements into 2 graphs, from last-year.nq; migrated the store format from version 1
+to 2: 0002-register-system-graph (1 → 2): registered the system graph in the graph registry…
+```
+
+The same facts are written into the store itself, so a SPARQL query over
+`<urn:openbiz:graph:system>` still answers *"what has been done to this store, and when?"* long
+after the log line has gone. Upgrades are **forward-only**: there is no downgrade, and the honest
+way back is the backup you took before upgrading. A store the server opens is always at the
+current format version — anything else is an error rather than something you have to remember to
+check. See [`docs/adr/0016`](docs/adr/0016-store-format-migrations.md).
+
 Exit status is `0` on success, `1` if the operation failed, and `2` if the arguments were not
 understood — so a wrapper script can tell "retry this" from "you typed it wrong". `openbiz help`
 prints the full usage.

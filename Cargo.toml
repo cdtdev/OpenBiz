@@ -31,6 +31,12 @@ mime_guess = "2"
 # must not carry a code path that can open an outbound connection. Building it requires a C++20
 # compiler and libclang — see docs/adr/0006 and README.md.
 oxigraph = { version = "0.5", default-features = false, features = ["rocksdb"] }
+# XSD datatypes, for the `xsd:dateTime` a migration record is stamped with. Already in the tree —
+# Oxigraph's own term model is built on it — so depending on it directly adds a manifest line and
+# no supply-chain surface. Formatting a timestamp by hand would mean hand-rolling civil-date
+# arithmetic to produce a lexical form the store must then agree with; using the same library the
+# store's literals go through means it agrees by construction. MIT OR Apache-2.0.
+oxsdatatypes = "0.2"
 # `debug-embed` makes debug builds embed rather than read `ui/dist` from disk, so the tests prove
 # the binary is self-contained instead of proving the filesystem works (CLAUDE.md §1). See ADR 0004.
 rust-embed = { version = "8", features = ["debug-embed", "include-exclude"] }

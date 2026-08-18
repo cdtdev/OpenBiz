@@ -5,7 +5,7 @@ The backlog and the burn-down. One `- [ ]` per item; check it off only when it m
 
 **Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
 memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is eight items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
+Phase 1 is **11 of 14**, and the three that remain are all deliberately deferred to Phase 2 — see below. The embedded store opens, stamps, and closes an Oxigraph instance inside
 the binary; it has a **named-graph model with a real enforcement point** — one graph per
 vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
 authoring, and a single write choke point that every write passes through — and **that model is now
@@ -41,8 +41,14 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 10 of 14 items done (the serialisation item was
-split in two — see the split note below). **Iteration 14 took backup and restore**, which is the
+**Current position:** Phase 1 (RDF core & store), 11 of 14 items done (the serialisation item was
+split in two — see the split note below), and **the remaining three are all blocked on Phase 2's
+candidate seam by design**, each with its reason written against it. **Iteration 16 took the
+store-format migration framework**, whose first migration turned out to be code that already
+existed: an unconditional per-open self-heal that re-registered the system graph forever, for the
+benefit of stores that needed it once and with no record that it had ever happened. It is now a
+versioned, one-off, self-explaining step, and `openbiz restore` migrates an older backup instead of
+refusing it. See `adr/0016`. **Iteration 14 took backup and restore**, which is the
 first item since the two spikes that ships a capability rather than a measurement. A backup is a
 single N-Quads file carrying the whole store including the registry, so it is readable by any
 conforming tool and hand-authorable — the end-to-end test's fixture was written from the
@@ -60,14 +66,16 @@ without merging it, so PR #17 sat open with a required check wedged in an unboun
 `main` did not contain the capability this plan already described as done. Iteration 15 bounded
 CI's toolchain install and every job with `timeout-minutes` — so a stalled network call now fails
 the check instead of leaving it pending forever, which branch protection cannot distinguish from
-still-running — and then landed PR #17. The item count above is unchanged; what changed is that it
-is now true of `main`. **Next up is the parsing item.**
+still-running — and then landed PR #17. Iteration 16 landed the store-format migration framework,
+which closed that gap: `openbiz restore` no longer refuses a backup written by an older build, it
+migrates it as it reads it (see `adr/0016`).
 
-**Next: the store-format migration framework**, which is the last unchecked item of Phase 1 and
-now has a concrete first customer: a restore reads a format stamp out of a file on a customer's
-disk and currently *refuses* an older one, because migrating it is not implemented. That refusal is
-honest and it is also a capability gap with a name. **SPARQL Update and the Graph Store Protocol
-are deliberately not next** — see their deferral notes. Vocabulary *creation* over HTTP remains
+**Next is Phase 2's candidate seam**, and that is not a choice — it is the dependency. All three
+remaining Phase 1 items wait on it: the RDF parser needs an import, an import mutates a vocabulary,
+and `CLAUDE.md` §3 says a change to a vocabulary arrives as a reviewable candidate; SPARQL Update
+and the Graph Store Protocol are the same argument with a different verb. Each of the three has its
+deferral written against it below, and none should be started before the seam exists. **Phase 1 is
+therefore as complete as it can be without Phase 2.** Vocabulary *creation* over HTTP remains
 deliberately absent for the same §1.7 reason, so `POST /api/graphs` answers 405. **There is still
 no SPARQL console in the interface**; the endpoint's caller is HTTP, and the console is an open
 §4.4 gap in `UNTESTED.md` and a proposal. **And there is no online backup** — both new commands
@@ -413,7 +421,43 @@ the interface is a core differentiator, and building it late means retrofitting 
       > themselves, so taking one means stopping the server, and the authenticated endpoint that
       > would fix that is proposed rather than built. The round trip is proven on small stores; the
       > memory a large restore needs is unmeasured, and both are in `UNTESTED.md`.
-- [ ] Store-format migration framework — versioned, forward-only, tested on a populated store
+- [x] Store-format migration framework — versioned, forward-only, tested on a populated store
+      > **Better, not parity.** Every product in this market migrates its store; what they do
+      > badly is tell you about it. Four things this does differently. (1) **The first migration
+      > was already in the code, unnamed.** `Store::open` re-registered the system graph on every
+      > single open so that a store written before the registry existed would acquire one — an
+      > unconditional idempotent write on the startup path, running forever for stores that needed
+      > it once, leaving no record and knowing nothing about which stores had needed it. It is now
+      > migration 1 → 2, it runs once, and what replaced it on the open path is a **check that
+      > refuses**: a store claiming version 2 that violates version 2's invariant is reported, not
+      > silently mended. A version therefore records *which invariants hold*, which is what makes
+      > the refusal legitimate. (2) **It explains itself twice.** `CLAUDE.md` §3 requires an
+      > auto-applied change to answer "why?", and a store upgrade is the one change nobody asked
+      > for: it happens at startup, to a customer's data. So the caller gets a `MigrationReport`
+      > that the server logs and `openbiz restore` prints — "restored 12 000 statements" looks
+      > identical whether or not the file was migrated — **and the store gets a record**: what ran,
+      > from, to, why, and when, as ordinary RDF in the system graph. The log scrolls away; the
+      > record answers the auditor a year later, through a SPARQL query naming
+      > `FROM <urn:openbiz:graph:system>` rather than through a proprietary log. (3) **A gap
+      > refuses rather than skips**, naming the *missing* version, because that number identifies
+      > the release the operator needs; and the chain is checked unbroken from 1 to
+      > `FORMAT_VERSION` by a test, so bumping the constant without its migration fails the build
+      > instead of a customer's store. (4) **Restore migrates the file** — `openbiz restore` no
+      > longer refuses an older backup, it brings it forward inside the transaction that wrote it,
+      > so an unmigratable backup restores nothing rather than something misread. One transaction
+      > for the whole chain, for `adr/0015`'s reason: half-migrated is the state nobody can reason
+      > about.
+      > **Its production callers are `Store::open` and `Store::restore`**, both of which run the
+      > chain on every invocation and one of which actually migrates in the end-to-end test
+      > against the real binary. The engine takes its chain and target as parameters, so the
+      > roll-back of a *failing* step is proven on a synthetic chain rather than by adding a
+      > failing migration to the real one. See `adr/0016`.
+      > **Scope, honestly:** every version-1 store in these tests was made by **degrading a
+      > version-2 store**, because no version-1 build exists — that fixture is our belief about
+      > version 1, not version 1. No migration has ever rewritten content rather than metadata, so
+      > the memory ceiling `adr/0015` records is untested here too, and how far back a build should
+      > migrate from is a support policy nobody has written. All three are in `UNTESTED.md`, and
+      > the fixture corpus that would fix the first is in `PROPOSED.md`.
 
 ---
 

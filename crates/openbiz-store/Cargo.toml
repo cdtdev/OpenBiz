@@ -13,6 +13,7 @@ publish.workspace = true
 # `http-client` feature family: nothing in the product may open an outbound connection by default
 # (CLAUDE.md §1.1, air-gapped operation). See docs/adr/0006.
 oxigraph = { workspace = true }
+oxsdatatypes.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -722,6 +722,7 @@ name = "openbiz-store"
 version = "0.0.1"
 dependencies = [
  "oxigraph",
+ "oxsdatatypes",
  "tempfile",
  "thiserror",
 ]

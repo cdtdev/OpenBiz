@@ -29,6 +29,54 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### No migration has ever run against a store an older build actually wrote
+- **Kind:** partial-coverage
+- **What is proven:** the 1 → 2 migration runs on open and on restore, keeps a populated store's
+  content, records itself in the system graph, reports itself to the caller, and does not repeat on
+  the next open. A synthetic two-step chain proves the engine applies steps in chain order, stamps
+  once at the end, rolls back whole when a step fails, and refuses a chain with a gap. End to end,
+  the real binary restores a hand-written version-1 backup and serves the result.
+- **What is not:** **every version-1 store in these tests was made by degrading a version-2 store** —
+  `clear_graph` on the system graph, then a stamp of 1 — because the build that wrote real version-1
+  stores no longer exists and never shipped. That fixture is our belief about what version 1 looked
+  like, not a version-1 store. If a real one differs in any way we have forgotten, the migration
+  meets it for the first time on a customer's disk. The end-to-end backup fixture is hand-written
+  from the specification rather than degraded, which is a partial answer and the better one.
+- **What would close it:** keeping a byte-exact store directory (or backup file) from each released
+  version as a fixture, from the first release onwards. That is a release-process decision, so it is
+  in `PROPOSED.md` rather than done here.
+- **Opened:** iteration 16
+
+### A migration holds its whole rewrite in the backend's write batch, and no migration has rewritten content
+- **Kind:** partial-coverage
+- **What is proven:** the chain runs in one transaction, so a failed step leaves the store exactly
+  as it was. The only real migration writes five quads and touches no content.
+- **What is not:** the memory ceiling `adr/0015` records for restore applies here too and is
+  measured no better. A future migration that rewrites, say, every literal in a million-concept
+  store would hold that rewrite in memory, and there is no chunking, no progress reporting, and no
+  estimate a build could refuse on. A migration that OOMs part way is safe — nothing commits — but
+  the deployment is then unstartable with no way forward except restoring a backup into an older
+  build, which is exactly the situation the operator was upgrading to leave.
+- **What would close it:** the same measurement `adr/0015`'s entry asks for, plus a decision about
+  whether a content-rewriting migration must stream. Deferred until a migration actually needs to
+  rewrite content — deciding it now would be guessing at the shape of the problem.
+- **Opened:** iteration 16
+
+### A store whose format version has no migration is now refused, and nothing has ever hit that path in anger
+- **Kind:** partial-coverage
+- **What is proven:** version 0 — which never existed — is refused on open and on restore, with the
+  missing version named and an action stated. The chain-integrity test fails the build if
+  `FORMAT_VERSION` is bumped without its migration.
+- **What is not:** the refusal exists for a build that has *dropped* a migration it once had, which
+  is a thing no release has done because there has been one release lineage and no removals. The
+  message tells an operator to "upgrade one release at a time"; nobody has ever had to, so whether
+  that instruction is actionable — whether the intermediate build is obtainable — is a release-and-
+  distribution question the loop cannot answer (`CLAUDE.md` §8).
+- **What would close it:** a documented support policy stating how many format versions back a
+  build migrates from, and an archive of builds that makes stepping through possible. Commercial and
+  release-process decisions; see `PROPOSED.md`.
+- **Opened:** iteration 16
+
 ### CI's toolchain install is bounded now, but the retry and the timeout have never fired
 - **Kind:** partial-coverage
 - **What is proven:** the `have_toolchain` detection was tested locally in all three states that

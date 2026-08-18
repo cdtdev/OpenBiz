@@ -1146,3 +1146,83 @@ look competent disables the one signal that catches a stuck loop.
   would be a genuinely confusing thing to hand the next iteration. That is one deliberate
   `workflow_dispatch` away from being a fact and I did not run it — it needs a commit that
   intentionally times out, and I judged landing PR #17 the more urgent half of the iteration.
+
+## Iteration 16 — 2026-08-18
+- **Took the last unchecked, unblocked item of Phase 1:** the store-format migration framework.
+  `main` was green and clean, both human inboxes were empty, and the three items ahead of it in the
+  phase are all deferred with reasons I re-read rather than re-derived.
+- **The item as written could not be done honestly, and the way out was already in the code.**
+  A migration engine with an empty registry is code nothing invokes, which `CLAUDE.md` §4.1 says is
+  not done — and `FORMAT_VERSION` was 1, so no store existed that could be migrated. Inventing a
+  format change to give the engine work would have been worse: a version that records no real
+  difference teaches the next person that versions are decorative. So I went looking for whether a
+  genuine first migration already existed unnamed, and it did. `Store::open` re-registered the
+  system graph on **every open**, forever, so that a store written before the registry existed
+  would acquire one. That is a migration wearing a self-heal's clothes: it could not say which
+  stores had needed it, it left no record, and it was the precedent every future additive change
+  would have followed until the open path was a pile of idempotent fixups.
+- **So a version records which invariants hold, not which bytes are on disk.** Versions 1 and 2
+  serialise identically; the difference is that at 2 the system graph is guaranteed to be in the
+  registry. That is what let the unconditional write become a one-off, and what makes the check
+  that replaced it a **refusal** rather than a repair — a store claiming version 2 that violates
+  version 2's invariant is something outside our code has written to, and a governance product
+  should say so. The cost is stated rather than hidden: a case the old code papered over now stops
+  a deployment, and that is the intended direction.
+- **The other half is `openbiz restore`, which the plan had already named as the concrete first
+  customer.** It refused an older backup with "migrating an older backup is not implemented yet".
+  Now it migrates the *file's* version — not the target store's, which stamped itself current when
+  it opened — inside the transaction that wrote it, so an unmigratable backup restores nothing.
+  `adr/0015`'s registry read-back now runs after the migration, so the question it asks is about
+  the store that will actually exist.
+- **Explainability was the part I nearly under-built.** A `MigrationReport` logged at startup is
+  the obvious answer and it is not sufficient: the log scrolls away and the auditor arrives a year
+  later. So each migration also writes **five quads into the system graph** — what ran, from, to,
+  why, and when as `xsd:dateTime` — and the test that proves it runs a SPARQL query naming
+  `FROM <urn:openbiz:graph:system>` through the existing endpoint. That query is the record's
+  production reader; without it the record would have been data with no consumer, which is the same
+  failure as code with no caller. `openbiz restore` prints the report too, because "restored 12 000
+  statements" looks identical whether or not the file was migrated on the way in.
+- **One dependency:** `oxsdatatypes` (MIT OR Apache-2.0), already in the tree beneath Oxigraph, for
+  the timestamp. The alternative was hand-rolling civil-date arithmetic to produce a lexical form
+  the store then has to agree with; using the library the store's own literals go through means it
+  agrees by construction. `cargo deny` was already green on it.
+- **Tests: 273 Rust (up from 260) and 29 UI, with `fmt`, `clippy -D warnings`, and `cargo deny`
+  clean.** The one I would keep if I could keep only one is the **synthetic chain**: the engine
+  takes its migration list and target version as parameters, so a two-step chain whose second step
+  fails proves the first step's write is gone and the stamp has not moved — without adding a
+  failing migration to the real chain for a test's benefit. Also proven: chain order beats list
+  order, exactly one stamp is written and it is written last, a gap refuses naming the *missing*
+  version, a populated version-1 store keeps its content, the migration does not repeat on the next
+  open, and end to end through the real binary a hand-written version-1 backup restores, the
+  command says it migrated and why, the server serves the system-graph registration the file did
+  not carry, and a backup of the result contains the record, its timestamp, and a stamp of 2.
+- **A drive-by worth naming so it is not mistaken for churn:** three operator-facing error messages
+  in `openbiz-store` had lost their line continuations at some point and rendered with runs of ten
+  spaces mid-sentence. I was replacing one of the three anyway. Fixed all three; there are now
+  none left in `crates/`.
+- **Recorded:** `adr/0016`; three `UNTESTED.md` entries; two proposals, neither self-promoted. The
+  plan's `Status` and `Current position` now say what I think is the more useful fact than the
+  count: **Phase 1 is 11 of 14 and as complete as it can be without Phase 2**, because all three
+  remaining items wait on the candidate seam and none should be started before it exists.
+- **The date thing, third time.** The environment's `currentDate` said 2026-08-19; `date -u` and
+  GitHub's `Date` header both said **2026-08-18T17:51Z**. Iteration 15 was burned by trusting the
+  former and wrote the rule down — *`currentDate` is not evidence; the clock is* — so I checked
+  before dating this entry rather than after. Iterations 14 and 15 both carry the wrong date in
+  their own headers as a result of not doing so. This is now a standing, cheap check: one `date -u`
+  before writing a dated line.
+- **Still uncertain:** whether the version-1 stores I migrated are version-1 stores. Every one of
+  them was made by taking a version-2 store and degrading it — `clear_graph` on the system graph,
+  then a stamp of 1 — which means the fixture is *this build's belief* about what version 1 looked
+  like, written by the same code that reads it. If a real version-1 store differed in any way I
+  have forgotten, the migration meets that difference for the first time on a customer's disk, and
+  the test suite would have been green throughout. Today this is theoretical, because no version-1
+  build ever shipped; the reason I am uneasy is that it stops being theoretical at the first
+  release and is **impossible to backfill** — once a build is gone, so is the store it wrote. The
+  partial answer already in place is that the end-to-end fixture is hand-written from the
+  specification rather than degraded, so at least one version-1 store in the suite was not authored
+  by the thing under test. The full answer is a per-release fixture corpus, which needs a release
+  process that does not exist, so it is a proposal rather than an item. The narrower thing I do not
+  know: whether "upgrade one release at a time" — which is what the refusal tells an operator when
+  the chain has a gap — is an instruction anyone can actually follow, because that depends on
+  whether old builds remain obtainable, and that is a distribution question `CLAUDE.md` §8 puts
+  outside the loop.
