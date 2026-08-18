@@ -3,23 +3,23 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **Phase 0 is complete, and this time the UI half of "green" means something.** Branch
-protection on `main` is active, the repository having been made public; the last open Phase 0 item
-was the missing UI test runner, and Vitest plus Testing Library now run 10 assertions over `App`'s
-three `Probe` states in CI. Phase 1 has begun: the embedded store is real — `openbiz-store` opens,
-stamps, and closes an Oxigraph instance inside the binary, and `main.rs` opens it before it binds
-and closes it after a drained shutdown. 59 Rust tests and 10 UI tests passing; `cargo fmt`,
-`cargo clippy -D warnings`, `cargo deny`, and the UI typecheck/test/build are green, and the
-Oxigraph tree needed **no** widening of the §5 licence allow list. **The single binary is real:** a
+**Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
+memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
+Phase 1 is three items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
+the binary, and it now has a **named-graph model with a real enforcement point**: one graph per
+vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
+authoring, and a single write choke point that every write — including the store's own format
+stamp — passes through. 84 Rust tests and 10 UI tests passing; `cargo fmt`, `cargo clippy -D
+warnings`, `cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store). Phase 0 is closed — every item checked, nothing
-deferred. The Oxigraph lifecycle and the promoted `Config::load` subprocess test are done.
-**Next: the named-graph model** — one graph per vocabulary plus the system graph — which must give
-`GraphId::is_directly_writable()` a real enforcement point, since today it is a rule with no caller
-(`UNTESTED.md`).
+**Current position:** Phase 1 (RDF core & store), 3 of 11 items done. `GraphId::is_directly_writable()`
+is no longer a rule with no caller — `insert_into` enforces it and `StoreError::NotWritable` is
+returned by a public method. **Next: exposing the graph registry over HTTP and in the UI**, the read
+half only; vocabulary *creation* over HTTP is deliberately not next, because §1.7 requires discovery
+to run before creation and `DiscoveryProvider` does not exist until Phase 2.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -127,7 +127,28 @@ the interface is a core differentiator, and building it late means retrofitting 
       > Promoted from `PROPOSED.md` by the product owner. `Config::resolve` is tested with an
       > injected environment because `std::env::set_var` is not thread-safe; that leaves the wiring
       > to the real environment provable only from outside the process.
-- [ ] Named-graph model: one graph per vocabulary, plus a system graph for OpenBiz's own metadata
+- [x] Named-graph model: `GraphId` and `GraphKind`, the reserved `urn:openbiz:` namespace, the
+      system graph, and the graph registry — with every write routed through one guarded choke point
+      > **Better, not parity:** every RDF tool has named graphs; what the incumbents do with them is
+      > the problem. PoolParty and TopBraid EDG keep project metadata in the same store as the
+      > content, so exports carry tool-specific bookkeeping a standards-compliant consumer has to be
+      > told to ignore — which is what breaks the round-trip §1.3 requires. VocBench exposes the
+      > triplestore's own support graphs to the user, so "which graph does this go in" becomes a
+      > question a subject-matter expert is asked and cannot answer. And across all of them inferred
+      > triples are commonly materialised where a human can also write, after which "did a person
+      > state this or did a reasoner derive it" is unanswerable. Here: one graph per vocabulary,
+      > `urn:openbiz:` reserved so a user cannot author into our bookkeeping, an inferred graph's
+      > IRI *derived* from its vocabulary rather than chosen, and a single write choke point that
+      > refuses a graph the rules say is not directly writable. The registry lives in the system
+      > graph and is re-validated on read, so a doctored backup is refused rather than trusted.
+      > See `adr/0007`.
+- [ ] Expose the graph registry over HTTP (`GET /api/graphs`) and in the UI — the **read** half.
+      The create half waits on §1.7's discovery-first path, because a "create new" that skips
+      `DiscoveryProvider` or records no justification is a charter violation rather than a shortcut
+      > Split out of the item above, which was two items wearing one hat: the store model, and
+      > exposing it. `Store::graphs()` today has a production caller (`main.rs` reads the registry
+      > before binding and refuses to start if it cannot describe it), but that is a log line, not a
+      > user-facing surface — see `UNTESTED.md`.
 - [ ] Transactional write API with rollback; concurrent-reader safety under test
 - [ ] Parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, JSON-LD — round-trip tested
 - [ ] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)

@@ -148,3 +148,25 @@ Verbatim:
 >    private window to catch it in. And `README.md` is now a public shop front, so the rule in
 >    `CLAUDE.md` §4 against claiming unearned support is no longer an internal discipline but a public
 >    one. Check it still matches the plan before any iteration that touches it.
+
+## Drained 2026-08-18 (iteration 5)
+
+
+## 2026-08-18 — correction from the product owner
+
+`docs/BUILD-PLAN.md` currently states **"Phase 0 is complete — no open items"** while Phase 0 still
+contains an unchecked item: *"UI test runner (Vitest + Testing Library) with a test per `Probe`
+state, wired into CI"* — promoted from `PROPOSED.md` in the same iteration that closed branch
+protection. Fix the `**Status:**` and `**Current position:**` lines to match reality.
+
+The mechanism to fix, not just the line: you closed the last *original* Phase 0 item and concluded
+the phase was done, without re-reading the phase after the promotion you had applied minutes
+earlier. **Derive that claim by counting `- [ ]` in the phase, never from memory of what was left.**
+
+Why this is worth an explicit correction over a one-line typo: `CLAUDE.md` §4 says misreporting
+support is worse than lacking it, and the repository is now public — a plan that declares a phase
+complete while an item sits open is precisely the "roadmap you cannot trust" failure we are
+attacking the incumbents for. It also feeds the degradation watch's charter-drift signal. This is
+small now and corrosive if it becomes habit.
+
+Note this in `LOOP-LOG.md` as a process error caught externally, not just a doc fix.

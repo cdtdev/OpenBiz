@@ -169,18 +169,66 @@ Do not delete it — the record of what took how long to close is the signal.
   `tests/serves_embedded_ui.rs`. Cheap; deferred only to keep this iteration to one item.
 - **Opened:** iteration 2
 
-### The named-graph model has no production caller
+### ~~The named-graph model has no production caller~~ — CLOSED, iteration 5
+- **Closed by:** `insert_into` in `crates/openbiz-store/src/lib.rs` — the single function through
+  which every write to the store passes, including the format stamp. It requires a `&GraphId` and
+  refuses a target that is not directly writable, so `is_directly_writable()` is a rule the store
+  enforces rather than a comment a caller may forget, and `StoreError::NotWritable` is now returned
+  by a public method (`create_vocabulary_graph`). `Store::open` registers the system graph in the
+  graph registry on every open, and `main.rs` reads that registry **before it binds**, failing
+  startup if it cannot be described. `GraphId`'s fields are private, so the pairing of IRI and kind
+  is an invariant the type enforces: the mutation that assembled one by struct literal from a
+  registry row would not compile. 36 store tests (was 12); twelve mutants killed. See `adr/0007`.
 - **Kind:** no-production-caller
-- **What is proven:** `GraphId`, `GraphKind`, `SYSTEM_GRAPH_IRI`, and `is_directly_writable()`
-  compile and are unit-tested — a vocabulary graph is directly writable, an inferred one is not.
-- **What is not:** **nothing constructs a `GraphId` outside tests, and no code writes to a named
-  graph.** `is_directly_writable()` is a rule with no enforcement point: `StoreError::NotWritable`
-  exists as a variant that is never returned. The only quad the store has ever held is its own
-  format stamp, written by `stamp_or_check_format_version` against a hardcoded IRI. This is the
-  honest reading of `CLAUDE.md` §4.1 — the model is designed, not delivered.
-- **What would close it:** the next plan item, "Named-graph model: one graph per vocabulary, plus a
-  system graph", which must route writes through `is_directly_writable()` so the check has a caller.
-- **Opened:** iteration 3
+- **Opened:** iteration 3 · **Closed:** iteration 5
+
+### `create_vocabulary_graph` has no production caller
+- **Kind:** no-production-caller
+- **What is proven:** it registers a graph, refuses an IRI that is already registered with a message
+  pointing at the reuse ladder, refuses a graph that is not directly writable, leaves the registry
+  unchanged when it refuses, and survives close and reopen. Nine tests, and the mutants that drop
+  either guard are killed.
+- **What is not:** **nothing calls it outside tests.** No HTTP route, no UI, no import path creates a
+  vocabulary graph. This is deliberate rather than an oversight, and the distinction matters:
+  `CLAUDE.md` §1.7 requires discovery to run *before* creation and requires a recorded justification
+  when something new is created anyway, and `DiscoveryProvider` does not exist until Phase 2. Adding
+  a create endpoint now would be a charter violation dressed up as progress, so the honest position
+  is a recorded gap.
+- **What would close it:** the Phase 2 authoring path with its local discovery hook. The read half —
+  `GET /api/graphs` and the registry in the UI — is the next Phase 1 item and does not depend on it.
+- **Opened:** iteration 5
+
+### A corrupt registry is proven to stop the store, not proven to stop the server
+- **Kind:** partial-coverage
+- **What is proven:** `Store::graphs()` returns `StoreError::Corrupt` for an unrecognised kind
+  token, for a registry entry that breaks the namespace rule, and for a graph registered twice with
+  different kinds — each asserted against a store doctored through the backend, and each mutant
+  killed. `main.rs` propagates that error with `?` before the listener binds.
+- **What is not:** the *propagation* is inspected-only. `tests/graceful_shutdown.rs` proves the
+  registry is read at startup (the mutants that stop reading it and that read-but-do-not-report it
+  both turn it red), but no test starts the binary against a **doctored** store and asserts it
+  refuses to serve. Building that fixture needs raw quad access from outside the crate, which today
+  means either making the backend reachable or adding `oxigraph` as a dev-dependency of
+  `openbiz-server` — and a test-only direct dependency on the engine cuts against `CLAUDE.md` §3,
+  so it is not a cost worth paying for one assertion.
+- **What would close it:** a store-layer test helper that writes an arbitrary quad, gated behind a
+  cargo feature the server's tests can enable. Worth doing when a second caller needs it; one
+  assertion does not justify a new public seam.
+- **Opened:** iteration 5
+
+### Registry reads are unmeasured above a handful of graphs
+- **Kind:** partial-coverage
+- **What is proven:** `Store::graphs()` returns the right graphs in a stable order with up to four
+  registered, and `contains_graph` answers without scanning the store's contents. Listing asks the
+  registry rather than the backend precisely so it does not become a whole-store scan.
+- **What is not:** the registry read is a pattern scan bounded by the number of *graphs*, which is
+  fine at four and unmeasured at four thousand — and an enterprise with a vocabulary per business
+  domain per jurisdiction gets there. It also runs on the startup path, so if it is slow it is slow
+  in the cold-start budget `CLAUDE.md` §1.5 sets. Nothing has measured it, and `graphs.sort()` is an
+  additional O(n log n) on top.
+- **What would close it:** the Phase 1 benchmark spike should register 10k graphs and time both
+  `graphs()` and startup, alongside the query evaluation and `close()` numbers it already owes.
+- **Opened:** iteration 5
 
 ### Durability is proven for one quad, not for a vocabulary
 - **Kind:** partial-coverage
