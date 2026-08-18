@@ -230,3 +230,28 @@ fn the_process_environment_reaches_the_configuration_with_its_provenance() {
     server.signal("TERM");
     server.wait_for_exit();
 }
+
+/// The graph registry is read at startup, not on first request. A store whose registry cannot be
+/// described is a store we would be guessing about, and this is what makes that a startup failure
+/// rather than a surprise later — the same standing as a store that will not open at all.
+#[test]
+fn the_graph_registry_is_read_at_startup() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let log = temp.path().join("server.log");
+    let mut server = Server::start(temp.path(), &log, true);
+
+    let log_text = server.log();
+
+    assert!(
+        log_text.contains("graph registry read"),
+        "the registry must be read before the server serves. Log:\n{log_text}"
+    );
+    assert!(
+        log_text.contains("graphs=1"),
+        "a fresh store holds exactly the system graph, and the count must say so. \
+         Log:\n{log_text}"
+    );
+
+    server.signal("TERM");
+    assert!(server.wait_for_exit().success());
+}

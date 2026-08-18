@@ -46,6 +46,20 @@ async fn main() -> anyhow::Result<()> {
         "store open"
     );
 
+    // Read the graph registry now rather than on first request. It is the store's own account of
+    // what it holds, so a registry it cannot describe — an unknown graph kind, an entry that
+    // breaks the namespace rule — is a store we would be guessing about, and guessing is how a
+    // governance tool loses the right to be believed. Failing here keeps that on the same footing
+    // as a store that will not open: better never up than up and wrong.
+    let graphs = store
+        .graphs()
+        .context("the store's graph registry could not be read")?;
+    tracing::info!(graphs = graphs.len(), "graph registry read");
+    for graph in &graphs {
+        // Vocabulary IRIs are customer metadata, so they are named at debug and counted at info.
+        tracing::debug!(graph = %graph, kind = %graph.kind(), "registered graph");
+    }
+
     let listener = tokio::net::TcpListener::bind(config.bind.value())
         .await
         .with_context(|| {

@@ -307,3 +307,81 @@ look competent disables the one signal that catches a stuck loop.
   mutation testing is cheap on one 45-line component, and I have no idea whether that practice
   survives contact with a design system — if it does not, "the UI suite is green" degrades back into
   the same unexamined claim it was this morning, just with more files.
+
+## Iteration 5 — 2026-08-18
+- **Took:** Phase 1 — "Named-graph model: one graph per vocabulary, plus a system graph for
+  OpenBiz's own metadata", the next unchecked item. **Split in place**, because it was two items
+  wearing one hat: the store model, and exposing it. This iteration is the model; the read half
+  (`GET /api/graphs` plus the UI) is now its own item, and the *create* half is deliberately not
+  next — §1.7 requires discovery before creation and `DiscoveryProvider` does not exist until
+  Phase 2, so an endpoint that creates vocabularies now would be a charter violation dressed up as
+  progress.
+- **Drained first, as the driver requires:** `promote-queue.json` was `[]`. `feedback.md` held a
+  product-owner correction, copied into `FEEDBACK-LOG.md` and truncated to empty *before* any work
+  started. Its factual claim — the plan saying "Phase 0 is complete" while a Phase 0 item was
+  unchecked — had already been closed by iteration 4, and I verified that by counting rather than
+  assuming: 18 items, 0 unchecked. The **mechanism** it corrects stands and is the part that
+  matters, so the counting rule is now written into the plan's header and a proposal is open for a
+  CI job that checks the falsifiable half of the `**Status:**` line. This is a process error caught
+  externally, not a doc fix: the loop described a phase from memory of what was in it before its own
+  promotion, and it took a human reading the public repo to notice.
+- **Did:** `crates/openbiz-store/src/graph.rs` is new — `GraphId` with **private fields**, so the
+  pairing of IRI and kind is an invariant the type enforces rather than a convention callers follow.
+  A vocabulary graph must be a valid absolute IRI (validated by the backend's own parser, so what we
+  accept is exactly what the store, the serialisers, and SPARQL accept) and must be **outside**
+  `urn:openbiz:`. An inferred graph's IRI is *derived* from its vocabulary, not chosen, so two
+  vocabularies cannot share one and materialisation cannot be aimed at a graph a human authored. In
+  `lib.rs`, `insert_into` is now the single function that writes anything: it takes a `&GraphId`,
+  refuses one that is not directly writable, and the format stamp goes through it too. A graph
+  registry lives in the system graph, `Store::open` registers the system graph into it on every
+  open, and `main.rs` reads the registry **before it binds** and refuses to start if it cannot
+  describe it. Registry writes are atomic via `Store::extend`, because a registry entry is two quads
+  and a half-existing graph is worse than an absent one. See `adr/0007`.
+- **Tests:** 84 Rust (was 59) + 10 UI (unchanged). `cargo fmt`, `cargo clippy -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` green. **Twelve mutants, all killed**, and a
+  thirteenth rejected by the compiler: dropping the writability guard in `insert_into`; dropping it
+  in `create_vocabulary_graph`; dropping the already-exists check; not registering the system graph
+  at open; removing the sort from `graphs()`; making `from_registry` trust what it reads; defaulting
+  an unknown kind token to `Vocabulary`; not enforcing the reserved namespace; not validating IRI
+  syntax; matching the namespace with `contains("openbiz")` instead of a prefix; and two against
+  `main.rs` — never reading the registry, and reading it without reporting it. The thirteenth,
+  assembling a `GraphId` from a registry row by struct literal, **would not compile**, which is the
+  private-fields decision paying for itself on the day it was made.
+- **Learned:** three things. (1) **The registry did not need a format bump, and noticing that was
+  the useful part.** A store written before it existed acquires one by being opened, because the
+  quads are additive and an older build never looks for them. The reflex was to bump
+  `FORMAT_VERSION` and write a migration; had I followed it, every future piece of system metadata
+  would have cost a migration it did not need, and the migration framework — a Phase 1 item that
+  does not exist yet — would have been forced early to service a change that required nothing from
+  it. (2) **Reading the registry has to re-apply the same invariants as writing it.** I built the
+  read path first as a plain deserialise and only then asked what a doctored backup does: a registry
+  row claiming the system graph's IRI is a `vocabulary` would have handed a user write access to our
+  bookkeeping through the ordinary authoring path. It is now `Corrupt`, and the mutant that trusts
+  what it reads is killed. The general form is that anything durable is an attack surface, and this
+  crate now has two examples — the format stamp and the registry. (3) **Oxigraph 0.5.9 has no
+  closure-based `transaction()`;** `Store::extend` is the atomic multi-quad write, and it was enough
+  here. Worth knowing before the next item, which is the public transactional write API and *will*
+  need `start_transaction`.
+- **Recorded:** closed the `UNTESTED.md` entry "The named-graph model has no production caller" —
+  the largest no-production-caller gap the store had — and opened three honest successors rather
+  than banking a clean sheet. `create_vocabulary_graph` has no production caller and will not until
+  Phase 2's discovery hook, and I would rather say so than add a placeholder endpoint that violates
+  §1.7. A corrupt registry is proven to stop the *store* but its refusal to start the *server* is
+  inspected-only, because building that fixture needs raw quad access from outside the crate and the
+  only cheap route is a test-only `oxigraph` dependency in `openbiz-server`, which cuts against §3
+  for one assertion. And registry reads are unmeasured above four graphs while sitting on the
+  startup path, so the Phase 1 benchmark spike now owes a third number. No parity finding: this is a
+  row where we are genuinely ahead of the incumbents rather than catching up, and the plan item says
+  why.
+- **Still uncertain:** whether `urn:openbiz:` is a defensible reservation or one we will regret.
+  It is unambiguously right *inside* the store — a user must not be able to author into our
+  bookkeeping — but the IRIs it protects will leak outward the moment anything is exported, and I do
+  not know what an inferred graph's IRI should look like to a consumer who is not us. Today it is
+  `urn:openbiz:graph:inferred:<the vocabulary's own IRI>`, which is honest and machine-readable and
+  also announces our product name inside a customer's exported data. A customer publishing that to a
+  partner is publishing a fact about their tooling, and "we do not own a domain" is a reason not to
+  mint `http:` IRIs, not a reason this particular shape is right. The narrower version I cannot yet
+  answer: when Phase 11 exports a vocabulary with materialised inferences, does the inferred graph go
+  in the export at all, and under whose namespace — because if the answer is "not ours", then this
+  IRI scheme is an internal detail that must never be serialised, and nothing currently stops it
+  being serialised.

@@ -31,10 +31,16 @@
 
 use std::path::{Path, PathBuf};
 
-use oxigraph::model::vocab::xsd;
-use oxigraph::model::{Literal, NamedNodeRef, QuadRef, Term};
+use oxigraph::model::vocab::{rdf, xsd};
+use oxigraph::model::{GraphName, Literal, NamedNode, NamedNodeRef, Quad, Term};
 use oxigraph::store::Store as Backend;
 use thiserror::Error;
+
+mod graph;
+
+pub use graph::{
+    GraphId, GraphIdError, GraphKind, INFERRED_GRAPH_PREFIX, OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
+};
 
 /// Subdirectory of the configured data directory that holds the RDF store.
 ///
@@ -48,61 +54,17 @@ pub const STORE_SUBDIR: &str = "store";
 /// an older build silently reading a newer layout is the failure that loses data.
 pub const FORMAT_VERSION: u32 = 1;
 
-/// Named graph holding OpenBiz's own metadata.
-///
-/// Kept apart from vocabulary graphs so our bookkeeping never leaks into a customer's export. A
-/// `urn:` IRI, not an `http:` one: we do not own a domain, and minting an IRI under someone else's
-/// namespace — or one that 404s — is worse than being honestly non-dereferenceable.
-pub const SYSTEM_GRAPH_IRI: &str = "urn:openbiz:graph:system";
-
-/// Subject describing the store itself, within [`SYSTEM_GRAPH_IRI`].
+/// Subject describing the store itself, within the system graph.
 const STORE_IRI: &str = "urn:openbiz:store";
 
 /// Predicate carrying [`FORMAT_VERSION`].
 const FORMAT_VERSION_IRI: &str = "urn:openbiz:storeFormatVersion";
 
-/// How a named graph is used.
-///
-/// Vocabularies are isolated per graph so they can be versioned, exported, and permissioned
-/// independently; OpenBiz's own bookkeeping lives in [`GraphKind::System`] so it never leaks into a
-/// customer's exported vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GraphKind {
-    /// A user-authored vocabulary.
-    Vocabulary,
-    /// OpenBiz's own metadata: workflow state, provenance, configuration.
-    System,
-    /// Materialised inferences, kept separate so they are never confused with asserted facts.
-    Inferred,
-}
+/// Class every registered graph is typed with, in the system graph.
+const GRAPH_CLASS_IRI: &str = "urn:openbiz:Graph";
 
-/// Identifies a named graph.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GraphId {
-    /// The graph's IRI.
-    pub iri: String,
-    /// What the graph holds.
-    pub kind: GraphKind,
-}
-
-impl GraphId {
-    /// A vocabulary graph.
-    pub fn vocabulary(iri: impl Into<String>) -> Self {
-        Self {
-            iri: iri.into(),
-            kind: GraphKind::Vocabulary,
-        }
-    }
-
-    /// Whether callers may write to this graph directly.
-    ///
-    /// Inferred graphs are written only by a reasoner-driven materialisation pass; letting
-    /// application code assert into them would destroy the asserted-versus-inferred distinction the
-    /// UI depends on.
-    pub fn is_directly_writable(&self) -> bool {
-        !matches!(self.kind, GraphKind::Inferred)
-    }
-}
+/// Predicate carrying a registered graph's [`GraphKind`].
+const GRAPH_KIND_IRI: &str = "urn:openbiz:graphKind";
 
 /// Errors raised by the store.
 ///
@@ -160,8 +122,20 @@ pub enum StoreError {
         detail: String,
     },
     /// A write targeted a graph that is not directly writable.
-    #[error("graph {0} is not directly writable")]
+    #[error(
+        "graph {0} is not directly writable: it holds materialised inferences, which only a \
+         reasoner may assert"
+    )]
     NotWritable(String),
+    /// A graph was created at an IRI that is already registered.
+    #[error(
+        "a graph is already registered at {iri}; reuse or extend it rather than creating a \
+         second one at the same IRI"
+    )]
+    GraphExists {
+        /// The IRI that is already taken.
+        iri: String,
+    },
     /// The backend failed.
     #[error("store backend failed: {0}")]
     Backend(String),
@@ -215,11 +189,19 @@ impl Store {
 
         let format_version = stamp_or_check_format_version(&backend, &path)?;
 
-        Ok(Self {
+        let store = Self {
             backend,
             path,
             format_version,
-        })
+        };
+
+        // The system graph describes itself. Doing this on every open, rather than only when the
+        // store is created, means a store written before the registry existed acquires one by
+        // being opened — additive, so no format bump and no migration, and an older build reading
+        // the same store simply ignores quads it does not look for.
+        store.ensure_registered(&GraphId::system())?;
+
+        Ok(store)
     }
 
     /// Where the store's files live.
@@ -230,6 +212,147 @@ impl Store {
     /// The on-disk format version in force for this store.
     pub fn format_version(&self) -> u32 {
         self.format_version
+    }
+
+    /// Every graph this store knows about, ordered by IRI.
+    ///
+    /// Read from the registry in the system graph, not by scanning the store: asking the backend
+    /// which graphs contain quads would be a whole-store scan, and it would also miss a
+    /// vocabulary that has been created but not yet populated — which is exactly the vocabulary a
+    /// user is looking at when they wonder where it went.
+    ///
+    /// A registry entry that does not satisfy the [`GraphId`] invariants is a [`StoreError::Corrupt`],
+    /// never a silently skipped row. A graph we cannot describe is one we must not pretend is absent.
+    pub fn graphs(&self) -> Result<Vec<GraphId>, StoreError> {
+        let mut graphs = Vec::new();
+
+        for quad in self.backend.quads_for_pattern(
+            None,
+            Some(named_node(GRAPH_KIND_IRI)),
+            None,
+            Some(named_node(SYSTEM_GRAPH_IRI).into()),
+        ) {
+            let quad = quad.map_err(|error| StoreError::Backend(error.to_string()))?;
+
+            let iri = match quad.subject {
+                oxigraph::model::NamedOrBlankNode::NamedNode(node) => node.into_string(),
+                other => {
+                    return Err(self.corrupt(format!(
+                        "a registered graph is identified by {other}, which is not an IRI"
+                    )))
+                }
+            };
+            let Term::Literal(token) = quad.object else {
+                return Err(self.corrupt(format!("the kind of graph {iri} is not a literal")));
+            };
+            let Some(kind) = GraphKind::parse(token.value()) else {
+                return Err(self.corrupt(format!(
+                    "graph {iri} has kind {:?}, which this build does not recognise",
+                    token.value()
+                )));
+            };
+
+            graphs.push(
+                GraphId::from_registry(iri, kind).map_err(|error| {
+                    self.corrupt(format!("the registry is inconsistent: {error}"))
+                })?,
+            );
+        }
+
+        // Sorted so the order is a property of the data rather than of the backend's iteration
+        // order, which nothing upstream promises. A UI list that reshuffles between reloads reads
+        // as a bug even when the contents are identical.
+        graphs.sort();
+
+        if let Some(duplicate) = first_duplicate(&graphs) {
+            return Err(self.corrupt(format!(
+                "graph {duplicate} is registered more than once, with different kinds"
+            )));
+        }
+
+        Ok(graphs)
+    }
+
+    /// Whether a graph is registered at `iri`, whatever kind it was registered as.
+    ///
+    /// Kind-blind on purpose: this answers "is this IRI taken", which is the question the creation
+    /// path needs, and a caller that wants the kind should ask [`Store::graphs`].
+    pub fn contains_graph(&self, iri: &str) -> Result<bool, StoreError> {
+        let Ok(subject) = NamedNode::new(iri) else {
+            return Ok(false);
+        };
+
+        Ok(self
+            .backend
+            .quads_for_pattern(
+                Some(subject.as_ref().into()),
+                Some(named_node(GRAPH_KIND_IRI)),
+                None,
+                Some(named_node(SYSTEM_GRAPH_IRI).into()),
+            )
+            .next()
+            .transpose()
+            .map_err(|error| StoreError::Backend(error.to_string()))?
+            .is_some())
+    }
+
+    /// Register a new vocabulary graph.
+    ///
+    /// Refuses an IRI that is already registered rather than quietly adopting it. Silently
+    /// succeeding here is how a user ends up with two vocabularies believing they own one graph,
+    /// and it is the store-level face of `CLAUDE.md` §1.7 — creating something new where something
+    /// existing would serve is the failure mode this product exists to attack, so the store never
+    /// makes it the path of least resistance.
+    ///
+    /// This creates the *container*, not its contents; a freshly created vocabulary graph holds no
+    /// quads. The discovery-first creation path (§1.7) and the authoring API sit above this.
+    pub fn create_vocabulary_graph(&self, graph: &GraphId) -> Result<(), StoreError> {
+        if !graph.is_directly_writable() {
+            return Err(StoreError::NotWritable(graph.iri().to_owned()));
+        }
+        if self.contains_graph(graph.iri())? {
+            return Err(StoreError::GraphExists {
+                iri: graph.iri().to_owned(),
+            });
+        }
+        self.register(graph)
+    }
+
+    /// Register `graph` if it is not already registered.
+    fn ensure_registered(&self, graph: &GraphId) -> Result<(), StoreError> {
+        if self.contains_graph(graph.iri())? {
+            return Ok(());
+        }
+        self.register(graph)
+    }
+
+    /// Write a graph's registry entry into the system graph.
+    fn register(&self, graph: &GraphId) -> Result<(), StoreError> {
+        let subject = NamedNode::new_unchecked(graph.iri());
+        insert_into(
+            &self.backend,
+            &GraphId::system(),
+            vec![
+                (
+                    subject.clone(),
+                    rdf::TYPE.into_owned(),
+                    named_node(GRAPH_CLASS_IRI).into_owned().into(),
+                ),
+                (
+                    subject,
+                    named_node(GRAPH_KIND_IRI).into_owned(),
+                    Literal::new_simple_literal(graph.kind().as_str()).into(),
+                ),
+            ],
+        )
+    }
+
+    /// A [`StoreError::Corrupt`] naming this store's path.
+    fn corrupt(&self, detail: String) -> StoreError {
+        StoreError::Corrupt {
+            path: self.path.clone(),
+            detail,
+        }
     }
 
     /// Number of quads held, across every graph. **Test support only.**
@@ -311,9 +434,11 @@ fn stamp_or_check_format_version(backend: &Backend, path: &Path) -> Result<u32, 
     match found.as_slice() {
         [] => {
             let version = Literal::new_typed_literal(FORMAT_VERSION.to_string(), xsd::INTEGER);
-            backend
-                .insert(QuadRef::new(subject, predicate, &version, graph))
-                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            insert_into(
+                backend,
+                &GraphId::system(),
+                vec![(subject.into_owned(), predicate.into_owned(), version.into())],
+            )?;
             // Flush immediately: the stamp must survive a hard kill in the seconds after a first
             // start, or the next open sees an unstamped store that already holds data.
             backend
@@ -345,6 +470,53 @@ fn stamp_or_check_format_version(backend: &Backend, path: &Path) -> Result<u32, 
     }
 }
 
+/// The single point through which every write to this store passes.
+///
+/// Two things are true of it and neither is negotiable. **Every quad names a graph** — nothing is
+/// written to the default graph, so no statement can exist without a vocabulary it belongs to.
+/// And **the target graph must be directly writable**, so `GraphId::is_directly_writable` is a
+/// rule the store enforces rather than a comment a caller may forget. Today's writes are all to
+/// the system graph, so the refusal branch does not yet fire in production; the point of putting
+/// the choke point in now is that the first import, materialisation, or agent proposal to arrive
+/// cannot route around it.
+///
+/// The quads are written atomically. A registry entry is two quads — a type and a kind — and a
+/// process that died between them would leave a graph that half exists, which is worse than one
+/// that does not exist at all.
+fn insert_into(
+    backend: &Backend,
+    graph: &GraphId,
+    triples: Vec<(NamedNode, NamedNode, Term)>,
+) -> Result<(), StoreError> {
+    if !graph.is_directly_writable() {
+        return Err(StoreError::NotWritable(graph.iri().to_owned()));
+    }
+
+    // Unchecked because `GraphId` validated this IRI through the same parser when it was
+    // constructed, and its fields are private so nothing can have changed it since. `expect` is
+    // barred outside tests (`CLAUDE.md` §6) and there is no error here to propagate.
+    let graph_name: GraphName = NamedNode::new_unchecked(graph.iri()).into();
+
+    let quads: Vec<Quad> = triples
+        .into_iter()
+        .map(|(subject, predicate, object)| {
+            Quad::new(subject, predicate, object, graph_name.clone())
+        })
+        .collect();
+
+    backend
+        .extend(quads)
+        .map_err(|error| StoreError::Backend(error.to_string()))
+}
+
+/// The first value that appears twice in a sorted slice, if any.
+fn first_duplicate(sorted: &[GraphId]) -> Option<&GraphId> {
+    sorted
+        .windows(2)
+        .find(|pair| pair[0].iri() == pair[1].iri())
+        .map(|pair| &pair[0])
+}
+
 /// Parse an IRI constant defined in this module.
 ///
 /// The constants are compile-time literals we control, so a parse failure is a bug in this file
@@ -357,26 +529,14 @@ const fn named_node(iri: &str) -> NamedNodeRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxigraph::model::QuadRef;
 
     fn temp_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("a temporary directory")
     }
 
-    #[test]
-    fn vocabulary_graphs_are_writable() {
-        assert!(GraphId::vocabulary("http://example.org/v/1").is_directly_writable());
-    }
-
-    #[test]
-    fn inferred_graphs_are_not_directly_writable() {
-        let inferred = GraphId {
-            iri: "http://example.org/v/1/inferred".to_owned(),
-            kind: GraphKind::Inferred,
-        };
-        assert!(
-            !inferred.is_directly_writable(),
-            "only materialisation may write inferred graphs"
-        );
+    fn vocabulary(iri: &str) -> GraphId {
+        GraphId::vocabulary(iri).expect("a valid absolute IRI outside the reserved namespace")
     }
 
     #[test]
@@ -388,9 +548,320 @@ mod tests {
         assert_eq!(store.path(), dir.path().join(STORE_SUBDIR));
         assert_eq!(
             store.quad_count().expect("countable"),
-            1,
-            "a new store holds exactly its own format stamp"
+            3,
+            "a new store holds its format stamp and the system graph's two registry quads, \
+             and nothing else"
         );
+    }
+
+    /// The system graph is registered as a graph, in the graph registry, from the first open.
+    /// Without this the registry is a special case with a hole in it, and "list every graph"
+    /// silently means "list every graph except ours".
+    #[test]
+    fn a_fresh_store_registers_the_system_graph_and_nothing_else() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("a fresh directory opens");
+
+        let graphs = store.graphs().expect("the registry is readable");
+
+        assert_eq!(graphs, vec![GraphId::system()]);
+        assert_eq!(graphs[0].kind(), GraphKind::System);
+        assert!(store.contains_graph(SYSTEM_GRAPH_IRI).expect("readable"));
+    }
+
+    /// A store written before the registry existed must acquire one by being opened. If this
+    /// needed a format bump then every additive piece of system metadata would need a migration,
+    /// and the store would be far harder to evolve than it has to be.
+    #[test]
+    fn a_store_without_a_registry_gains_one_on_open_without_a_format_bump() {
+        let dir = temp_dir();
+
+        {
+            // Strip the registry back out, leaving exactly what a pre-registry build wrote.
+            let store = Store::open(dir.path()).expect("first open");
+            store
+                .backend
+                .clear_graph(named_node(SYSTEM_GRAPH_IRI))
+                .expect("the system graph is clearable");
+            let version = Literal::new_typed_literal(FORMAT_VERSION.to_string(), xsd::INTEGER);
+            store
+                .backend
+                .insert(QuadRef::new(
+                    named_node(STORE_IRI),
+                    named_node(FORMAT_VERSION_IRI),
+                    &version,
+                    named_node(SYSTEM_GRAPH_IRI),
+                ))
+                .expect("the stamp is rewritable");
+            assert!(
+                store.graphs().expect("readable").is_empty(),
+                "the fixture must actually represent a store with no registry"
+            );
+            store.close().expect("a clean close");
+        }
+
+        let store = Store::open(dir.path()).expect("an older store still opens");
+
+        assert_eq!(
+            store.format_version(),
+            FORMAT_VERSION,
+            "acquiring a registry is additive and must not look like a format change"
+        );
+        assert_eq!(store.graphs().expect("readable"), vec![GraphId::system()]);
+    }
+
+    #[test]
+    fn creating_a_vocabulary_graph_registers_it() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let graph = vocabulary("http://example.org/v/animals");
+
+        store.create_vocabulary_graph(&graph).expect("creatable");
+
+        assert!(store.contains_graph(graph.iri()).expect("readable"));
+        assert_eq!(
+            store.graphs().expect("readable"),
+            vec![
+                vocabulary("http://example.org/v/animals"),
+                GraphId::system()
+            ],
+            "the registry lists the new vocabulary alongside the system graph"
+        );
+    }
+
+    /// The store-level face of `CLAUDE.md` §1.7. Quietly adopting an existing graph is how two
+    /// vocabularies end up believing they own one, and it makes "create another one" the cheapest
+    /// action available — the exact behaviour this product exists to attack.
+    #[test]
+    fn creating_a_vocabulary_graph_that_already_exists_is_refused() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let graph = vocabulary("http://example.org/v/animals");
+
+        store
+            .create_vocabulary_graph(&graph)
+            .expect("the first creation succeeds");
+        let error = store
+            .create_vocabulary_graph(&graph)
+            .expect_err("the second must be refused");
+
+        assert!(
+            matches!(error, StoreError::GraphExists { ref iri } if iri == graph.iri()),
+            "expected GraphExists, got: {error}"
+        );
+        assert!(
+            error.to_string().contains("reuse or extend it"),
+            "the message must point at the reuse ladder, not just refuse: {error}"
+        );
+        assert_eq!(
+            store.graphs().expect("readable").len(),
+            2,
+            "a refused creation must leave the registry unchanged"
+        );
+    }
+
+    /// The system graph is registered at open, so trying to create a vocabulary over it is caught
+    /// by the same rule that catches any other collision — no special case to forget.
+    #[test]
+    fn the_system_graph_cannot_be_created_over() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+
+        let error = store
+            .create_vocabulary_graph(&GraphId::system())
+            .expect_err("the system graph already exists");
+
+        assert!(
+            matches!(error, StoreError::GraphExists { .. }),
+            "expected GraphExists, got: {error}"
+        );
+    }
+
+    /// The writability rule, enforced rather than documented. An inferred graph is derived by a
+    /// reasoner; a caller that could create one by hand could assert into it, and the
+    /// asserted-versus-inferred distinction every "why?" explanation rests on would be gone.
+    #[test]
+    fn an_inferred_graph_cannot_be_created_by_a_caller() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let inferred =
+            GraphId::inferred_for(&vocabulary("http://example.org/v/animals")).expect("derivable");
+
+        let error = store
+            .create_vocabulary_graph(&inferred)
+            .expect_err("inferred graphs are derived, not created");
+
+        assert!(
+            matches!(error, StoreError::NotWritable(ref iri) if iri == inferred.iri()),
+            "expected NotWritable, got: {error}"
+        );
+        assert!(
+            error.to_string().contains("only a reasoner may assert"),
+            "the message must explain the rule, not just cite it: {error}"
+        );
+        assert!(!store.contains_graph(inferred.iri()).expect("readable"));
+    }
+
+    /// The choke point every write passes through, exercised directly against a graph the rule
+    /// forbids. `create_vocabulary_graph` refuses earlier, so without this the refusal branch of
+    /// `insert_into` itself would never be executed by any test.
+    #[test]
+    fn no_write_reaches_an_inferred_graph() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let inferred =
+            GraphId::inferred_for(&vocabulary("http://example.org/v/animals")).expect("derivable");
+
+        let error = insert_into(
+            &store.backend,
+            &inferred,
+            vec![(
+                NamedNode::new_unchecked("http://example.org/v/animals/cat"),
+                rdf::TYPE.into_owned(),
+                NamedNode::new_unchecked("http://www.w3.org/2004/02/skos/core#Concept").into(),
+            )],
+        )
+        .expect_err("the choke point must refuse");
+
+        assert!(
+            matches!(error, StoreError::NotWritable(_)),
+            "expected NotWritable, got: {error}"
+        );
+        assert_eq!(
+            store.quad_count().expect("countable"),
+            3,
+            "a refused write must leave the store untouched"
+        );
+    }
+
+    /// Backend iteration order is not a documented property, so the store imposes one. A list that
+    /// reshuffles between reloads reads as a bug even when its contents are identical.
+    #[test]
+    fn graphs_are_listed_in_a_stable_order() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+
+        for iri in [
+            "http://example.org/v/zebra",
+            "http://example.org/v/animals",
+            "http://example.org/v/machines",
+        ] {
+            store
+                .create_vocabulary_graph(&vocabulary(iri))
+                .expect("creatable");
+        }
+
+        let graphs = store.graphs().expect("readable");
+        let iris: Vec<&str> = graphs.iter().map(GraphId::iri).collect();
+
+        assert_eq!(
+            iris,
+            vec![
+                "http://example.org/v/animals",
+                "http://example.org/v/machines",
+                "http://example.org/v/zebra",
+                SYSTEM_GRAPH_IRI,
+            ]
+        );
+        assert_eq!(
+            store.graphs().expect("readable"),
+            store.graphs().expect("readable")
+        );
+    }
+
+    #[test]
+    fn the_registry_survives_close_and_reopen() {
+        let dir = temp_dir();
+
+        {
+            let store = Store::open(dir.path()).expect("first open");
+            store
+                .create_vocabulary_graph(&vocabulary("http://example.org/v/animals"))
+                .expect("creatable");
+            store.close().expect("a clean close");
+        }
+
+        let store = Store::open(dir.path()).expect("second open");
+        assert_eq!(
+            store.graphs().expect("readable"),
+            vec![
+                vocabulary("http://example.org/v/animals"),
+                GraphId::system()
+            ]
+        );
+    }
+
+    /// A store written by a build that knew a fourth kind must be refused, not downgraded to
+    /// whatever this build's default happens to be. Same class of mistake as misreading a format
+    /// version, and the same answer.
+    #[test]
+    fn a_graph_registered_with_an_unknown_kind_is_refused_rather_than_guessed() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+
+        store
+            .backend
+            .insert(QuadRef::new(
+                NamedNodeRef::new_unchecked("http://example.org/v/animals"),
+                named_node(GRAPH_KIND_IRI),
+                Literal::new_simple_literal("shapes").as_ref(),
+                named_node(SYSTEM_GRAPH_IRI),
+            ))
+            .expect("a nonsense kind is writable");
+
+        let error = store.graphs().expect_err("an unknown kind must be refused");
+
+        assert!(
+            matches!(error, StoreError::Corrupt { .. }),
+            "expected Corrupt, got: {error}"
+        );
+        assert!(
+            error.to_string().contains("shapes"),
+            "the message must quote the value it could not read: {error}"
+        );
+    }
+
+    /// The registry is data on disk. A doctored backup that registers a vocabulary at the system
+    /// graph's own IRI would hand a user write access to our bookkeeping through the ordinary
+    /// authoring path, so reading re-applies every invariant that writing did.
+    #[test]
+    fn a_registry_entry_that_breaks_the_namespace_rule_is_refused_on_read() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+
+        store
+            .backend
+            .insert(QuadRef::new(
+                named_node(SYSTEM_GRAPH_IRI),
+                named_node(GRAPH_KIND_IRI),
+                Literal::new_simple_literal(GraphKind::Vocabulary.as_str()).as_ref(),
+                named_node(SYSTEM_GRAPH_IRI),
+            ))
+            .expect("a doctored entry is writable");
+
+        let error = store
+            .graphs()
+            .expect_err("an impossible pairing must be refused");
+
+        assert!(
+            matches!(error, StoreError::Corrupt { .. }),
+            "expected Corrupt, got: {error}"
+        );
+        assert!(
+            error.to_string().contains("registry is inconsistent"),
+            "the message must say the registry is the problem: {error}"
+        );
+    }
+
+    #[test]
+    fn contains_graph_does_not_treat_an_unparseable_iri_as_present() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+
+        assert!(!store.contains_graph("not an iri").expect("readable"));
+        assert!(!store
+            .contains_graph("http://example.org/v/never-created")
+            .expect("readable"));
     }
 
     /// The durability claim in the build plan, stated as a test: what one open commits, the next
@@ -406,8 +877,9 @@ mod tests {
         assert_eq!(second.format_version(), FORMAT_VERSION);
         assert_eq!(
             second.quad_count().expect("countable"),
-            1,
-            "reopening must read the existing stamp, not write a second one"
+            3,
+            "reopening must read the existing stamp and registry, not write a second copy of \
+             either"
         );
     }
 

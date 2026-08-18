@@ -111,6 +111,30 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 
 ---
 
+### Make the plan's `**Status:**` line checkable rather than hand-written
+- **Status:** proposed.
+- **Gap:** `BUILD-PLAN.md`'s `**Status:**` and `**Current position:**` lines are prose the loop
+  writes from memory at the end of an iteration. After iteration 4 the product owner caught them
+  claiming "Phase 0 is complete — no open items" while Phase 0 still held an unchecked box, because
+  the loop had promoted an item into that phase minutes earlier and then described the phase from
+  its recollection of what was there before. The factual error is fixed and the counting discipline
+  is now written into the plan's header, but the discipline is a convention, and this repository has
+  already learned once — with branch protection — what a convention is worth compared with a check.
+- **Why load-bearing:** the repository is public. A plan that declares a phase complete while an item
+  in it is open is exactly the "roadmap you cannot trust" failure we attack the incumbents for, and
+  `CLAUDE.md` §4's "honesty over green" makes misreporting worse than the gap being reported. It is
+  small now and corrosive as a habit — and it is the kind of claim a script can verify absolutely,
+  since both the claim and the evidence are in one file.
+- **What it would be:** a CI job that parses `BUILD-PLAN.md`, counts `- [ ]` per phase, and fails if
+  the `**Status:**` or `**Current position:**` lines name a phase as complete that still has
+  unchecked items, or state an item count that does not match. Roughly the same shape as the `Single
+  binary` job: cheap, mechanical, and it fails on the branch rather than being noticed by a human
+  three iterations later.
+- **Cost & impact:** well under one iteration. A script plus a CI step; no runtime or binary impact.
+  The honest risk is that it invites writing the status line to satisfy the parser rather than the
+  reader, so it should check the *falsifiable* claims only and leave the prose alone.
+- **Suggested phase:** Phase 0, as a harness item.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
@@ -169,3 +193,15 @@ anything: the one mutant that survived the first draft survived because the test
 subtly unfaithful to the real API's abort semantics, which is exactly the class of plausible-looking
 wrongness an LLM produces most readily and a human reviewer least reliably catches. Whatever Phase
 10 builds, it should assume its output needs an adversarial check that is not itself generated._
+
+_Iteration 5 (named-graph model): none in the built path, and one worth writing down for later. The
+model itself is rules — a reserved namespace, a derived IRI, a writability check — and every one of
+them must be deterministic and explainable, so an LLM anywhere in it would be a liability. The
+opportunity is one layer up and belongs to Phase 12 rather than Phase 10's agent list: the reason
+`create_vocabulary_graph` refuses an IRI that is already registered is that IRI collision is the
+**only** duplication the store can detect, and it is the least interesting kind. Two vocabularies
+that overlap by 80% of their concepts under entirely different IRIs are invisible to it, and that is
+the actual silo. Lexical and structural matching is the no-LLM baseline `adr/0003` already requires;
+what an LLM adds is recall on near-synonyms and definitional overlap that string matching misses.
+Recording it here so the Phase 12 overlap report is not designed as if IRI equality were the
+problem.
