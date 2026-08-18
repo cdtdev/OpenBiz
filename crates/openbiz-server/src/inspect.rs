@@ -24,8 +24,8 @@
 //! vocabulary redirects to a file; an operator with a truncated report has no way to know.
 
 use openbiz_skos::{
-    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, Resource, SkosClass, Statement,
-    Term,
+    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, RelationOrigin, Resource,
+    SkosClass, Statement, Term,
 };
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
@@ -163,6 +163,31 @@ fn report(graph: &str, model: &CoreModel) -> String {
         .filter(|(_, resource)| !resource.xl_labels().is_empty())
         .collect();
     if !labels.is_empty() || !labelled.is_empty() {
+        // Counted as *links* and not as statements. S62 closes every link into a pair, so summing
+        // the relations a resource holds would report twice what an author wrote and read as a
+        // vocabulary with twice the structure it has. A link stated in one direction and a link
+        // stated in both are the same one link, which is what symmetry means; the second number
+        // is the one that says how much of it we supplied.
+        let links: usize = model
+            .resources()
+            .map(|(node, resource)| {
+                resource
+                    .label_relations()
+                    .keys()
+                    .filter(|other| *other >= node)
+                    .count()
+            })
+            .sum();
+        let converses: usize = model
+            .resources()
+            .map(|(_, resource)| {
+                resource
+                    .label_relations()
+                    .values()
+                    .filter(|origin| matches!(origin, RelationOrigin::Entailed(_)))
+                    .count()
+            })
+            .sum();
         let with_form = labels
             .iter()
             .filter(|(_, resource)| resource.literal_forms().len() == 1)
@@ -191,6 +216,14 @@ fn report(graph: &str, model: &CoreModel) -> String {
              inferred from them\n",
             labelled.len()
         ));
+        // Printed only when there are any. B.4 is an extension point with no built-in
+        // refinements, so most SKOS-XL thesauri use none of it, and a line reading "0 links" on
+        // every one of them would be the noise this whole section is omitted to avoid.
+        if links > 0 {
+            out.push_str(&format!(
+                "  {links} link(s) between labels, {converses} converse(s) inferred under S62\n"
+            ));
+        }
     }
 
     let schemes: Vec<_> = model.instances_of(SkosClass::ConceptScheme).collect();

@@ -1274,23 +1274,50 @@ Do not delete it — the record of what took how long to close is the signal.
   when a second caller exists. Today `openbiz inspect` is the only one and it reads findings too.
 - **Opened:** iteration 21
 
-### SKOS-XL is implemented as far as the labels, and `skosxl:labelRelation` is not read at all
+### ~~SKOS-XL is implemented as far as the labels, and `skosxl:labelRelation` is not read at all~~
 - **Kind:** partial-standard
-- **What is proven:** Appendix B.2 and B.3 — S48–S58. Thirteen of the appendix's own numbered
-  examples (75–87) are asserted to be what the specification marks them, the S55–S57 chains are
-  entailed and feed S13 and S14, and five mutations turned the suite red before it was trusted.
-  `openbiz inspect` reports it against a real store.
-- **What is not:** **B.4 — `skosxl:labelRelation`, S59–S62 — is not read.** A graph using it gets
-  no `skosxl:Label` entailed from S60 or S61, no symmetric closure from S62, and no finding for a
-  literal on it under S59. The property is silently ignored, exactly as any predicate outside the
-  model is. So we must not claim SKOS-XL support without qualification: we support the labelling
-  half, which is the half ISO 25964's SKOS mapping leans on, and not the linking half.
-  Also not applied: S47 (`skosxl:Label` is an `owl:Class`) and S52's *sub-class* reading — the
-  cardinality restriction is checked as a count, not modelled as a class expression, so nothing
-  would notice a graph that restated the restriction incorrectly.
-- **What would close it:** the `skosxl:labelRelation` build-plan item, split out of the SKOS-XL
-  item at iteration 22 and sitting in Phase 2.
-- **Opened:** iteration 22
+- **What is proven:** Appendix B.2, B.3 **and now B.4** — S48–S62. Fifteen of the appendix's own
+  numbered examples (75–89) are asserted to be what the specification marks them, the S55–S57
+  chains are entailed and feed S13 and S14, S59–S62 are applied, and ten mutations across two
+  iterations turned the suite red before it was trusted. `openbiz inspect` reports both against a
+  real store.
+- **~~What is not~~:** ~~B.4 — `skosxl:labelRelation`, S59–S62 — is not read.~~ **Closed at
+  iteration 23** (`adr/0022`). All four statements are applied: a literal under S59, both ends
+  entailed as `skosxl:Label` under S60 and S61, and the symmetric closure under S62 with the
+  converse carrying its origin. What is *left* of the gap is narrower and is its own entry below,
+  because it is about `rdfs:subPropertyOf` and not about B.4.
+  **Still not applied**, and this half is not closed: S47 (`skosxl:Label` is an `owl:Class`) and
+  S52's *sub-class* reading — the cardinality restriction is checked as a count, not modelled as
+  a class expression, so nothing would notice a graph that restated the restriction incorrectly.
+- **Opened:** iteration 22. **Partly closed:** iteration 23 — B.4 is in; S47 and S52's sub-class
+  reading remain.
+
+### A refinement of `skosxl:labelRelation` reaches nothing, because we read no `rdfs:subPropertyOf`
+- **Kind:** partial-standard
+- **What is proven:** the *unsafe* inference is not made, and a test asserts it. Appendix B.4.4.1
+  warns that "a sub-property of a symmetric property is not necessarily symmetric", so Example
+  89's `ex:acronym` must never be closed — "FAO" is an acronym for "Food and Agriculture
+  Organization" and the converse is false. The Example 89 test states the `rdfs:subPropertyOf`
+  axiom, uses the refined property, and asserts that no `ex:acronym` statement is invented in
+  either direction.
+- **What is not:** the **sound** inference is not made either. `<B> ex:acronym <A>` entails
+  `<B> skosxl:labelRelation <A>` under RDFS, which S62 then closes to `<A> skosxl:labelRelation
+  <B>` — the super-property is symmetric even though the refinement is not. We make neither step,
+  because this crate reads no `rdfs:subPropertyOf` anywhere. **B.4.1 says the property "is not
+  intended to be used directly, but rather as an extension point"**, so a refinement is the
+  *ordinary* way B.4 is used, not the exotic one — which makes this gap larger than the four
+  statements suggest. A thesaurus whose ISO 25964 label relationships are expressed through
+  `ex:acronym` and its siblings reads to us as a thesaurus with no label relationships at all, and
+  reports "0 links" rather than "links we did not understand". That is the same shape as a
+  silently broken discovery connector, which `CLAUDE.md` §8 of the driver calls out by name.
+- **How to tell:** `openbiz inspect` omits the link line entirely for such a vocabulary. There is
+  no signal distinguishing "no links" from "links expressed in a vocabulary we do not read".
+- **What would close it:** RDFS sub-property reasoning, which is not a Phase 2 item and does not
+  belong in `openbiz-skos` as a special case for one property. The honest home for it is the
+  reasoner (`openbiz-owl`, Phase 5) or a SHACL rule pack (Phase 4). Raised in `docs/PROPOSED.md`
+  rather than taken, because deciding where entailment lives is exactly the standing question
+  iterations 18, 20, 21 and 22 kept ending on.
+- **Opened:** iteration 23
 
 ### An entailed label is in our answers and not in our exports
 - **Kind:** partial-coverage

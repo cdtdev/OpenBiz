@@ -1693,3 +1693,77 @@ look competent disables the one signal that catches a stuck loop.
   than reaching for another test-harness fix — `Arc::into_inner` refusing after the drain is a
   real possibility under a loaded runner, and it would be a product defect wearing a flaky test's
   clothes.
+
+## Iteration 23 — 2026-08-18
+- **Item:** `skosxl:labelRelation` — SKOS Reference Appendix B.4, statements S59–S62. The last
+  unbuilt piece of SKOS-XL, split out of iteration 22's item and taken as the next unchecked one.
+  `main` was checked first, as iteration 22a asked: the most recent CI run on `main` is `success`,
+  so the `SIGTERM` test did not fail a third time. That is **one clean run, not a verdict** — the
+  observed rate was two in four and two fixes landed between; the doubt below is still live.
+- **Four statements, and the interesting one is not S62.** S59 (object property) reuses the
+  finding S3 and S30 already raise for a literal on `skos:member`. S62 (symmetric) is the one that
+  looks like the work, and it is four lines. The one that earns its place is **S60/S61** — the
+  domain and range — because on their own they report nothing at all. What they do is make a
+  mistake *visible*: a `skosxl:labelRelation` pointing at a `skos:Concept` entails that the concept
+  is also a `skosxl:Label`, and **S48** then catches it as a disjointness violation. Without them
+  the same graph reads as clean, since nothing else in it types the concept as a label. A domain
+  rule that entails nothing anybody asked for is exactly the kind of thing it is tempting to quote
+  and not apply, and this is the case that shows why you apply it.
+- **The trap Appendix B leaves for you is its last sentence.** B.4.4.1: "Note that a sub-property
+  of a symmetric property is not necessarily symmetric." Example 89 refines the property to
+  `ex:acronym` — "FAO" is an acronym for "Food and Agriculture Organization", and the converse is
+  false. So a build that generalised "labelRelation is symmetric" to its refinements would state
+  something untrue about a customer's thesaurus. We read no `rdfs:subPropertyOf` at all, so the
+  refinement is invisible rather than mis-inferred, and Example 89 is a test that asserts both
+  halves: nothing is invented in either direction.
+- **And the honest half of that is what I could not close, so I raised it.** The *sound*
+  inference — `<B> ex:acronym <A>` entails `<B> skosxl:labelRelation <A>`, which S62 then closes —
+  we do not make either. B.4.1 says the property "is not intended to be used directly, but rather
+  as an extension point", so **a refinement is the ordinary use of B.4, not the exotic one**: an
+  ISO 25964 thesaurus expresses its label relationships that way, and reads to us as a thesaurus
+  with no label relationships at all, reporting nothing rather than "links I do not understand".
+  That is a bigger gap than four statements suggest. The fix is RDFS sub-property reasoning, which
+  does not belong as a hard-coded arm in `openbiz-skos` — it is the reasoner's job or a SHACL rule
+  pack's — so it went to `PROPOSED.md` and `UNTESTED.md` rather than into the crate. Closing it
+  quickly would have put an inference path somewhere it will have to be moved from.
+- **Two decisions that were mine and are written down as mine.** Appendix B still states no
+  integrity conditions — B.4.2, like B.2.2 and B.3.2, is headed "Class and Property Definitions" —
+  so `adr/0022` carries the severity table again, one row per case, saying whose judgement each is.
+  The row I thought hardest about is the one that reports **nothing**: a label linked to *itself*.
+  It is almost certainly an authoring mistake and it would have been easy to flag, but
+  `owl:SymmetricProperty` says nothing against a reflexive pair, and inventing an integrity
+  condition the specification does not state is the failure `COMPETITIVE.md` records against the
+  incumbents. If it matters it belongs in a Phase 4 rule pack a customer can switch off.
+- **A counting decision that a mutation caught.** The report says "1 link(s), 1 converse(s)
+  inferred", not "2". S62 closes every link into a pair, so summing the relations each resource
+  holds reports twice what the author wrote — a vocabulary with twice the structure it has. The
+  mutation that counts ordered pairs turns the end-to-end test red, which is the only reason I
+  trust the line.
+- **Tests: 446 Rust (from 432) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny` and the
+  UI untouched. Eleven unit and three end-to-end, two of them the appendix's own numbered examples
+  — 88 asserted consistent and closing, 89 asserted consistent and **not** closing. The suite was
+  proven to discriminate before it was trusted: five mutations each turned it red — the S62 closure
+  disabled (3 failures), S60/S61 not entailing (3), the already-stated guard removed so an asserted
+  link is restated as an inference (2), `skosxl:labelRelation` not read at all, which is precisely
+  the iteration-22 behaviour (9), and links counted as ordered pairs (1).
+- **Recorded:** `adr/0022`. One `UNTESTED.md` entry struck through in part and one opened; one
+  `PROPOSED.md` entry opened and one amended without raising its urgency, because a third instance
+  of an argument already made twice is evidence and not a new case. Iteration 22's build-plan note
+  claiming S59–S62 "are not read at all" was amended rather than left standing as a false current
+  claim.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T22:57Z. Checked
+  before writing this header, per iterations 16–18 and 20–22.
+- **Still uncertain:** whether applying a domain or range rule that entails a class **nobody
+  wanted** is right, now that I have seen what it does downstream. S60 turns one mistyped link into
+  *two* findings — a disjointness violation under S48, and separately "this label has no literal
+  form" under S52, because the concept is now a label and labels are supposed to have forms. Both
+  are true, both cite a real statement, and I asserted the pair deliberately rather than
+  suppressing the second. But it is the first time a single authoring error has fanned out into
+  findings about a rule the author never engaged with, and the fan-out grows with every domain and
+  range rule Phase 2 still has to add — semantic relations, mapping properties, and the
+  documentation properties are all domain-and-range-shaped. Three more items down that road, one
+  typo in a large import could produce a findings list nobody reads. There is a real design
+  question underneath — whether findings should be grouped by *cause* rather than listed by rule —
+  and I have not raised it as a proposal because two findings is not yet a problem, which is
+  exactly the reasoning that would justify never raising it. If the next iteration that touches a
+  domain rule sees the same fan-out, it should stop treating it as a curiosity.
