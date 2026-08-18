@@ -1070,3 +1070,79 @@ look competent disables the one signal that catches a stuck loop.
   write batch is proportional to the *quads* or to their *encoded size*, because that decides
   whether the ceiling is a number I can predict from a file's line count — which is what a restore
   would need in order to refuse a file it cannot hold, instead of dying part way through.
+
+## Iteration 15 — 2026-08-18
+- **Took no plan item.** The orientation check found something the plan could not see: **PR #17 from
+  iteration 14 was still open**, with three of four required checks green and `Single binary` sitting
+  in `in_progress`. Iteration 14 did all the work, committed it, pushed it, and ended without
+  landing it — so the branch existed, `main` did not have it, and the plan had already been updated
+  to say the item was done. That combination is the worst shape available: the ledgers claimed a
+  capability `main` did not contain. Landing it was this iteration's item.
+- **I got the diagnosis right and the reasoning wrong, and the wrong half nearly cost the run.** The
+  environment's `currentDate` says 2026-08-19; the run was created `2026-08-18T15:45:50Z`. I read
+  that as a job hung for over 24 hours, concluded it was orphaned, and cancelled it. Then I checked
+  the clock against GitHub's `Date` header: both say **2026-08-18T16:35Z**. The job was about thirty
+  minutes old, and I had cancelled a legitimately-running build — twice, because I re-ran and
+  cancelled again. What rescued the conclusion was measuring instead of arguing: `Single binary`
+  has completed in **54–84 s across the last eight successful runs**, so thirty minutes in that job
+  is 25× its own history, and the per-step API showed it parked in `apt-get update`. The stall was
+  real. My stated reason for believing it was not. **`currentDate` is not evidence; the clock is** —
+  and iteration 14's own header carries the same off-by-one date, so this has now happened twice
+  without being noticed.
+- **The defect is a class of failure worth naming, not just a slow step.** Both `Rust` and
+  `Single binary` ran `sudo apt-get update && sudo apt-get install -y clang libclang-dev` unbounded.
+  Those are **required contexts** under `main-protection`. A required check that fails is a red a
+  human can read; a required check that never reports is indistinguishable from one still working,
+  and branch protection blocks the merge forever with nothing to diagnose. The loop's driver prompt
+  already warns that `no checks reported` reads as red when it is not — this is the mirror image, and
+  the more dangerous one: **pending forever reads as fine.** Iteration 14 walked straight into it.
+- **The fix, in order of how much it carries.** `timeout-minutes` on all four jobs — 45 for `Rust`
+  and `Single binary`, sized for a cold RocksDB-from-source build rather than the ~1 min warm case,
+  15 for the other two. That is the load-bearing change and it is three lines: it converts a hang
+  into a failure. Then a 6-minute timeout on the toolchain step so this stall is named where it
+  happens. Then the step verifies before installing — `ubuntu-latest` already ships the toolchain, so
+  the common path no longer touches the network at all.
+- **Kept `adr/0006`'s intent rather than trading it away for speed.** That ADR put the install there
+  so a base-image change reads as "the toolchain is missing" and not as a `bindgen` panic several
+  steps later with no named cause. Skipping the install could have quietly discarded that. So the
+  step still **asserts** the toolchain is present at the end and exits with a named `::error::` if it
+  is not — the guarantee is unchanged, and what went away is paying an unbounded network call on
+  every run to get it. Verified in the run log, not inferred: both jobs printed
+  `already present on the runner image; skipping apt` and then `Ubuntu clang version 18.1.3`, and
+  the step went from a >30 min stall to **2 seconds**.
+- **Tests:** the detection function was exercised locally in all three states — no clang; **clang
+  present but `libclang` absent**; both present — because the middle one is exactly the state that
+  produces the mystery panic, and a detector that got it wrong would reintroduce the bug it exists to
+  prevent. Also checked that it does not trip `set -e`, that both jobs generate a byte-identical step
+  (`diff`), and that the YAML parses. Independently of CI, the merged branch was verified in full on
+  this machine: **260 Rust tests, 29 UI tests**, `fmt`, `clippy -D warnings`, `cargo deny`, and the
+  UI build all green — which is how I knew the branch was healthy and the stall was infrastructure
+  before touching the workflow. All four checks then passed on the real run and PR #17 is **merged**;
+  `main` is green, the tree is clean, and there are **no open PRs**.
+- **A note for whoever hits `bindgen` next:** this machine still has no system `clang` and no
+  passwordless `sudo`. `cargo test` failed at `bindgen` on my first command and the `UNTESTED.md`
+  entry from iteration 3 had the exact two-variable incantation. Reading the ledger cost a minute;
+  re-deriving it cost iteration 4 much more. The entry earns its keep — leave it there.
+- **Recorded:** one `UNTESTED.md` entry, and it is the uncomfortable one — **the apt branch never
+  executes in CI**, because detection short-circuits on `ubuntu-latest`. The retry, the `::error::`,
+  and the post-install assertion are all unexercised by any real run, and no build has hit either
+  timeout, so what a timeout *reports* is taken from GitHub's documentation rather than observed. No
+  ADR: bounding a network call is a reliability fix, not an architectural decision, and inflating it
+  into one would dilute the directory.
+- **Still uncertain:** whether I have fixed the failure mode or only the instance of it. The apt
+  stall is one unbounded external dependency in a required check; the same run also calls
+  `actions/checkout`, `Swatinem/rust-cache`, `actions/setup-node`, `taiki-e/install-action`, `npm ci`,
+  and the crates.io registry, **every one of which is a network call I have now bounded only by the
+  45-minute job backstop**. A stalled npm registry produces precisely the symptom I just spent this
+  iteration diagnosing, and it would present as a *different* mystery. So the honest position is that
+  the job timeouts genuinely cover the class — nothing can now hang forever — while the readable
+  per-step diagnosis covers exactly the one case that happened to bite. The narrower thing I do not
+  know: whether a job killed by `timeout-minutes` reports as `failure` or as `cancelled`. Either way
+  it is not `success`, so the merge stays blocked and — the part that actually matters — the check
+  **settles instead of hanging**, so `gh pr checks --watch` returns and a future iteration finds a
+  finished check rather than an eternal spinner. That much holds on any labelling. What I cannot say
+  is how legible the failure is: whether it arrives with a readable "timed out" cause or as a bare
+  `cancelled` that looks exactly like the two cancellations *I* issued earlier this iteration, which
+  would be a genuinely confusing thing to hand the next iteration. That is one deliberate
+  `workflow_dispatch` away from being a fact and I did not run it — it needs a commit that
+  intentionally times out, and I judged landing PR #17 the more urgent half of the iteration.

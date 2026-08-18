@@ -55,6 +55,14 @@ over. **This also gave the N-Quads parser its first production caller**, which i
 into an empty one is not an import. **The three items above remain refused rather than skipped**,
 for the reasons iterations 11 and 12 recorded and this one re-checked.
 
+**Iteration 15 took no plan item.** Iteration 14 built, tested, and pushed backup/restore but ended
+without merging it, so PR #17 sat open with a required check wedged in an unbounded `apt-get` and
+`main` did not contain the capability this plan already described as done. Iteration 15 bounded
+CI's toolchain install and every job with `timeout-minutes` — so a stalled network call now fails
+the check instead of leaving it pending forever, which branch protection cannot distinguish from
+still-running — and then landed PR #17. The item count above is unchanged; what changed is that it
+is now true of `main`. **Next up is the parsing item.**
+
 **Next: the store-format migration framework**, which is the last unchecked item of Phase 1 and
 now has a concrete first customer: a restore reads a format stamp out of a file on a customer's
 disk and currently *refuses* an older one, because migrating it is not implemented. That refusal is
