@@ -60,6 +60,14 @@ EL and RL, which covers the large majority of enterprise ontologies — SNOMED C
 Ontology are both EL — but is a real gap against Protégé with HermiT for expressively DL
 ontologies. We would rather say so here than have you discover it during an evaluation.
 
+**Also stated plainly:** SPARQL **Federated Query** (`SERVICE`) is listed above as a conformance
+target and is **deliberately not compiled in today**. The store is built with the embedded engine's
+HTTP client disabled, so the binary carries no code path that can open an outbound connection —
+which is what makes the air-gapped claim structural rather than a promise. Federation will return
+with an explicit, per-deployment egress control, the same shape the LLM providers get. Everything
+else in that list is a target tracked in [`docs/BUILD-PLAN.md`](docs/BUILD-PLAN.md), not a claim;
+see [`docs/adr/0006`](docs/adr/0006-embedded-store.md).
+
 ## Architecture
 
 Rust backend (Axum) with an **embedded Oxigraph** RDF store. React + TypeScript frontend, compiled
