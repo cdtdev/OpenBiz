@@ -218,6 +218,30 @@ impl GraphId {
         }
     }
 
+    /// Work out what kind of graph an IRI names, from the IRI alone.
+    ///
+    /// The registry says what kind a graph *was registered as*; this says what kind an IRI *may*
+    /// be. They are different questions and the restore path needs the second one: a backup
+    /// arrives as a stream of quads whose graph names have to be judged before anything has been
+    /// written, and long before the registry inside that same file has been read back.
+    ///
+    /// The classification is total and follows the same invariants as the constructors —
+    /// [`SYSTEM_GRAPH_IRI`] is the system graph, anything under [`INFERRED_GRAPH_PREFIX`] is
+    /// inferred, anything else is a vocabulary — so an IRI that is inside
+    /// [`OPENBIZ_NAMESPACE`] but is neither of the two forms we define is
+    /// [`GraphIdError::Reserved`] rather than being quietly adopted as a vocabulary. A file that
+    /// invents `urn:openbiz:graph:whatever` is a file written against a different build, and
+    /// guessing what it meant is how a restore silently produces a store nobody can explain.
+    pub(crate) fn classify(iri: &str) -> Result<Self, GraphIdError> {
+        if iri == SYSTEM_GRAPH_IRI {
+            return Ok(Self::system());
+        }
+        if iri.starts_with(INFERRED_GRAPH_PREFIX) {
+            return Self::from_registry(iri.to_owned(), GraphKind::Inferred);
+        }
+        Self::vocabulary(iri.to_owned())
+    }
+
     /// The graph's IRI.
     pub fn iri(&self) -> &str {
         &self.iri
