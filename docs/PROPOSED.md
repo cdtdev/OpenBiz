@@ -28,6 +28,53 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 
 ## Open proposals
 
+### Decide how long a decided candidate's evidence is kept
+- **Status:** proposed.
+- **Gap:** an approved candidate's staged statements are kept forever, and so are a rejected one's.
+  That is the deliberate conservative default — deleting the evidence of what was approved is not a
+  choice a governance product should make silently — but it means an approved import is stored
+  **twice**, permanently, and a deployment doing a monthly bulk import grows its store without bound
+  for reasons nobody explained to them. There is no policy, no configuration, and no pruning.
+- **Why load-bearing:** *how long to keep the evidence* is a compliance question with a different
+  answer in pharma, finance, and a research library, and the loop should not invent one. What is
+  needed is a decision — keep forever, keep for N years, keep the record but drop the payload after
+  approval, or let the deployment choose — and then a small amount of code. Without it the honest
+  position is the one in `UNTESTED.md`: the default is safe and the cost is unbounded.
+- **Cost & impact:** one iteration once the policy is chosen. Storage impact is proportional to
+  import volume; no runtime cost on any read path.
+- **Suggested phase:** Phase 6 (governance & workflow), where retention sits beside the rest of the
+  audit model.
+
+### LLM assistance opportunities — the candidate seam is where they all arrive
+- **Status:** proposed. Recorded under the product owner's standing instruction
+  (`FEEDBACK-LOG.md`, 2026-08-18) to note assistance opportunities as they are discovered, **not** a
+  request to pull Phase 10 forward.
+- **Gap:** three concrete user problems surfaced while building the seam, and each is now a
+  `CandidateSource` away from being buildable rather than a redesign away.
+  1. **An import arrives with no idea what it is.** `openbiz import` proposes five statements and
+     tells a reviewer nothing about whether they duplicate concepts the vocabulary already has,
+     contradict its existing labels, or introduce a second preferred label in a language. A reviewer
+     facing a 10 000-statement import has no realistic way to check by hand, so they will approve it.
+     An assistant that reads the staged graph against the target and *annotates the candidate* —
+     "42 of these concepts already exist under different IRIs" — is the difference between a review
+     and a rubber stamp. It writes nothing; it adds to the record a human is already reading.
+  2. **The mandatory note is the weakest field in the record.** `openbiz import` fills it with
+     "imported from animals.ttl as Turtle", which is provenance rather than intent. For a
+     human-raised candidate the note is the one thing an auditor will actually read in five years,
+     and people write "update" in it. Drafting a note *from the diff* — with the human free to
+     reject or rewrite it — is a small, high-frequency editorial task with a manual path already in
+     place.
+  3. **Rejections teach nothing.** A rejected candidate records who and when but not *why*, so the
+     same bad import arrives again next month. Summarising what a vocabulary's reviewers keep
+     refusing, across hundreds of candidates, is exactly the recall-across-thousands-of-records
+     judgement no human does well and no report answers.
+- **Why load-bearing:** not load-bearing now, by design. The point of recording it is that Phase
+  10's agent list should reflect what was learned building Phases 1–9. All three sit behind the
+  existing seam and none of them writes to a vocabulary.
+- **Cost & impact:** none until Phase 10. Each is one agent emitting an annotation on an existing
+  record.
+- **Suggested phase:** Phase 10.
+
 ### Add a UI test runner before Phase 3 begins
 - **Status:** promoted (→ Phase 0) · **done, iteration 4.**
 - **Gap:** `ui/package.json` has no `test` script, so there is no UI test runner at all. The

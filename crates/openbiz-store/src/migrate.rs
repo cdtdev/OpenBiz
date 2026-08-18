@@ -113,7 +113,7 @@ fn produces(migration: &dyn Migration) -> u32 {
 /// The invariant — checked by [`plan`] at runtime and by a test at build time — is that the
 /// versions form an unbroken run from 1 up to [`FORMAT_VERSION`]. Adding a migration and bumping
 /// `FORMAT_VERSION` are one change; either alone is a bug the chain check catches.
-static MIGRATIONS: &[&dyn Migration] = &[&RegisterSystemGraph];
+static MIGRATIONS: &[&dyn Migration] = &[&RegisterSystemGraph, &AllowCandidateGraphs];
 
 /// 1 → 2: the system graph is listed in the graph registry.
 ///
@@ -144,6 +144,48 @@ impl Migration for RegisterSystemGraph {
 
     fn apply(&self, transaction: &mut Transaction<'_>) -> Result<(), StoreError> {
         transaction.ensure_registered(&GraphId::system())?;
+        Ok(())
+    }
+}
+
+/// 2 → 3: the registry may hold graphs of kind `candidate`.
+///
+/// This is the first migration that **changes nothing on disk**, and that is worth stating rather
+/// than hiding, because iteration 16 set the rule it appears to break: a version that records no
+/// real difference teaches the next reader that versions are decorative.
+///
+/// The difference is real; it is just additive. Format version 3 introduced the candidate seam,
+/// whose staging graphs are registered under a fourth [`crate::GraphKind`]. Every version-2 store
+/// is already a valid version-3 store — there is nothing to bring forward — but a version-3 store
+/// is **not** readable by a build that predates the seam: it reads `candidate` out of the
+/// registry, finds a kind it does not know, and reports the whole registry as corrupt metadata.
+/// That is the right refusal for the wrong reason, and it sends an operator who has merely
+/// downgraded off to disaster recovery.
+///
+/// So the version exists to move that refusal to where it belongs: an older build sees a stamp
+/// from the future and says *upgrade*. The invariant version 3 records is that every graph kind
+/// and every system-graph record in the store is one a build with the candidate seam understands.
+/// A migration that writes nothing is the honest implementation of an invariant that was already
+/// satisfied — the alternative, inventing a write so the step looks substantial, is the thing that
+/// would actually teach the wrong lesson.
+struct AllowCandidateGraphs;
+
+impl Migration for AllowCandidateGraphs {
+    fn id(&self) -> &'static str {
+        "0003-allow-candidate-graphs"
+    }
+
+    fn applies_at(&self) -> u32 {
+        2
+    }
+
+    fn describe(&self) -> &'static str {
+        "recorded that this store may hold candidate graphs and candidate records, which nothing \
+         on disk needed changing for; the version exists so a build without the candidate seam \
+         refuses the store as too new rather than reporting its registry as corrupt"
+    }
+
+    fn apply(&self, _transaction: &mut Transaction<'_>) -> Result<(), StoreError> {
         Ok(())
     }
 }

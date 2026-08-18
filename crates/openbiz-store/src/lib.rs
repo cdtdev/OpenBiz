@@ -40,6 +40,7 @@ use oxigraph::store::Store as Backend;
 use thiserror::Error;
 
 mod backup;
+mod candidate;
 mod graph;
 /// How a store written by an older OpenBiz becomes one this build reads: the migration chain, the
 /// records it leaves behind, and why it refuses rather than skips. See the module documentation.
@@ -67,13 +68,17 @@ mod scale;
 mod literal_precision;
 
 pub use backup::{BackupReport, RestoreReport, BACKUP_SYNTAX};
+pub use candidate::{
+    Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, Provenance,
+};
 pub use migrate::{Migration, MigrationReport, MigrationStep};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;
 
 pub use graph::{
-    GraphId, GraphIdError, GraphKind, INFERRED_GRAPH_PREFIX, OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
+    GraphId, GraphIdError, GraphKind, CANDIDATE_GRAPH_PREFIX, INFERRED_GRAPH_PREFIX,
+    OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
 };
 
 /// Subdirectory of the configured data directory that holds the RDF store.
@@ -92,7 +97,12 @@ pub const STORE_SUBDIR: &str = "store";
 ///
 /// **2** — the system graph is guaranteed to be in the graph registry. Version 1 stamped stores
 /// written before the registry existed.
-pub const FORMAT_VERSION: u32 = 2;
+///
+/// **3** — the registry may hold graphs of kind `candidate`, staging the statements of a proposed
+/// change, and the system graph may hold the records that describe them. Additive: a version-2
+/// store needed nothing done to it. The version exists so a build without the candidate seam
+/// refuses the store rather than reporting a graph kind it does not know as corrupt metadata.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Subject describing the store itself, within the system graph.
 const STORE_IRI: &str = "urn:openbiz:store";
@@ -364,6 +374,85 @@ pub enum StoreError {
         #[source]
         source: std::io::Error,
     },
+    /// The provenance offered with a candidate would not let a reviewer judge it.
+    #[error("that change cannot be proposed: {detail}")]
+    CandidateProvenance {
+        /// What was missing or wrong, and why it matters.
+        detail: String,
+    },
+
+    /// A change was proposed against a graph that is not a vocabulary.
+    #[error(
+        "{iri} is a {kind} graph, and a change is proposed against a vocabulary; OpenBiz's own \
+         graphs are not authored"
+    )]
+    CandidateTargetNotVocabulary {
+        /// The graph that was named.
+        iri: String,
+        /// What it actually is.
+        kind: GraphKind,
+    },
+
+    /// The file being imported would not parse.
+    #[error("the file is not valid {syntax}{}: {detail}", match line {
+        Some(line) => format!(" (line {line})"),
+        None => String::new(),
+    })]
+    ImportSyntax {
+        /// The syntax the file was read as.
+        syntax: RdfSyntax,
+        /// Which line the parser stopped on, counted from one, when it says.
+        line: Option<u64>,
+        /// The parser's complaint, in its own words.
+        detail: String,
+    },
+
+    /// The file being imported could not be read.
+    #[error("the file being imported could not be read: {source}")]
+    ImportRead {
+        /// What the reader reported.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The file names a graph other than the one being imported into.
+    #[error(
+        "the file has statements in graph {found}, and this import targets {target}; an import \
+         goes to one vocabulary, so name that vocabulary or remove the graph names from the file"
+    )]
+    ImportGraphMismatch {
+        /// The graph the file named.
+        found: String,
+        /// The graph the import was aimed at.
+        target: String,
+    },
+
+    /// The file being imported held no statements at all.
+    #[error(
+        "the file has no statements when read as {syntax}, so there is nothing to propose; the \
+         likeliest cause is that it is in a different syntax from the one named"
+    )]
+    ImportEmpty {
+        /// The syntax the file was read as.
+        syntax: RdfSyntax,
+    },
+
+    /// No candidate has ever carried that identifier.
+    #[error("no candidate {id} exists")]
+    NoSuchCandidate {
+        /// The identifier that was asked for.
+        id: String,
+    },
+
+    /// The candidate has already been approved or rejected.
+    #[error("candidate {id} was already {state}, and a decision is taken once")]
+    CandidateDecided {
+        /// The identifier that was asked for.
+        id: String,
+        /// The state it is already in.
+        state: CandidateState,
+    },
+
     /// The backend failed.
     #[error("store backend failed: {0}")]
     Backend(String),
@@ -965,7 +1054,37 @@ impl Transaction<'_> {
             })
             .collect();
 
-        self.inner.extend(&quads);
+        self.extend_graph(graph, &quads)
+    }
+
+    /// The same choke point, for quads that already exist rather than triples being composed.
+    ///
+    /// [`Transaction::insert`] builds statements out of parts, which is what OpenBiz's own
+    /// bookkeeping does. An import, a discovery match, and an agent proposal all arrive as
+    /// *whole quads* that were parsed or matched elsewhere, and forcing them back through a
+    /// triple-shaped signature would mean either dropping their blank-node subjects or
+    /// reassembling them field by field.
+    ///
+    /// It enforces the same two rules and one more that only applies here. The graph must be
+    /// directly writable, nothing is ever written to the default graph, and **every quad must
+    /// already name the graph it is being written to** — a caller that hands over a quad naming
+    /// somewhere else is one whose statements would land outside the graph it believes it is
+    /// writing, which for an import means content in a vocabulary nobody chose.
+    fn extend_graph(&mut self, graph: &GraphId, quads: &[Quad]) -> Result<(), StoreError> {
+        if !graph.is_directly_writable() {
+            return Err(StoreError::NotWritable(graph.iri().to_owned()));
+        }
+
+        for quad in quads {
+            let GraphName::NamedNode(name) = &quad.graph_name else {
+                return Err(StoreError::NotWritable(quad.graph_name.to_string()));
+            };
+            if name.as_str() != graph.iri() {
+                return Err(StoreError::NotWritable(name.as_str().to_owned()));
+            }
+        }
+
+        self.inner.extend(quads);
 
         Ok(())
     }
@@ -982,6 +1101,14 @@ trait RegistryReader {
         subject: Option<NamedNodeRef<'_>>,
         predicate: NamedNodeRef<'_>,
     ) -> Result<Vec<Quad>, StoreError>;
+
+    /// Every quad in the system graph about `subject`, whatever its predicate.
+    ///
+    /// The registry asks about one predicate at a time because it is looking for one fact. A
+    /// record with a dozen fields — a candidate's — is read whole, because reading it a predicate
+    /// at a time turns one lookup into a dozen and makes "this record has a field we do not know
+    /// about" unanswerable.
+    fn system_subject_quads(&self, subject: NamedNodeRef<'_>) -> Result<Vec<Quad>, StoreError>;
 }
 
 impl RegistryReader for Backend {
@@ -999,6 +1126,17 @@ impl RegistryReader for Backend {
         .map(|quad| quad.map_err(|error| StoreError::Backend(error.to_string())))
         .collect()
     }
+
+    fn system_subject_quads(&self, subject: NamedNodeRef<'_>) -> Result<Vec<Quad>, StoreError> {
+        self.quads_for_pattern(
+            Some(subject.into()),
+            None,
+            None,
+            Some(named_node(SYSTEM_GRAPH_IRI).into()),
+        )
+        .map(|quad| quad.map_err(|error| StoreError::Backend(error.to_string())))
+        .collect()
+    }
 }
 
 impl RegistryReader for oxigraph::store::Transaction<'_> {
@@ -1010,6 +1148,17 @@ impl RegistryReader for oxigraph::store::Transaction<'_> {
         self.quads_for_pattern(
             subject.map(Into::into),
             Some(predicate),
+            None,
+            Some(named_node(SYSTEM_GRAPH_IRI).into()),
+        )
+        .map(|quad| quad.map_err(|error| StoreError::Backend(error.to_string())))
+        .collect()
+    }
+
+    fn system_subject_quads(&self, subject: NamedNodeRef<'_>) -> Result<Vec<Quad>, StoreError> {
+        self.quads_for_pattern(
+            Some(subject.into()),
+            None,
             None,
             Some(named_node(SYSTEM_GRAPH_IRI).into()),
         )
@@ -1225,8 +1374,8 @@ mod tests {
                 .iter()
                 .map(|step| step.id)
                 .collect::<Vec<_>>(),
-            vec!["0002-register-system-graph"],
-            "the report must name the step that ran, not just that something did"
+            vec!["0002-register-system-graph", "0003-allow-candidate-graphs"],
+            "the report must name every step that ran, not just that something did"
         );
         assert!(
             report.to_string().contains("registered the system graph"),

@@ -1226,3 +1226,87 @@ look competent disables the one signal that catches a stuck loop.
   the chain has a gap — is an instruction anyone can actually follow, because that depends on
   whether old builds remain obtainable, and that is a distribution question `CLAUDE.md` §8 puts
   outside the loop.
+
+## Iteration 17 — 2026-08-18
+- **Took Phase 2's candidate seam**, which is the dependency the whole phase is ordered around and
+  which three Phase 1 items had been deferred on since iteration 8. `main` was green and clean, both
+  human inboxes were empty, and there were no open PRs.
+- **Split it in three and did the first**, because the item as written is three items with different
+  blockers and bundling them would have held the seam back behind one that has nothing to do with
+  it. Part 1 is additions; part 2 is removals, which is unblocked and next; part 3 is the HTTP and
+  UI half, which waits on authentication that does not exist.
+- **The design decision that paid for itself repeatedly: a proposal's payload is a named graph, not
+  a blob.** The cheap implementation is a record in the system graph carrying the proposed
+  statements as a literal chunk of Turtle. It is less code and it makes the proposed statements
+  opaque to every tool in the product — a reviewer could not export them, query them, or diff them,
+  and the interface would need a parser before it could show anything but text. Staging them as
+  quads in `urn:openbiz:graph:candidate:<id>` instead means `GET /api/export` already serialises a
+  pending change into any of the six syntaxes, `FROM <urn:openbiz:graph:candidate:7>` already
+  queries it, and — the part that matters most — **approval is a copy between two graphs inside one
+  transaction**, so half-applied is not a state that exists. `openbiz candidate 7` prints the diff
+  through the same export call a runbook would use, which is what stops it being a screen that has
+  to exist for the purpose.
+- **The seam forced a fourth graph kind, and the exhaustive match caught it exactly where it was
+  designed to.** `openbiz-api::GraphKind` is a separate type from the store's precisely so that
+  adding a kind fails the build until somebody decides what it is called on the wire. It did. That
+  comment was written in iteration 5 and this is the first time it fired; it was worth the
+  duplication.
+- **Format version 3 exists although its migration writes nothing, and that is the call I am least
+  sure of.** Iteration 16 wrote down that "a version that records no real difference teaches the
+  next person that versions are decorative", so I did not do this lightly. The difference is real
+  and one-directional: a version-3 store may hold a graph kind a version-2 build cannot describe,
+  and without the stamp that build reports the whole registry as **corrupt** — a correct refusal by
+  a wrong route, which sends an operator who has merely downgraded off to disaster recovery. So the
+  version exists to move the refusal to "upgrade". Inventing a write to make the step look
+  substantial would have been the actual dishonesty. What I did instead is give the step that writes
+  nothing an end-to-end test of its own, from a hand-written version-2 backup through the real
+  binary, because a migration that rewrites nothing is exactly the one that can silently not run.
+- **A test from iteration 14 left instructions and they were right.** The backup fixture's version
+  assertion says, in the failure message, *"bumping the format means writing the fixture for the new
+  one and adding an older-format test beside it, not editing this number"*. I did both. Without that
+  message the cheap move — edit the 2 to a 3 — would have been invisible and would have silently
+  deleted the only end-to-end coverage of a real older-format file.
+- **Provenance is mandatory and the source is a closed token.** A candidate that cannot say who
+  raised it or why is refused at proposal, not discovered at review. The source being an enum rather
+  than free text is what makes "show me everything an assistant proposed" answerable — before there
+  is an assistant, which is the whole point of building the shape early. Confidence is optional
+  because it is only meaningful for a producer that computes one; a file import has none, and
+  stamping 1.0 on it would put a number a reviewer could sort by beside numbers that mean something.
+- **This closed Phase 1's RDF parsing item**, six iterations after it was split out. All six
+  syntaxes, round-tripped against the serialiser per syntax, with a real production caller. The
+  parser's only entry point is the seam, which is why it waited: there is no direct-write import to
+  retrofit later, and there is not going to be one.
+- **Tests: 302 Rust (from 273) and 30 UI (from 29)**, with `fmt`, `clippy -D warnings`, `cargo
+  deny`, and the UI build clean. The suite was proven to **discriminate** before it was trusted:
+  three mutations each turned it red — approval no longer copying the payload (4 tests), the
+  graph-name rule dropped so a quad file naming another vocabulary is silently flattened (1), and
+  blank-node renaming removed so two imports of one file merge into one node (1). End to end through
+  the real binary: a backup after the import shows **zero** statements in the vocabulary and five in
+  the staging graph, which is the claim the whole item rests on and the one I most wanted proven
+  against disk rather than against a transaction.
+- **Recorded:** `adr/0017`; six `UNTESTED.md` entries and one closed; two proposals, neither
+  self-promoted — a retention policy for candidate evidence, and three concrete LLM assistance
+  opportunities the seam surfaced (annotating an import against the target vocabulary, drafting the
+  mandatory note from the diff, and summarising what reviewers keep rejecting).
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T18:22Z. Checked
+  before writing this header rather than after, per iteration 16.
+- **Still uncertain:** whether "one shape for a CSV import, a discovery match, a bulk edit, and a
+  Phase 10 agent" is a shape or a guess. It is proven for exactly one of the four, and the one I
+  built is the *easiest* — an import arrives as a file of statements that are already RDF, already
+  additive, and already complete. The other three are not obviously the same shape. A discovery
+  match is a *pair* of concepts and a relation between them, and its natural payload is one triple
+  whose interest is entirely in the confidence and the two things it links. A bulk edit is N changes
+  a user thinks of as **one** decision — deprecate this subtree — and my model gives them either one
+  candidate whose payload is a heap of unrelated statements or N candidates to approve one at a
+  time, and neither is what they asked for. An agent proposal wants to explain its reasoning per
+  statement, and my record carries one note for the whole candidate. Each of those is a plausible
+  reason the shape is wrong, and I cannot tell which are real, because **the only way to find out is
+  to build the second producer** and the item that would do it is the removals split I deliberately
+  did not take this iteration. The narrower thing I do not know: whether removals fit at all. I
+  assumed a second staging graph would carry them, which is a five-line change — but a removal has to
+  name statements that *already exist* in the target, and a candidate raised on Monday against a
+  vocabulary edited on Tuesday may name statements that are gone by the time somebody approves it on
+  Wednesday. Applying it would then silently remove fewer statements than the reviewer agreed to,
+  and my apply path has no concept of a precondition. That is not a gap in the removals item; it is
+  a question about whether the seam's *apply* step is right, and I would rather find out now than
+  after three producers depend on it.

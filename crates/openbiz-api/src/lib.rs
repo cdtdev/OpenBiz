@@ -42,6 +42,8 @@ pub enum GraphKind {
     System,
     /// Materialised inferences, derived rather than asserted.
     Inferred,
+    /// The staged statements of a proposed change, not yet part of any vocabulary.
+    Candidate,
 }
 
 /// One entry in the graph registry.
@@ -179,6 +181,7 @@ mod tests {
             (GraphKind::Vocabulary, "\"vocabulary\""),
             (GraphKind::System, "\"system\""),
             (GraphKind::Inferred, "\"inferred\""),
+            (GraphKind::Candidate, "\"candidate\""),
         ] {
             assert_eq!(serde_json::to_string(&kind).expect("serialisable"), token);
             assert_eq!(

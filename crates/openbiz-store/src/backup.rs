@@ -815,7 +815,8 @@ mod tests {
                 .iter()
                 .map(|step| step.id)
                 .collect::<Vec<_>>(),
-            vec!["0002-register-system-graph"]
+            vec!["0002-register-system-graph", "0003-allow-candidate-graphs"],
+            "a version-1 backup runs the whole chain up to this build's format version"
         );
 
         // The content survived, and the store the migration produced is one we open again

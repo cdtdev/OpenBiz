@@ -19,6 +19,17 @@
 //! An *online* backup over HTTP, taken while the server runs, is a real capability and it is
 //! proposed rather than assumed (`docs/PROPOSED.md`).
 //!
+//! # Why import and review are commands too
+//!
+//! The same three reasons, and the second one differently. `openbiz import` proposes a change and
+//! `openbiz approve` applies one, so between them they can write to a customer's vocabulary —
+//! which is precisely why they are not endpoints yet. There is still no authentication, and an
+//! unauthenticated "apply this change to a vocabulary" is the objection that has SPARQL Update
+//! deferred. What is different from backup and restore is that these do **not** need the store to
+//! themselves in principle; they need it today only because the embedded store takes an exclusive
+//! lock. Putting the candidate seam behind HTTP is the next slice, and it lands with the
+//! authentication, not before it.
+//!
 //! # Why the parser is hand-written
 //!
 //! Four forms, no flags, no subcommand tree. `clap` would be a dependency and a build-time cost
@@ -31,7 +42,10 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use openbiz_store::{Store, StoreError, BACKUP_SYNTAX};
+use openbiz_store::{
+    Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, GraphId,
+    GraphIdError, Provenance, RdfSyntax, Store, StoreError, BACKUP_SYNTAX,
+};
 use thiserror::Error;
 
 /// What the operator asked `openbiz` to do.
@@ -49,6 +63,30 @@ pub enum Command {
         /// The backup to read.
         file: PathBuf,
     },
+    /// Propose the statements in a file as a change to a vocabulary. Nothing is written to it.
+    Import {
+        /// The IRI of the vocabulary graph the change is proposed against.
+        graph: String,
+        /// The RDF file to read.
+        file: PathBuf,
+    },
+    /// List every proposed change the store holds.
+    Candidates,
+    /// Show one proposed change, with the statements it would add.
+    Show {
+        /// The candidate's identifier.
+        id: String,
+    },
+    /// Apply a proposed change to its target vocabulary.
+    Approve {
+        /// The candidate's identifier.
+        id: String,
+    },
+    /// Refuse a proposed change. Its statements stay staged and the vocabulary is untouched.
+    Reject {
+        /// The candidate's identifier.
+        id: String,
+    },
     /// Print [`USAGE`] and exit successfully.
     Help,
 }
@@ -61,13 +99,24 @@ Usage:
   openbiz                    start the server
   openbiz backup <file>      write a backup of the store to <file>
   openbiz restore <file>     rebuild an empty store from a backup
+  openbiz import <graph> <file>
+                             propose the file's statements as a change to <graph>
+  openbiz candidates         list the proposed changes waiting for a decision
+  openbiz candidate <id>     show one proposed change and the statements it would add
+  openbiz approve <id>       apply a proposed change to its vocabulary
+  openbiz reject <id>        refuse a proposed change
   openbiz help               show this
 
 A backup is the whole store as N-Quads: every vocabulary and OpenBiz's own registry, in a
 W3C-standard syntax any conforming tool can read. Restore refuses a store that is not empty, so
 restore into a fresh data directory and point the server at that.
 
-Both commands need the store to themselves; stop the server first.
+An import never writes to a vocabulary. It reads the file — the syntax is taken from the file
+extension — stages the statements where you can read them, and records who proposed what and why.
+`openbiz approve` is what applies them, and it records who approved them. Approving and rejecting
+need a name to record: OPENBIZ_ACTOR if it is set, otherwise USER or LOGNAME.
+
+Every command needs the store to itself; stop the server first.
 
 The store's location comes from the same configuration the server uses:
   OPENBIZ_DATA_DIR, or data_dir in openbiz.toml.";
@@ -102,6 +151,14 @@ pub enum ArgsError {
         /// How many arguments were left over.
         extra: usize,
     },
+    /// A command that needs an argument was given none.
+    #[error("`openbiz {command}` needs {what}")]
+    MissingArgument {
+        /// The command that was named.
+        command: &'static str,
+        /// What was missing, phrased to complete the sentence above.
+        what: &'static str,
+    },
     /// An argument was not valid text.
     #[error("an argument is not valid Unicode, so it cannot be a command")]
     NotUnicode,
@@ -117,21 +174,53 @@ impl Command {
         };
         let first = first.into_string().map_err(|_| ArgsError::NotUnicode)?;
 
-        let command = match first.as_str() {
+        let (name, command) = match first.as_str() {
             "help" | "--help" | "-h" => return Self::no_more(Self::Help, "help", args),
-            "backup" => Self::Backup {
-                file: Self::one_file("backup", "write", &mut args)?,
-            },
-            "restore" => Self::Restore {
-                file: Self::one_file("restore", "read", &mut args)?,
-            },
+            "backup" => (
+                "backup",
+                Self::Backup {
+                    file: Self::one_file("backup", "write", &mut args)?,
+                },
+            ),
+            "restore" => (
+                "restore",
+                Self::Restore {
+                    file: Self::one_file("restore", "read", &mut args)?,
+                },
+            ),
+            "import" => (
+                "import",
+                Self::Import {
+                    graph: Self::text(
+                        "import",
+                        "the IRI of the vocabulary to propose against",
+                        &mut args,
+                    )?,
+                    file: Self::one_file("import", "read", &mut args)?,
+                },
+            ),
+            "candidates" => ("candidates", Self::Candidates),
+            "candidate" => (
+                "candidate",
+                Self::Show {
+                    id: Self::text("candidate", "a candidate to show", &mut args)?,
+                },
+            ),
+            "approve" => (
+                "approve",
+                Self::Approve {
+                    id: Self::text("approve", "a candidate to approve", &mut args)?,
+                },
+            ),
+            "reject" => (
+                "reject",
+                Self::Reject {
+                    id: Self::text("reject", "a candidate to reject", &mut args)?,
+                },
+            ),
             other => return Err(ArgsError::UnknownCommand(other.to_owned())),
         };
 
-        let name = match command {
-            Self::Backup { .. } => "backup",
-            _ => "restore",
-        };
         Self::no_more(command, name, args)
     }
 
@@ -144,6 +233,18 @@ impl Command {
         args.next()
             .map(PathBuf::from)
             .ok_or(ArgsError::MissingFile { command, verb })
+    }
+
+    /// Take a textual argument a command requires.
+    fn text(
+        command: &'static str,
+        what: &'static str,
+        args: &mut impl Iterator<Item = OsString>,
+    ) -> Result<String, ArgsError> {
+        args.next()
+            .ok_or(ArgsError::MissingArgument { command, what })?
+            .into_string()
+            .map_err(|_| ArgsError::NotUnicode)
     }
 
     /// Refuse anything left over rather than ignoring it.
@@ -199,9 +300,216 @@ pub enum CommandError {
         #[source]
         source: std::io::Error,
     },
+    /// The file's extension does not name a syntax we read.
+    #[error(
+        "the syntax of {} is taken from its extension, and {extension:?} is not one OpenBiz \
+         reads; rename it to one of: {known}",
+        path.display()
+    )]
+    UnknownSyntax {
+        /// The file that could not be classified.
+        path: PathBuf,
+        /// The extension it had, or the empty string if it had none.
+        extension: String,
+        /// The extensions we do read, for the message.
+        known: String,
+    },
+    /// A decision was asked for and nothing named who was taking it.
+    ///
+    /// Not a nuisance and not a placeholder: the store refuses an unattributed decision, because
+    /// an approval nobody can be traced to is the one record an audit cannot do without. Until
+    /// there is authentication, the command line's honest answer is to ask.
+    #[error(
+        "there is nobody to record as having taken this decision; set OPENBIZ_ACTOR to the person \
+         or system responsible, or run this where USER or LOGNAME is set"
+    )]
+    NoActor,
+    /// The graph IRI given on the command line is not one.
+    #[error(transparent)]
+    Graph(#[from] GraphIdError),
+    /// The candidate identifier given on the command line is not one.
+    #[error(transparent)]
+    CandidateId(#[from] CandidateIdError),
     /// The store refused the operation, or failed during it.
     #[error(transparent)]
     Store(#[from] StoreError),
+}
+
+/// Environment variable naming who is responsible for a decision taken on the command line.
+pub const ACTOR_VARIABLE: &str = "OPENBIZ_ACTOR";
+
+/// Propose the statements in `file` as a change to the vocabulary at `graph`.
+///
+/// Nothing reaches the vocabulary. The syntax comes from the file's extension — the same table
+/// `?format=` and `Accept` are resolved against, so what `openbiz export` writes is what this
+/// reads back — and an extension we do not know is refused rather than guessed at, because
+/// reading a file as the wrong syntax produces either a syntax error two hundred lines in or, far
+/// worse, a successful import of something else.
+pub fn import(store: &Store, graph: &str, file: &Path) -> Result<String, CommandError> {
+    let target = GraphId::vocabulary(graph)?;
+
+    let extension = file
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default();
+    let Some(syntax) = RdfSyntax::parse(extension) else {
+        return Err(CommandError::UnknownSyntax {
+            path: file.to_path_buf(),
+            extension: extension.to_owned(),
+            known: RdfSyntax::ALL
+                .iter()
+                .map(|syntax| format!(".{}", syntax.file_extension()))
+                .collect::<Vec<_>>()
+                .join(", "),
+        });
+    };
+
+    let handle = File::open(file).map_err(|source| CommandError::Read {
+        path: file.to_path_buf(),
+        source,
+    })?;
+
+    let provenance = Provenance {
+        source: CandidateSource::Import,
+        agent: format!("{} (openbiz import)", actor()?),
+        note: format!("imported from {} as {syntax}", file.display()),
+        // A file import has no confidence to state. Inventing one — 1.0, say — would put a number
+        // a reviewer could sort by next to numbers that mean something.
+        confidence: None,
+    };
+
+    let candidate = store.propose_import(&target, syntax, BufReader::new(handle), &provenance)?;
+
+    Ok(format!(
+        "proposed candidate {} against {}: {} statements from {}, read as {syntax}\n\
+         nothing has been written to the vocabulary. Review it with `openbiz candidate {}`, then \
+         `openbiz approve {}` or `openbiz reject {}`.",
+        candidate.id(),
+        candidate.target(),
+        candidate.additions(),
+        file.display(),
+        candidate.id(),
+        candidate.id(),
+        candidate.id(),
+    ))
+}
+
+/// List every proposed change the store holds, oldest first.
+pub fn candidates(store: &Store) -> Result<String, CommandError> {
+    let candidates = store.candidates()?;
+
+    if candidates.is_empty() {
+        return Ok("no changes have been proposed".to_owned());
+    }
+
+    let mut out = String::new();
+    for candidate in &candidates {
+        out.push_str(&format!(
+            "{}\t{}\t{} statements\t{}\t{}\n",
+            candidate.id(),
+            candidate.state(),
+            candidate.additions(),
+            candidate.target(),
+            candidate.provenance().note,
+        ));
+    }
+    out.push_str(&format!(
+        "{} proposed, {} applied, {} rejected",
+        count(&candidates, CandidateState::Proposed),
+        count(&candidates, CandidateState::Applied),
+        count(&candidates, CandidateState::Rejected),
+    ));
+    Ok(out)
+}
+
+/// How many of `candidates` are in `state`.
+fn count(candidates: &[Candidate], state: CandidateState) -> usize {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.state() == state)
+        .count()
+}
+
+/// Show one proposed change, provenance first and then the statements themselves.
+///
+/// The statements are the reason this command exists. An approval taken without reading them is
+/// not a review, and "go and write a SPARQL query" is not an answer for the person whose job is to
+/// decide. They come out as Turtle, which is the readable one of the six.
+pub fn show(store: &Store, id: &str) -> Result<String, CommandError> {
+    let candidate = store.candidate(CandidateId::parse(id)?)?;
+    let provenance = candidate.provenance();
+
+    let mut out = format!(
+        "candidate {}\n  state:      {}\n  target:     {}\n  source:     {}\n           proposed by: {}\n  proposed at: {}\n  why:        {}\n  adds:       {} statements\n",
+        candidate.id(),
+        candidate.state(),
+        candidate.target(),
+        provenance.source,
+        provenance.agent,
+        candidate.proposed_at(),
+        provenance.note,
+        candidate.additions(),
+    );
+    if let Some(confidence) = provenance.confidence {
+        out.push_str(&format!("  confidence: {confidence}\n"));
+    }
+    if let (Some(by), Some(at)) = (candidate.decided_by(), candidate.decided_at()) {
+        out.push_str(&format!("  decided by: {by}\n  decided at: {at}\n"));
+    }
+    out.push_str(&format!("  staged in:  {}\n\n", candidate.payload()));
+
+    let mut statements = Vec::new();
+    store.export_graph(
+        candidate.payload().iri(),
+        RdfSyntax::Turtle,
+        &mut statements,
+    )?;
+    out.push_str(&String::from_utf8(statements).map_err(|error| {
+        CommandError::Store(StoreError::Backend(format!(
+            "the staged statements are not valid UTF-8, which no serialiser of ours writes: {error}"
+        )))
+    })?);
+
+    Ok(out)
+}
+
+/// Approve or reject a proposed change.
+pub fn decide(store: &Store, id: &str, decision: Decision) -> Result<String, CommandError> {
+    let candidate = store.decide(CandidateId::parse(id)?, decision, &actor()?)?;
+
+    Ok(match decision {
+        Decision::Approve => format!(
+            "approved candidate {}: {} statements are now in {}, recorded as approved by {}",
+            candidate.id(),
+            candidate.additions(),
+            candidate.target(),
+            candidate.decided_by().unwrap_or_default(),
+        ),
+        Decision::Reject => format!(
+            "rejected candidate {}: {} is unchanged. The statements stay staged in {}, so what \
+             was refused is still readable",
+            candidate.id(),
+            candidate.target(),
+            candidate.payload(),
+        ),
+    })
+}
+
+/// Who to record as responsible for a decision taken from the command line.
+///
+/// There is no authentication yet, so this is the operating system's account of who ran the
+/// command — and it says so in the recorded string rather than dressing it up as an identity the
+/// product verified. [`ACTOR_VARIABLE`] overrides it, because the account a cron job runs under is
+/// rarely the team answerable for what it did.
+fn actor() -> Result<String, CommandError> {
+    [ACTOR_VARIABLE, "USER", "LOGNAME"]
+        .into_iter()
+        .find_map(|variable| {
+            std::env::var(variable)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or(CommandError::NoActor)
 }
 
 /// Write `store` out to `file`, and report what was written.
@@ -354,8 +662,77 @@ mod tests {
     }
 
     #[test]
+    fn import_takes_the_vocabulary_it_proposes_against_and_then_the_file() {
+        assert_eq!(
+            parse(&["import", "https://example.org/regions", "concepts.ttl"]),
+            Ok(Command::Import {
+                graph: "https://example.org/regions".to_owned(),
+                file: PathBuf::from("concepts.ttl"),
+            })
+        );
+    }
+
+    #[test]
+    fn the_review_commands_take_a_candidate_and_the_list_takes_nothing() {
+        assert_eq!(parse(&["candidates"]), Ok(Command::Candidates));
+        assert_eq!(
+            parse(&["candidate", "7"]),
+            Ok(Command::Show { id: "7".to_owned() })
+        );
+        assert_eq!(
+            parse(&["approve", "7"]),
+            Ok(Command::Approve { id: "7".to_owned() })
+        );
+        assert_eq!(
+            parse(&["reject", "7"]),
+            Ok(Command::Reject { id: "7".to_owned() })
+        );
+        assert_eq!(
+            parse(&["candidates", "7"]),
+            Err(ArgsError::TooManyArguments {
+                command: "candidates",
+                extra: 1
+            })
+        );
+    }
+
+    /// The identifier is not validated here on purpose: `openbiz approve banana` must fail with
+    /// the store's account of what a candidate identifier is, not with a usage error that says
+    /// only that something was wrong.
+    #[test]
+    fn a_command_with_no_candidate_says_which_command_needed_one() {
+        for command in ["candidate", "approve", "reject"] {
+            let error = parse(&[command]).expect_err("a missing identifier must be refused");
+            assert!(
+                error.to_string().contains(command),
+                "the message must name the command: {error}"
+            );
+        }
+        let error = parse(&["import"]).expect_err("a missing graph must be refused");
+        assert!(
+            error.to_string().contains("import") && error.to_string().contains("IRI"),
+            "the message must say what was missing: {error}"
+        );
+        let error = parse(&["import", "https://example.org/regions"])
+            .expect_err("a missing file must be refused");
+        assert!(
+            error.to_string().contains("import"),
+            "the message must name the command: {error}"
+        );
+    }
+
+    #[test]
     fn the_usage_names_every_command_it_can_parse() {
-        for command in ["backup", "restore", "help"] {
+        for command in [
+            "backup",
+            "restore",
+            "import",
+            "candidates",
+            "candidate",
+            "approve",
+            "reject",
+            "help",
+        ] {
             assert!(
                 USAGE.contains(command),
                 "usage does not mention {command}, so nobody can discover it"
