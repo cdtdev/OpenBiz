@@ -137,6 +137,14 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 
 ### Bring the Oxigraph benchmark spike forward, ahead of the remaining Phase 1 items
 
+- **Status:** deferred — **overtaken by events, iteration 11.** The reordering this asked for never
+  happened and is now moot: the spike ran at its own scheduled place in the plan, because the two
+  items ahead of it (SPARQL Update, Graph Store Protocol) turned out to be deferred on charter
+  grounds rather than merely hard. Worth recording that the proposal's own argument was therefore
+  never tested — the spike did not have to be pulled forward, so we do not know whether it should
+  have been. **One of the five numbers it had accumulated is now measured** (query evaluation at
+  10k/100k/1M, `adr/0013`, plus load rate and disk, which were not on the list). **Four are not** —
+  see the re-proposal below rather than treating this entry as closed.
 - **Why:** this is the same doubt for the second iteration running, which is the signal the loop log
   exists to surface. Iteration 6 shipped `GET /api/graphs` returning the *whole* registry from an
   unmeasured pattern scan and closed with "I do not know whether I have designed the contract or
@@ -167,6 +175,87 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   loop does not promote its own proposals or reorder the plan. Reordering on the strength of the
   loop's own recurring unease is exactly the scope creep that brake exists to stop.
 - **Opened:** iteration 7
+
+### Measure the four store costs the benchmark spike did not cover
+
+- **Status:** proposed.
+- **Gap:** `adr/0013` measured SPARQL query evaluation, which was the spike item's own scope. Four
+  other numbers had accumulated against that spike between iterations 6 and 8, each one a
+  load-bearing shape that went underneath a caller on reasoning rather than measurement, and none
+  of them is a query: **(1)** `Store::close()` flush cost at 100k and 1M — an operator's
+  `SIGTERM`-to-exit time, which `adr/0006` promises is graceful; **(2)** the registry pattern scan
+  on the `GET /api/graphs` hot path, which runs on every page load and was never measured against
+  a store with many graphs; **(3)** concurrent write throughput and lock wait time under the
+  `adr/0009` write lock, which serialises every writer and whose cost iteration 7 explicitly closed
+  as unmeasured; **(4)** export wall-clock and peak RSS per syntax, since `GET /api/export` buffers
+  a whole graph into a response body.
+- **Why load-bearing:** three of the four are on paths a user hits constantly rather than
+  occasionally, and (3) is the one that decides whether a second author is a colleague or a queue.
+  The spike's harness now exists and generates stores at all three sizes, so the marginal cost of
+  each of these is small in a way it was not before — which is the main reason to do them now and
+  not to let them accumulate against a later spike the same way they accumulated against this one.
+- **Cost & impact:** ~1 iteration for all four, reusing `crates/openbiz-store/src/scale.rs`. (3)
+  needs a concurrent driver, which is genuinely new. No runtime impact — measurement only.
+- **Suggested phase:** Phase 1, immediately after the literal-precision spike, or Phase 13.
+
+### Maintain `skos:hasTopConcept` in the SKOS authoring model
+
+- **Status:** proposed.
+- **Gap:** `adr/0013` measured the concept tree's first query. Finding its top concepts by
+  `FILTER NOT EXISTS { ?c skos:broader ?p }` costs **21.6 s at a million concepts**, and — worse —
+  is **served rather than refused**, because 21.6 s fits inside the 30 s deadline. The same
+  question asked of a scheme that *states* its top concepts with `skos:hasTopConcept` is **0.6 ms,
+  flat at every size**. That is not a tuning difference; it is a modelling one.
+- **Why load-bearing:** it decides what Phase 2's authoring model writes and what Phase 3's tree is
+  allowed to assume, and both are cheap to get right now and expensive to retrofit. Concretely the
+  proposal is two things: **(a)** the authoring path *maintains* `skos:hasTopConcept` as concepts
+  are created, deleted, and re-parented, so the assertion is always true rather than usually true —
+  which makes it an integrity condition with a validation rule, not an optimisation; and **(b)**
+  Phase 3 must **not** silently fall back to the derived query when the assertion is missing,
+  because a vocabulary imported from an incumbent very often will not state its top concepts, and
+  those are exactly the vocabularies a migrating customer opens first. A silent fallback moves the
+  21 s from every vocabulary to the imported ones and makes the migration path the slow path.
+- **Cost & impact:** small inside Phase 2 if taken with the model; a rewrite of the tree if taken
+  after Phase 3. The maintenance rule needs care where a concept has more than one parent or where
+  `skos:broader` is asserted only in one direction.
+- **Suggested phase:** Phase 2, with the SKOS integrity conditions.
+
+### Give queries a human is waiting on their own budget, separate from the runaway guard
+
+- **Status:** proposed.
+- **Gap:** `QueryLimits::DEFAULT_TIMEOUT` is 30 s and `adr/0013` shows why one bound cannot do both
+  jobs. Nothing measured came within a factor of ten of 30 s except the tree's first query, which
+  reached 72 % of it and was **served**. So the deadline works as what it is — a stop on an
+  accidental cartesian product — and is no protection at all against an interface that takes
+  twenty-one seconds to draw its first screen.
+- **Why load-bearing:** without a second, much smaller bound applied to interface-issued queries,
+  "the product feels broken" is a state the server will happily sustain rather than surface. It also
+  needs to *refuse legibly* — the honesty rule that governs the row cap applies here too: a user who
+  waits should be told the query was abandoned, not left guessing.
+- **Cost & impact:** small — `QueryLimits` is already a parameter, so this is a second constant and
+  a caller that picks between them. The judgement is in the number and in what the interface does
+  with the refusal, not in the plumbing.
+- **Suggested phase:** Phase 3, with the first screen that issues a query.
+
+### Index labels, because `LIMIT` does not bound a `STRSTARTS` search
+
+- **Status:** proposed.
+- **Gap:** the search box's query — `FILTER(STRSTARTS(LCASE(STR(?label)), …))` with `LIMIT 50` —
+  costs 6.4 ms at 10k, 51.8 ms at 100k, and **479.6 ms at 1M** (`adr/0013`). It returns fifty rows
+  at every size, so the cost is **linear in the graph, not in the answer**: the `LIMIT` bounds what
+  comes back and nothing else, because a string function in a `FILTER` cannot use an index. Every
+  `skos:prefLabel` in the vocabulary is read, decoded, lower-cased, and tested. That is half a
+  second per keystroke at a million concepts, before any network.
+- **Why load-bearing:** search is how anyone finds anything in a large vocabulary, and it is also
+  §1.7's load-bearing feature — a user who cannot find the existing concept creates a duplicate,
+  which is the silo this product exists to attack. There is no SPARQL-level fix and SPARQL 1.1 does
+  not standardise full-text search, so this is a real component decision (an embedded index such as
+  `tantivy`, kept in step with the store) rather than a query rewrite.
+- **Cost & impact:** several iterations, and it adds a dependency with a licence check and an
+  index-consistency problem of its own — a second copy of the labels that can drift from the store.
+  Not a nice-to-have: at 1M concepts type-ahead is unusable without it. Must degrade to the scan
+  when no index exists, so a fresh or restored store still searches.
+- **Suggested phase:** Phase 13, or earlier if Phase 3's search screen needs it to be honest.
 
 ### Build a SPARQL query console in the interface
 - **Status:** proposed.
@@ -416,3 +505,28 @@ which keeps it inside `adr/0002`'s rule that a model never establishes a fact, o
 Note the manual path already exists and must keep existing: the difference is computable and
 printable without any model, and an air-gapped deployment gets the triples and loses only the
 prose._
+
+_Iteration 11 (Oxigraph scale spike): **one, and it is adjacent to iteration 5's rather than new** —
+saying so is the point of writing it down. Finding 3 of `adr/0013` is that label search is
+`FILTER(STRSTARTS(…))` over every label in the graph, and the fix is a lexical index. But the
+measurement made the *other* half of the problem visible: even at 0.5 ms, a lexical index answers
+"which labels start with what I typed", and a taxonomist searching `car` will not be shown
+`automobile`. At a million concepts that is the §1.7 failure in its purest form — the existing
+concept is there, the search does not surface it, and the rational response is to create a
+duplicate. **The candidate:** semantic similarity over labels and definitions, offered *alongside*
+the lexical hits and visibly labelled as suggestions, at the moment of search and again at the
+moment of creation. This is the same underlying capability as the near-synonym recall recorded at
+iteration 5 for Phase 12's overlap report — one is similarity *between* vocabularies, this is
+similarity *within* one, and Phase 10 should build it once rather than twice. The manual path is
+the lexical index and must stay the whole product: an air-gapped deployment searches exactly as
+well as a lexical index searches, and loses only the recall. Worth flagging a cost the other
+opportunities in this file do not have — embeddings mean a **second index that can drift from the
+store**, and a stale suggestion index is a silent wrong answer rather than a visible failure._
+
+_Also iteration 11, recorded as a deliberate **nil** so it is not re-found: the obvious candidate
+here — "explain why this query was slow and propose a rewrite" — is already written up at iteration
+9 from the query endpoint's seat, and nothing measured this iteration changes its shape. And the
+structural gaps the spike's fixture made vivid (a scheme that does not state its top concepts,
+concepts with no `skos:inScheme`, orphans with no `skos:broader`) are **computable exactly** and
+must not be handed to a model: finding them is a SPARQL query, and `adr/0002`'s rule that a model
+never establishes a fact rules it out on its own._

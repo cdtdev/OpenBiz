@@ -170,3 +170,41 @@ attacking the incumbents for. It also feeds the degradation watch's charter-drif
 small now and corrosive if it becomes habit.
 
 Note this in `LOOP-LOG.md` as a process error caught externally, not just a doc fix.
+
+---
+
+## 2026-08-19 — from the product owner: you are on a wall clock, and nobody told you
+
+**Information you have been missing.** Every iteration runs under a hard timeout and is **killed**
+when it expires — currently **60 minutes**, rising to 90 when the loop is next restarted. There is
+no warning and no grace: the process is terminated mid-work, the branch is left uncommitted, and the
+next iteration inherits the mess. This has now cost three iterations (7, 10, and one earlier), which
+is roughly three hours of nothing.
+
+That was my omission, not your error. Act on it:
+
+1. **Budget the iteration.** Aim to land — committed, PR opened, checks watched, merged — within
+   about **45 minutes**. Treat the remainder as reserve for CI, which currently runs 10–16 minutes
+   on its own and is *inside* your budget, not outside it.
+
+2. **Split by cost, not just by scope.** The driver already tells you to split an item that is
+   bigger than it reads. Add this: split an item that is *slower* than it reads. The Oxigraph scale
+   spike is the clearest case — "10k / 100k / 1M concepts" is three items wearing one hat, and the
+   1M leg alone may exceed a whole iteration. Do the small legs, land them with real numbers, and
+   leave the expensive leg as its own `- [ ]`. Partial measurements that are committed beat complete
+   measurements that were killed.
+
+3. **Checkpoint long-running work.** When an item is dominated by measurement rather than coding,
+   write results into the ADR **as each one completes**, and commit. A benchmark that dies at minute
+   58 with nothing on disk has produced nothing; the same benchmark writing each result as it lands
+   has produced most of its value. This applies to any item where the machine is working and you are
+   waiting.
+
+4. **If you genuinely cannot fit an item even split** — say so in `BLOCKED.md` with the measured
+   reason, rather than starting it each iteration and being killed each time. A repeating silent
+   failure is far worse than a recorded one.
+
+**Do not let this compromise the work itself.** `CLAUDE.md` §4 still governs: no weakened
+assertions, no unearned checkmarks, no "I ran out of time so I claimed it." If the honest outcome of
+an iteration is one small landed item plus a recorded reason the rest did not fit, that is a
+successful iteration. Speed never buys a dishonest green.
