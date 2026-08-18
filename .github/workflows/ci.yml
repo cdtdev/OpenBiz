@@ -17,16 +17,60 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       # The embedded store compiles RocksDB from source and generates its bindings with
-      # bindgen, which needs a C++ toolchain and libclang. Both happen to be on the current
-      # ubuntu-latest image, but a hard build dependency should not rest on what a runner image
-      # implicitly ships — a base-image change would read as "our store stopped compiling".
-      # See docs/adr/0006.
+      # bindgen, which needs a C++ toolchain and libclang. `ubuntu-latest` ships both, but
+      # adr/0006 requires us not to *implicitly* rely on that — a base-image change must read
+      # as "the toolchain is missing", not as an unexplained bindgen panic several steps later.
+      #
+      # So: verify first, install only when genuinely absent, and assert the result either way.
+      # The install is bounded and retried because it is the one unavoidable network call in a
+      # *required* status check, and an unbounded `apt-get update` against a stalled mirror
+      # leaves that check pending forever — which branch protection reads as "not yet passed",
+      # never as a failure, so the PR blocks with nothing to go and read. Bounded means a bad
+      # mirror turns the build red in minutes instead of hanging it. See the step timeout below
+      # and the job-level `timeout-minutes`.
       - name: Install the store's build toolchain
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+
+          # Mirrors what bindgen itself searches for, so a pass here means bindgen will find it.
+          have_toolchain() {
+            command -v clang >/dev/null 2>&1 \
+              && { ls /usr/lib/llvm-*/lib/libclang.so* >/dev/null 2>&1 \
+                || ls /usr/lib/x86_64-linux-gnu/libclang*.so* >/dev/null 2>&1; }
+          }
+
+          if have_toolchain; then
+            echo "clang and libclang are already present on the runner image; skipping apt"
+          else
+            echo "libclang not found on the image; installing it"
+            installed=
+            for attempt in 1 2 3; do
+              if sudo apt-get update -o Acquire::Retries=3 \
+                && sudo apt-get install -y --no-install-recommends clang libclang-dev; then
+                installed=yes
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed; retrying" >&2
+              sleep 5
+            done
+            if [ -z "$installed" ]; then
+              echo "::error::could not install clang/libclang after 3 attempts" >&2
+              exit 1
+            fi
+          fi
+
+          # adr/0006: a missing toolchain is a red build with a named cause, never a mystery.
+          if ! have_toolchain; then
+            echo "::error::clang/libclang still absent after install; the store cannot build" >&2
+            exit 1
+          fi
+          clang --version | head -1
 
       - name: Install toolchain
         run: rustup component add rustfmt clippy
@@ -57,6 +101,7 @@ jobs:
   licences:
     name: Licence policy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +120,7 @@ jobs:
   ui:
     name: UI
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ui
@@ -100,16 +146,60 @@ jobs:
   single-binary:
     name: Single binary
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       # The embedded store compiles RocksDB from source and generates its bindings with
-      # bindgen, which needs a C++ toolchain and libclang. Both happen to be on the current
-      # ubuntu-latest image, but a hard build dependency should not rest on what a runner image
-      # implicitly ships — a base-image change would read as "our store stopped compiling".
-      # See docs/adr/0006.
+      # bindgen, which needs a C++ toolchain and libclang. `ubuntu-latest` ships both, but
+      # adr/0006 requires us not to *implicitly* rely on that — a base-image change must read
+      # as "the toolchain is missing", not as an unexplained bindgen panic several steps later.
+      #
+      # So: verify first, install only when genuinely absent, and assert the result either way.
+      # The install is bounded and retried because it is the one unavoidable network call in a
+      # *required* status check, and an unbounded `apt-get update` against a stalled mirror
+      # leaves that check pending forever — which branch protection reads as "not yet passed",
+      # never as a failure, so the PR blocks with nothing to go and read. Bounded means a bad
+      # mirror turns the build red in minutes instead of hanging it. See the step timeout below
+      # and the job-level `timeout-minutes`.
       - name: Install the store's build toolchain
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+
+          # Mirrors what bindgen itself searches for, so a pass here means bindgen will find it.
+          have_toolchain() {
+            command -v clang >/dev/null 2>&1 \
+              && { ls /usr/lib/llvm-*/lib/libclang.so* >/dev/null 2>&1 \
+                || ls /usr/lib/x86_64-linux-gnu/libclang*.so* >/dev/null 2>&1; }
+          }
+
+          if have_toolchain; then
+            echo "clang and libclang are already present on the runner image; skipping apt"
+          else
+            echo "libclang not found on the image; installing it"
+            installed=
+            for attempt in 1 2 3; do
+              if sudo apt-get update -o Acquire::Retries=3 \
+                && sudo apt-get install -y --no-install-recommends clang libclang-dev; then
+                installed=yes
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed; retrying" >&2
+              sleep 5
+            done
+            if [ -z "$installed" ]; then
+              echo "::error::could not install clang/libclang after 3 attempts" >&2
+              exit 1
+            fi
+          fi
+
+          # adr/0006: a missing toolchain is a red build with a named cause, never a mystery.
+          if ! have_toolchain; then
+            echo "::error::clang/libclang still absent after install; the store cannot build" >&2
+            exit 1
+          fi
+          clang --version | head -1
 
       - uses: Swatinem/rust-cache@v2
 

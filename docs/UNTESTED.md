@@ -29,6 +29,24 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### CI's toolchain install is bounded now, but the retry and the timeout have never fired
+- **Kind:** partial-coverage
+- **What is proven:** the `have_toolchain` detection was tested locally in all three states that
+  matter — no clang, clang present but `libclang` absent, and both present — and returns the right
+  answer in each without tripping `set -e`. The middle case is the load-bearing one: it is the state
+  that otherwise produces a `bindgen` panic several steps later with no named cause. Both jobs are
+  generated from an identical step (checked by `diff`), and the YAML parses.
+- **What is not:** on `ubuntu-latest` the detection short-circuits to "already present", so **the
+  apt branch does not execute in CI at all** — the three-attempt retry, the `::error::` after a
+  third failure, and the post-install assertion are all unexercised by any real run. Equally, no
+  build has yet hit the 6-minute step timeout or a 45-minute job timeout, so what a timeout actually
+  *reports* on the PR is inferred from GitHub's documented behaviour, not observed. The whole change
+  is a fix for a failure mode I can no longer reproduce on demand.
+- **What would close it:** a `workflow_dispatch` input that forces the apt branch (and one that
+  forces a sleep past the step timeout), run once deliberately to see both report red with a
+  readable cause. Worth doing the next time CI is touched for another reason.
+- **Opened:** iteration 15
+
 ### A restore holds the whole file in the backend's write batch, and the ceiling is unmeasured
 - **Kind:** partial-coverage
 - **What is proven:** a restore is one transaction, so a failure anywhere rolls the whole thing
