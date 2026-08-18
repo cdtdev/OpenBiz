@@ -58,6 +58,53 @@ Do not delete it — the record of what took how long to close is the signal.
   job never called it. Zero UI assertions had ever run either way.
 - **Opened:** iteration 1 · **Closed:** iteration 4
 
+### Write throughput under a serialised writer is unmeasured
+- **Kind:** partial-coverage
+- **What is proven:** writes are correct under concurrency — eight threads racing on one IRI leave
+  exactly one registration, eight threads on distinct IRIs all land, and readers are never blocked
+  by an open transaction. Correctness under contention is tested; **cost** under contention is not.
+- **What is not:** `adr/0009` trades write parallelism for serialisability by taking a lock we own,
+  and no number anywhere says what that costs. Nothing measures how long a transaction holds the
+  lock, how deep the queue gets, or where the knee is. Upstream also states a transaction holds its
+  entire change set in memory, so a naive "one transaction per import file" in Phase 11 is both a
+  memory risk and a long lock hold, and nothing currently stops someone writing it.
+- **What would close it:** the Phase 1 Oxigraph benchmark spike, which now owes a fourth number —
+  concurrent write throughput and lock wait time at the 10k/100k/1M sizes it already covers. Phase
+  13 then addresses whatever it finds.
+- **Opened:** iteration 7
+
+### Rollback is proven against errors and panics, but not against process death
+- **Kind:** partial-coverage
+- **What is proven:** a transaction that returns `Err` writes nothing, a transaction that panics
+  writes nothing and does not leave the store read-only, and a rolled-back transaction leaves the
+  store byte-identical (asserted on quad count, not just on absence). Six mutants confirmed each
+  assertion is load-bearing.
+- **What is not:** nothing kills a process mid-transaction and reopens the store. That is the
+  case the backend's crash recovery handles rather than our code, so it is testing Oxigraph rather
+  than testing us — but it is also the case an operator actually hits, and "the backend handles it"
+  is an assumption we have not verified. Relatedly, `Store::open` now commits the format stamp and
+  the system-graph registration in one transaction *specifically* to close a kill-in-the-gap
+  window, and the proof that the window is closed is the code's shape, not a test.
+- **What would close it:** a harness that spawns the real binary, `SIGKILL`s it during a write, and
+  reopens the store asserting it is either fully changed or fully unchanged. `tests/graceful_shutdown.rs`
+  already spawns real binaries, so the machinery exists; what is missing is a way to make the
+  binary write on demand, which needs an authoring endpoint that §1.7 says cannot exist until
+  `DiscoveryProvider` does.
+- **Opened:** iteration 7
+
+### The nested-transaction guard fails by hanging if it regresses
+- **Kind:** inspected-only
+- **What is proven:** `a_nested_transaction_is_refused_rather_than_deadlocking` passes, and a
+  mutant that stops keying the reentrancy mark by store address kills it.
+- **What is not:** if the guard were removed entirely, that test would **hang** rather than fail,
+  because the bug it guards against is itself a deadlock. A hanging test in CI reads as a flaky
+  runner or a timeout, not as a regression, so the signal is real but badly shaped.
+- **What would close it:** run the nested call on a spawned thread and join it with a timeout, so
+  the absence of the guard reports as a failed assertion rather than as a stuck job. Not done here
+  because `std` has no `join_timeout`; it needs a channel-with-timeout dance that is more test
+  machinery than the one assertion justifies today.
+- **Opened:** iteration 7
+
 ### The UI suite asserts on jsdom, and covers one component
 - **Kind:** narrowly-proven
 - **What is proven:** `App`'s render output and probe lifecycle, under jsdom, via accessible
@@ -201,7 +248,16 @@ Do not delete it — the record of what took how long to close is the signal.
   is a recorded gap.
 - **What would close it:** the Phase 2 authoring path with its local discovery hook. The read half —
   `GET /api/graphs` and the registry in the UI — is the next Phase 1 item and does not depend on it.
-- **Opened:** iteration 5
+- **Amended, iteration 7:** still open, and the entry understated the cost of leaving it open.
+  Having no production caller is *why* nobody had hit the race in it: the check and the write were
+  two separate operations, and eight threads creating one IRI all succeeded, leaving a registry
+  that `Store::graphs` then refuses wholesale as `Corrupt`. That is now fixed — the check and the
+  write are one transaction (`adr/0009`) — but the lesson is about this ledger rather than about
+  the bug. **A no-production-caller entry is not a dormant risk; it is an untested one**, and the
+  concurrency defect sat in a method with nine passing tests. The `transaction` API this method now
+  delegates to *does* have a production caller (store startup), so the seam is exercised on every
+  start even though this method is not.
+- **Opened:** iteration 5 · **Amended:** iteration 7
 
 ### A corrupt registry is proven to stop the store, not proven to stop the server
 - **Kind:** partial-coverage
@@ -263,7 +319,10 @@ Do not delete it — the record of what took how long to close is the signal.
   keep their Phase 1 spike items; `adr/0006` must not be read as clearing them.
 - **What would close it:** the Phase 1 benchmark spike, which should measure `close()` at 10k /
   100k / 1M concepts and not only query evaluation.
-- **Opened:** iteration 3
+- **Amended, iteration 7:** the store has now held up to nine quads rather than three, which does
+  not move this entry at all — the point stands unchanged. The spike now owes a *fourth* number as
+  well; see "Write throughput under a serialised writer is unmeasured".
+- **Opened:** iteration 3 · **Amended:** iteration 7
 
 ### Graceful shutdown is proven to exit cleanly, not to drain
 - **Kind:** partial-coverage

@@ -458,3 +458,86 @@ look competent disables the one signal that catches a stuck loop.
   them, which is a different and much weaker claim. I do not know whether I have designed the
   contract or merely deferred it, and the honest answer is that the benchmark spike should have
   come first.
+
+## Iteration 7 — 2026-08-18
+- **Took:** Phase 1 — "Transactional write API with rollback; concurrent-reader safety under test",
+  the next unchecked item.
+- **Drained first, as the driver requires:** `promote-queue.json` was `[]` and `feedback.md` was
+  empty, so nothing to log or truncate. `main`'s CI run was **in progress** when the iteration
+  started; it was watched to completion (`success`) rather than read as the previous iteration's
+  reported green, which is the whole point of that step.
+- **The finding that shaped the item:** I wrote the race test before the fix, as the driver requires
+  for a bug, and it did not fail the way I expected — **all eight racers succeeded**, not two. The
+  check-then-write in `create_vocabulary_graph` was two separate backend operations, so every racer
+  read "free" and every racer wrote. The consequence is worse than a duplicate row: a graph
+  registered twice makes `Store::graphs` refuse the *whole* registry as `Corrupt`, so one user's
+  mistimed second click takes the entire vocabulary list down for everyone.
+- **Then the more important finding.** I read Oxigraph's storage layer before designing, and its
+  transaction is a RocksDB snapshot plus a write-batch-with-index whose `commit()` is an
+  unconditional batch write — **no conflict detection, no snapshot validation, no serialisation
+  between transactions**. So wrapping the check and the write in a backend transaction would fix
+  nothing: both racers still read the same snapshot and both still commit. I did not take that on
+  my own reading. The first mutant removes our write lock while keeping the backend transaction,
+  and the race comes straight back. The lock is load-bearing, and the claim in `adr/0009` is
+  measured rather than argued.
+- **Did:** `Store::transaction(|txn| ...)` — commits on `Ok`, discards on `Err` **and on panic**.
+  A closure rather than a `begin`/`commit` pair, so the safe outcome is what a failing caller gets
+  by default instead of what they must remember to ask for, and so `oxigraph::store::Transaction`
+  stays out of our API (§3). Writers serialise on a mutex we own; readers never take it. The
+  existence check moved *inside* the transaction, which is the actual fix. Nesting is refused with
+  `StoreError::NestedTransaction` rather than deadlocking, keyed by store address so two stores over
+  two data directories are not falsely refused. Mutex poisoning is recovered from, not propagated —
+  a panic rolls the store back, so refusing every later write would turn one abandoned edit into a
+  store that had silently gone read-only. See `adr/0009`.
+- **The production caller, and it is a real behaviour change:** `Store::open` now commits the format
+  stamp and the system graph's registry entry in **one** transaction. They were two independent
+  writes, and a kill in the gap left a store that was stamped but had no system graph in its
+  registry — a state this build reports as inconsistent, reached at the likeliest moment for a
+  container to be killed. Every deployment runs this on every start.
+- **The thing I nearly got wrong.** Moving the write choke point inside `Transaction` made it
+  tempting to demote its `is_directly_writable` refusal to a `debug_assert`, since every current
+  caller checks first — and the compiler pushed that way, because the refactor made `insert`
+  infallible and the borrow checker was happier for it. That would have quietly converted a rule
+  the store *enforces* into a rule callers are *trusted* to follow, which is exactly the silent
+  weakening §4 warns about. It stays a runtime refusal. The existing test
+  `no_write_reaches_an_inferred_graph` is what caught it: it failed to compile, which is the only
+  reason I looked.
+- **Tests:** 105 Rust (was 97) + 22 UI unchanged. `cargo fmt`, `cargo clippy -D warnings`,
+  `cargo test --workspace`, and `cargo deny check licenses` all green. **Six mutants, all killed** —
+  write lock removed; existence check moved back outside the transaction; commit even when the
+  closure failed; mutex poisoning propagated; choke point stops refusing inferred graphs;
+  reentrancy mark not keyed by store. Also verified by hand against the real binary: first start
+  serves the system graph, `SIGTERM` logs `store closed cleanly`, and a reopen of the same data
+  directory serves the same registry without re-stamping.
+- **Learned, about the ledger rather than the code:** `UNTESTED.md` already recorded
+  `create_vocabulary_graph` as having no production caller, and I had read that entry. What the
+  entry framed as a *dormant* risk was an *untested* one — the concurrency defect sat inside a
+  method with nine passing tests, and it survived precisely because nothing exercised it under
+  contention. The entry has been amended to say so. Second, smaller: the toolchain entry for this
+  machine's missing `libclang` was already in `UNTESTED.md`, complete with the exact two-variable
+  incantation, and I re-derived it from the error messages instead of reading it. The ledger was
+  right and I did not consult it; that is a cost of a long file, not of a wrong file.
+- **Recorded:** three new `UNTESTED.md` entries and two amendments. New: write throughput under a
+  serialised writer is entirely unmeasured, so the Phase 1 benchmark spike now owes a **fourth**
+  number; rollback is proven against `Err` and panic but **not** against process death, and the
+  kill-in-the-gap window `open()` was restructured to close is argued from the code's shape rather
+  than from a test; and the nested-transaction test **hangs rather than fails** if the guard
+  regresses, which is a real signal in a bad shape. One LLM opportunity recorded, and a genuine one
+  created by this change rather than adjacent to it: serialising writers means a second author's
+  work can be refused, and the manual path is a triple-level diff — which is exactly the thing
+  governance teams say is not an answer to "does this affect what I was doing?".
+- **Still uncertain:** whether serialising every writer is a decision I am entitled to make at this
+  phase, or one I have made on this phase's evidence and will be unable to revisit. It is correct
+  today and correct for the reason `adr/0009` gives — one process owns the store, so the lock is
+  nearly free and it buys serialisability the backend does not offer. What I cannot answer is
+  whether it stays nearly free. Upstream says a transaction holds its whole change set in memory,
+  so the natural Phase 11 shape — one transaction per imported file — is both a long lock hold and
+  a memory risk, and by then every write path above will have been written against an API that
+  never made a caller think about how long it holds the lock. The narrower version: I have measured
+  that the lock is *necessary* and not measured what it *costs*, and those are the two halves of the
+  same decision. I built on the half I measured. If the spike comes back saying a 100k-concept
+  import holds the write lock for minutes, the fix is finer-grained locking or optimistic retry with
+  version counters, and both are much harder to retrofit under callers than they would be to have
+  designed for now — which is the same failure mode as iteration 6's uncertainty about paging the
+  registry, one layer down. Two iterations running, the benchmark spike is the thing I keep wishing
+  had already happened, and it is still four items away in a plan I am not allowed to reorder.
