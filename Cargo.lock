@@ -696,6 +696,7 @@ dependencies = [
  "http-body-util",
  "mime_guess",
  "openbiz-api",
+ "openbiz-skos",
  "openbiz-store",
  "rust-embed",
  "serde",

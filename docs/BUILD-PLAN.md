@@ -18,7 +18,7 @@ format chooser read from the server, and the export carries none of OpenBiz's ow
 **And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
 four results formats and all six RDF syntaxes, over a default dataset that is the user's
 vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-322 Rust tests and 30 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+370 Rust tests and 30 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
 narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
 the published EBNF rather than against the library that wrote the bytes, which found two real
@@ -41,7 +41,12 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 2 of 16 items done. The candidate seam is
+**Current position:** Phase 2 (SKOS authoring model), 3 of 16 items done. **The build now knows
+what a concept is.** `openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
+schemes, and collections — including the ones no statement typed, because SKOS itself entails
+them — and names the specification statement behind every fact it inferred. It separates a violated
+SKOS integrity condition from something merely ill-formed and says which judgement is ours (see
+`adr/0019`). The candidate seam is
 complete except for its HTTP and UI half, which is blocked on authentication — so **every remaining
 Phase 2 item now has the shape it needs to be built against**, which was not true two iterations
 ago. Phase 1 is 12 of 14 and the two that remain — SPARQL Update and the Graph Store Protocol — are
@@ -91,8 +96,14 @@ still-running — and then landed PR #17. Iteration 16 landed the store-format m
 which closed that gap: `openbiz restore` no longer refuses a backup written by an older build, it
 migrates it as it reads it (see `adr/0016`).
 
-**Next is the SKOS core model**, now that the seam every mutation path arrives through exists.
-Phase 1's two open items are no longer waiting on it: SPARQL Update and the Graph Store Protocol
+**Iteration 20 took the SKOS core model**, and the decision that took the work was the
+*layering*: `openbiz-skos` depends on neither Oxigraph nor `openbiz-store`, so the model is
+testable from a literal array of statements and the same code will classify a candidate's staging
+graph, a parsed file, or a discovery result. The price is a duplicated statement type mapped in
+three lines at the composition root, and `adr/0019` records why that was the cheapest of the three
+options. **Next is SKOS-XL labels.**
+
+Phase 1's two open items are no longer waiting on the seam: SPARQL Update and the Graph Store Protocol
 each wait on authorisation, which is what part 3 of the seam waits on too. **Phase 1 is therefore
 as complete as it can be without an identity model.** Vocabulary *creation* over HTTP remains
 deliberately absent for the same §1.7 reason, so `POST /api/graphs` answers 405. **There is still
@@ -560,7 +571,25 @@ the interface is a core differentiator, and building it late means retrofitting 
       > is missing is that a reviewer has to be on the server's console. `POST /api/candidates` and
       > an approve endpoint are unauthenticated arbitrary writes to a customer's vocabulary until
       > there is an identity behind them, which is a defect rather than a partial feature.
-- [ ] SKOS core model: `Concept`, `ConceptScheme`, `Collection`, `OrderedCollection`
+- [x] SKOS core model: `Concept`, `ConceptScheme`, `Collection`, `OrderedCollection`
+      > A graph can be asked what it holds in SKOS terms, and the answer includes what nobody
+      > stated. The model is **engine-free** — `openbiz-skos` depends on neither Oxigraph nor
+      > `openbiz-store`, so it classifies a literal array of statements, and the store grew a
+      > second exit (`Store::for_each_statement`) so a caller can reason about a graph without
+      > serialising and re-parsing it. It applies the nine SKOS axioms that bear on class
+      > membership (S4–S8, S29, S31, S33, S36), quotes each in full, and **every derived fact
+      > carries its premise and its rule** — `CLAUDE.md` §3's explainability requirement, not a
+      > nicety. S32 is deliberately not applied: its range is a union, which entails neither
+      > disjunct, and inferring one would be a guess wearing a citation.
+      > **A violated integrity condition (S9, S37) and something merely ill-formed are different
+      > words and are not blurred** — two `skos:memberList` values on one resource look like an
+      > S35 violation and are consistent with SKOS (§9.6.2, Example 43), so they are reported as
+      > our judgement rather than the specification's. A defective `rdf:List` entails nothing and
+      > says how many items were read before the defect.
+      > Production caller: `openbiz inspect <graph>`, proven end to end against the real binary
+      > on disk — including that the store is byte-for-byte unchanged afterwards. See `adr/0019`.
+      > **Scope, honestly:** the four core classes only. Labels, semantic relations, mapping
+      > properties, and SKOS-XL are the items below and are not modelled here.
 - [ ] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
 - [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy
 - [ ] Labels: `prefLabel`, `altLabel`, `hiddenLabel`, per-language, with the one-preferred-label-

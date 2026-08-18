@@ -5,6 +5,15 @@
 //! represent an ISO 25964 thesaurus — and our enterprise buyers have ISO 25964 in their
 //! requirements. See `docs/COMPETITIVE.md`.
 
+mod model;
+
+pub use model::{
+    ClassOrigin, CoreModel, CoreModelBuilder, Derivation, Finding, ListDefect, Literal, MemberList,
+    Node, Resource, Severity, SkosClass, SkosRule, Statement, Term, RDF_FIRST, RDF_NIL, RDF_REST,
+    RDF_TYPE, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER, SKOS_MEMBER_LIST,
+    SKOS_TOP_CONCEPT_OF,
+};
+
 /// Namespace IRIs used throughout the SKOS model.
 pub mod ns {
     /// The SKOS namespace.

@@ -1392,3 +1392,81 @@ look competent disables the one signal that catches a stuck loop.
   wanting to explain its reasoning per statement), which makes it the second time a per-statement
   rationale would have answered the question. If it comes up a third time it is a design change,
   not a nuisance.
+
+## Iteration 20 — 2026-08-18
+- **Inherited a dirty tree and a broken toolchain, and both had to be dealt with before any item.**
+  Iteration 19 had written ~2,300 lines on `item/2-skos-core-model` — the SKOS core model and the
+  store exit it needs — and exited without committing, formatting, or running anything. Separately,
+  **nothing in the workspace would build**: `oxrocksdb-sys` runs `bindgen`, this host has no
+  `libclang` and no passwordless `sudo`, and the build script panicked. That is almost certainly
+  what killed iteration 19, and it is the failure mode the standing brief warns about — a piped
+  exit code would have shown `0`.
+- **The toolchain fix is host-local and durable.** `apt-get download` needs no root, so
+  `libclang1-18`, `libllvm18`, and `libclang-common-18-dev` are extracted under
+  `~/.cache/openbiz-clang` (164 MB, outside the repo, on the roomy filesystem) and pointed at from
+  `~/.cargo/config.toml`'s `[env]` — not from the shell, which Ubuntu's `.bashrc` short-circuits
+  for non-interactive shells, and not from the repo, which would hardcode this machine's paths into
+  CI's build. It was verified the way that actually proves it: `cargo clean -p oxrocksdb-sys`, then
+  a build with `LIBCLANG_PATH`, `BINDGEN_EXTRA_CLANG_ARGS`, and `LD_LIBRARY_PATH` all *unset* in
+  the environment. `README.md` already documented `clang libclang-dev` as a prerequisite, so
+  nothing in the repo was wrong — the host had drifted from it.
+- **The inherited code was adopted, not trusted.** It compiled, and its 40 tests passed, but a
+  passing test suite is not a production caller (§4.1) and nothing invoked any of it. That is the
+  clause the item was actually short of, so the iteration's work was the caller: `openbiz inspect
+  <graph>`, plus the ADR the inherited modules already cited by number and which did not exist.
+- **The decision worth recording is the layering.** `openbiz-skos` depends on neither Oxigraph nor
+  `openbiz-store`, and the store grew a second exit — `Store::for_each_statement`, streaming
+  borrowed statements to a closure — so a caller can *reason* about a graph without serialising it
+  and parsing it back. The price is a duplicated statement type, mapped in three lines at the
+  composition root. The alternative that looks cheaper, having the domain crate read the store,
+  costs every model test a RocksDB open and makes a discovery match or a parsed file unclassifiable
+  until somebody writes it to a store first. `adr/0019`.
+- **The inference is the feature, and it is why a read command was worth building.** Nothing in the
+  end-to-end fixture types the concept scheme, and the report finds it anyway, marked `(1 inferred)`
+  and printed with its premise and the quoted specification statement that licensed it. A model
+  counting only `rdf:type` would pass any unit test written against a graph that types everything
+  and then report **zero schemes** for a real thesaurus — a wrong answer, not a conservative one.
+  Eight facts are inferred from a five-line fixture, which is roughly the ratio a real vocabulary
+  will show.
+- **The distinction that took the most care is "inconsistent" versus "ill-formed".** Only S9 and
+  S37 are integrity conditions among the core classes; everything else we report is our judgement
+  and is labelled as ours. Two `skos:memberList` values on one resource look like a violation of
+  S35's functional-property axiom and are **consistent with SKOS** — §9.6.2 and Example 43 explain
+  why — so blurring the two would mean refusing valid enterprise data, which is the complaint
+  `COMPETITIVE.md` records against the incumbents. S32 is not applied at all: a union range entails
+  neither disjunct, and inferring one would be a guess wearing a citation, which is worse than no
+  inference because the derivation would make it look checked.
+- **Tests: 370 Rust (from 322) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny`, and the
+  UI untouched. The suite was proven to **discriminate** before it was trusted: three mutations each
+  turned it red — the registry check dropped from `for_each_statement` so an unregistered IRI reads
+  as an empty vocabulary (2 tests), S29's super-class entailment disabled (4), and the disjointness
+  checks disabled (5). The end-to-end test also asserts a backup taken before and after an
+  `inspect` is identical line for line, because "it only reads" is a claim, not a property.
+- **Recorded:** `adr/0019`; four `UNTESTED.md` entries, none closed. The four are the honest edges:
+  the model holds one resource per subject in memory and has never been run against `adr/0013`'s
+  100k or 1M stores; a derivation chain is printed as a flat list so a derived premise does not link
+  to its own derivation; `inspect` exits **0** on an inconsistent vocabulary and has no JSON form,
+  so nothing but a human can gate on it; and the literal-in-subject-position arm is unreachable by
+  inspection of Oxigraph's types rather than by a test.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T21:31Z. Checked
+  before writing this header, per iterations 16, 17, and 18.
+- **Still uncertain:** whether entailing at *read* time is the right place for it, or whether I have
+  built something that will have to be undone. Today `inspect` re-derives all eight facts on every
+  invocation, which is free at five statements and unmeasured at a million — `adr/0013` found a
+  21-second cliff by measuring a query I had assumed was flat, and this is structurally the same
+  assumption. The obvious answer is to materialise entailments into a graph, and I think that is
+  wrong for a reason the charter cares about more than speed: a materialised `rdf:type` statement
+  and an asserted one are indistinguishable to every other reader, so the export, the SPARQL
+  endpoint, and the candidate seam would all start returning statements the user never wrote and
+  cannot delete, with the derivation living somewhere else. But "recompute every time" and
+  "materialise into the vocabulary" are not the only two options, and I have not thought about the
+  third — a cached model invalidated by the seam — because nothing yet needs it. I will find out
+  which is right when the concept tree lands, and if the answer is the cache, the invalidation hook
+  has to be in the seam's apply step, which is a place I have now touched three times for three
+  different reasons. The narrower thing I do not know: whether **`skos:member` inferred from a
+  `skos:memberList` should be visible to the *authoring* path at all**. Reporting it is clearly
+  right. But if a user later opens that collection in the interface and removes a member, they are
+  removing something no statement asserts, and the retraction seam — which refuses statements the
+  vocabulary does not hold — would refuse it. That is either a correct refusal with a bad message
+  or the first real case where the model's answers and the store's contents have to be reconciled,
+  and I cannot tell which without building the editing path.
