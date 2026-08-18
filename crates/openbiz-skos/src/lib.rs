@@ -7,6 +7,7 @@
 
 mod labels;
 mod model;
+mod relations;
 mod xl;
 
 pub use labels::{
@@ -19,9 +20,13 @@ pub use model::{
     RDF_TYPE, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER, SKOS_MEMBER_LIST,
     SKOS_TOP_CONCEPT_OF,
 };
+pub use relations::{
+    RelationOrigin, SemanticRelation, SKOS_BROADER, SKOS_BROADER_TRANSITIVE, SKOS_NARROWER,
+    SKOS_NARROWER_TRANSITIVE, SKOS_RELATED, SKOS_SEMANTIC_RELATION,
+};
 pub use xl::{
-    LabelOrigin, RelationOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL,
-    SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM, SKOSXL_PREF_LABEL,
+    LabelOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL, SKOSXL_LABEL_RELATION,
+    SKOSXL_LITERAL_FORM, SKOSXL_PREF_LABEL,
 };
 
 /// Namespace IRIs used throughout the SKOS model.

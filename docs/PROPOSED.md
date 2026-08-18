@@ -359,6 +359,34 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   datatype IRI of a derived integer type is dropped, not just the lexical form — so whichever option
   is chosen here has to cover that too. Read the two together; they are one decision.
 
+### Measure the core model's size before the transitive closure is built on top of it
+- **Status:** proposed.
+- **Gap:** iteration 24 put semantic relations into `openbiz-skos`, and they are the first thing
+  in the crate that scales with a vocabulary's **size** rather than with its structure. The
+  closure materialises every stated link under four properties — the one written, its inverse
+  under S25, and both transitive variants under S22 — so a 100k-link thesaurus holds roughly 400k
+  `(Node, RelationOrigin)` entries with the IRIs cloned into each, plus three derivations per link
+  in a `Vec<String>`-shaped list that `openbiz inspect` prints in full and without a cap.
+  `CoreModelBuilder`'s doc comment still says what is kept is "proportional to the resources the
+  model has something to say about rather than to the size of the graph". That was true when
+  labels and notes were counted and dropped. It is now narrower than it reads.
+- **Why load-bearing:** the very next build-plan item is S24's transitive closure, which is
+  superlinear in exactly this data — quadratic in the worst case for a deep hierarchy — and it
+  will be built on whatever shape is there when it arrives. If the right answer turns out to be
+  "store one direction and answer the other on read", that is a much cheaper change to make
+  *before* the closure than after, and it cannot be decided without a number. The scale spike in
+  `adr/0013` measured the store; nothing has ever measured the model.
+- **What is being asked for:** peak resident memory and wall clock for `openbiz inspect` at 10k,
+  100k and 1M links, on both a shallow-and-wide and a deep-and-narrow hierarchy, plus the size of
+  the report it prints. Then a recorded decision, in an ADR, on whether to keep materialising.
+- **Why the loop is not deciding it:** the loop can take the measurement — it is one item — but
+  the decision it feeds is an architectural one about the core model's shape, and picking a new
+  shape from an unmeasured fear is the other way to get this wrong. It is also arguably a
+  re-ordering of Phase 2, which is a plan change and not the loop's to make.
+- **Cost & impact:** one iteration for the measurement. The change it might imply is larger, and
+  cheaper now than in three items' time. No new dependency.
+- **Suggested phase:** Phase 2, immediately before "Semantic relations, part 2".
+
 ### Decide where entailments live, because our answers and our exports now disagree
 - **Status:** proposed.
 - **Gap:** `openbiz inspect` reports facts nobody stated — a concept scheme found under S5, a

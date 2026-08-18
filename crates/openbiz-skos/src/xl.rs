@@ -137,34 +137,6 @@ pub enum LabelOrigin {
     DumbedDown(SkosRule),
 }
 
-/// How a resource came to be linked to another by `skosxl:labelRelation`.
-///
-/// The third of these — after [`ClassOrigin`](crate::ClassOrigin) and [`LabelOrigin`] — and for
-/// the third time the same reason: a report that cannot distinguish what the graph said from what
-/// we concluded is not an audit trail. A link stated in both directions is
-/// [`Asserted`](RelationOrigin::Asserted) at both ends; only the direction the graph left out is
-/// an inference, and only that one is counted as one.
-///
-/// [`S62`](crate::SkosRule::S62) is the only rule that produces the entailed case today, and the
-/// rule is carried rather than assumed so that a refinement of `skosxl:labelRelation` reaching
-/// here later cannot arrive without saying which statement licensed it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RelationOrigin {
-    /// The graph carries the `skosxl:labelRelation` statement in this direction.
-    Asserted,
-    /// We concluded it, under this rule — S62, because the property is symmetric.
-    Entailed(SkosRule),
-}
-
-impl std::fmt::Display for RelationOrigin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RelationOrigin::Asserted => write!(f, "asserted"),
-            RelationOrigin::Entailed(rule) => write!(f, "inferred, {}", rule.number()),
-        }
-    }
-}
-
 impl std::fmt::Display for LabelOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -231,15 +203,6 @@ mod tests {
     fn the_label_relation_property_is_not_a_labelling_property() {
         assert_eq!(LabelKind::from_xl_iri(SKOSXL_LABEL_RELATION), None);
         assert_eq!(LabelKind::from_iri(SKOSXL_LABEL_RELATION), None);
-    }
-
-    #[test]
-    fn a_relation_origin_says_whether_the_graph_stated_the_direction() {
-        assert_eq!(RelationOrigin::Asserted.to_string(), "asserted");
-        assert_eq!(
-            RelationOrigin::Entailed(SkosRule::S62).to_string(),
-            "inferred, S62"
-        );
     }
 
     #[test]

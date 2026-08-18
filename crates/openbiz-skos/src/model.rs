@@ -66,7 +66,8 @@ use std::fmt;
 
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::ns;
-use crate::xl::{LabelOrigin, RelationOrigin, SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM};
+use crate::relations::{RelationOrigin, SemanticRelation, SKOS_SEMANTIC_RELATION};
+use crate::xl::{LabelOrigin, SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM};
 
 /// `rdf:type`.
 pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -198,6 +199,14 @@ pub enum SkosRule {
     S12,
     S13,
     S14,
+    S18,
+    S19,
+    S20,
+    S21,
+    S22,
+    S23,
+    S25,
+    S26,
     S29,
     S31,
     S33,
@@ -236,6 +245,14 @@ impl SkosRule {
             SkosRule::S12 => "S12",
             SkosRule::S13 => "S13",
             SkosRule::S14 => "S14",
+            SkosRule::S18 => "S18",
+            SkosRule::S19 => "S19",
+            SkosRule::S20 => "S20",
+            SkosRule::S21 => "S21",
+            SkosRule::S22 => "S22",
+            SkosRule::S23 => "S23",
+            SkosRule::S25 => "S25",
+            SkosRule::S26 => "S26",
             SkosRule::S29 => "S29",
             SkosRule::S30 => "S30",
             SkosRule::S31 => "S31",
@@ -285,6 +302,26 @@ impl SkosRule {
             }
             SkosRule::S14 => {
                 "A resource has no more than one value of skos:prefLabel per language tag."
+            }
+            SkosRule::S18 => {
+                "skos:semanticRelation, skos:broader, skos:narrower, skos:related, \
+                 skos:broaderTransitive and skos:narrowerTransitive are each instances of \
+                 owl:ObjectProperty."
+            }
+            SkosRule::S19 => "The rdfs:domain of skos:semanticRelation is the class skos:Concept.",
+            SkosRule::S20 => "The rdfs:range of skos:semanticRelation is the class skos:Concept.",
+            SkosRule::S21 => {
+                "skos:broaderTransitive, skos:narrowerTransitive and skos:related are each \
+                 sub-properties of skos:semanticRelation."
+            }
+            SkosRule::S22 => {
+                "skos:broader is a sub-property of skos:broaderTransitive, and skos:narrower is a \
+                 sub-property of skos:narrowerTransitive."
+            }
+            SkosRule::S23 => "skos:related is an instance of owl:SymmetricProperty.",
+            SkosRule::S25 => "skos:narrower is owl:inverseOf the property skos:broader.",
+            SkosRule::S26 => {
+                "skos:narrowerTransitive is owl:inverseOf the property skos:broaderTransitive."
             }
             SkosRule::S29 => "skos:OrderedCollection is a sub-class of skos:Collection.",
             SkosRule::S30 => {
@@ -970,6 +1007,7 @@ pub struct Resource {
     literal_forms: BTreeSet<Literal>,
     xl_labels: BTreeMap<Node, BTreeSet<LabelKind>>,
     label_relations: BTreeMap<Node, RelationOrigin>,
+    semantic_relations: BTreeMap<SemanticRelation, BTreeMap<Node, RelationOrigin>>,
 }
 
 impl Resource {
@@ -1072,6 +1110,38 @@ impl Resource {
     /// refinement would be wrong even if we did.
     pub fn label_relations(&self) -> &BTreeMap<Node, RelationOrigin> {
         &self.label_relations
+    }
+
+    /// The concepts this one is linked to under one semantic relation, and how each link arrived.
+    ///
+    /// Closed under **S25** and **S26** (the two inverse pairs), **S23** (`skos:related` is
+    /// symmetric) and **S22** (each direction is also its transitive variant), so a hierarchy an
+    /// author wrote downwards reads upwards too and every link appears under four properties. Each
+    /// entry says which of those statements produced it, or that the graph stated it outright.
+    ///
+    /// **Not closed under S24.** `skos:broaderTransitive` holds one-step links only — those S22
+    /// lifted from `skos:broader` and those the graph stated itself. Walking an ancestor chain is
+    /// the next build-plan item; a caller that treats this map as the closure will get a partial
+    /// answer, which is why the accessor is named for the property and not for "ancestors".
+    pub fn relations(&self, relation: SemanticRelation) -> Option<&BTreeMap<Node, RelationOrigin>> {
+        self.semantic_relations.get(&relation)
+    }
+
+    /// Every semantic relation this resource takes part in, in a stable order.
+    pub fn semantic_relations(
+        &self,
+    ) -> &BTreeMap<SemanticRelation, BTreeMap<Node, RelationOrigin>> {
+        &self.semantic_relations
+    }
+
+    /// How many concepts it has as broader concepts.
+    ///
+    /// More than one is **polyhierarchy**, which is ordinary in a thesaurus and is never a
+    /// [`Finding`]: §8 states nothing against it and ISO 25964 relies on it. Counted because an
+    /// author migrating from a strictly-monohierarchical source wants the number.
+    pub fn broader_count(&self) -> usize {
+        self.relations(SemanticRelation::Broader)
+            .map_or(0, BTreeMap::len)
     }
 
     /// Its preferred label in `language`, if it has one.
@@ -1232,6 +1302,8 @@ pub struct CoreModelBuilder {
     literal_form: BTreeMap<Node, BTreeSet<Literal>>,
     xl_labels: BTreeMap<Node, BTreeMap<Node, BTreeSet<LabelKind>>>,
     label_relations: BTreeSet<(Node, Node)>,
+    semantic_relations: BTreeMap<SemanticRelation, BTreeSet<(Node, Node)>>,
+    semantic_relation_ends: BTreeSet<(Node, Node)>,
     findings: Vec<Finding>,
     statements_read: usize,
 }
@@ -1303,6 +1375,27 @@ impl CoreModelBuilder {
                 self.object_property(subject, &predicate, object, SkosRule::S59, |b, s, o| {
                     b.label_relations.insert((s, o));
                 })
+            }
+            SKOS_SEMANTIC_RELATION => {
+                // The super-property. S18 refuses a literal on it and S19/S20 type both ends, but
+                // there is no sub-property it could be filed under: the entailment runs upwards,
+                // and from `<A> skos:semanticRelation <B>` nothing follows about which of the five
+                // holds. So it is kept only as a pair for the class rules to read.
+                self.object_property(subject, &predicate, object, SkosRule::S18, |b, s, o| {
+                    b.semantic_relation_ends.insert((s, o));
+                })
+            }
+            _ if SemanticRelation::from_iri(&predicate).is_some() => {
+                // Unreachable `None` — the guard has already matched the IRI. Written as a `let`
+                // for the reason the label arm below gives.
+                if let Some(relation) = SemanticRelation::from_iri(&predicate) {
+                    self.object_property(subject, &predicate, object, SkosRule::S18, |b, s, o| {
+                        b.semantic_relations
+                            .entry(relation)
+                            .or_default()
+                            .insert((s, o));
+                    })
+                }
             }
             _ if LabelKind::from_xl_iri(&predicate).is_some() => {
                 // Unreachable `None`, as below: the guard has already matched the IRI.
@@ -1407,6 +1500,14 @@ impl CoreModelBuilder {
         // the shorter one is the one a reader can check.
         Self::entail_super_classes(&mut model);
         self.resolve_member_lists(&mut model);
+        // The semantic relations close first and are typed second, which is the opposite order to
+        // SKOS-XL's — and for a stated reason. S60 and S61 constrain `skosxl:labelRelation`
+        // itself, so a label can be typed straight from the graph's own statement. S19 and S20
+        // constrain `skos:semanticRelation`, which no author writes, so the citation for a
+        // concept typed out of a `skos:broader` runs through S22 and S21 first and those two
+        // steps must already be in the derivation list for it to read.
+        self.close_semantic_relations(&mut model);
+        self.apply_relation_class_rules(&mut model);
         self.attach_labels(&mut model);
         // The SKOS-XL passes run in the order the specification's dependencies do: the classes
         // first (S50, S54, S60, S61), then the symmetric closure of the links those classes came
@@ -1514,6 +1615,164 @@ impl CoreModelBuilder {
                 premise: format!("{from} skosxl:labelRelation {to}"),
                 rule: SkosRule::S62,
             });
+        }
+    }
+
+    /// S22, S23, S25 and S26 — every link the graph stated, and the ones those four entail.
+    ///
+    /// Two passes, in this order and not the other:
+    ///
+    /// 1. **The inverses.** S25 pairs `skos:broader` with `skos:narrower`, S26 pairs the two
+    ///    transitive variants, and S23 makes `skos:related` its own inverse. So a hierarchy an
+    ///    author wrote downwards reads upwards, which is the whole reason SKOS defines both
+    ///    directions rather than one.
+    /// 2. **The sub-property lift.** S22 puts every `skos:broader` link under
+    ///    `skos:broaderTransitive` and every `skos:narrower` link under
+    ///    `skos:narrowerTransitive`. It runs *after* the inverses so that it lifts the converses
+    ///    too: a graph stating only `<A> skos:broader <B>` ends with all four links, and one
+    ///    stating only `<B> skos:narrower <A>` ends with the same four. Running it first would
+    ///    make the model's answer depend on which direction the author happened to type.
+    ///
+    /// A direction the graph stated is never overwritten by one we derived, so a graph that
+    /// states both directions has two asserted links and no derivation — symmetry means they are
+    /// the same link, not two.
+    ///
+    /// **S24 is not applied here.** `skos:broaderTransitive` comes out of this holding one-step
+    /// links only. See the [`relations`](crate::SemanticRelation) module.
+    fn close_semantic_relations(&self, model: &mut CoreModel) {
+        for (relation, links) in &self.semantic_relations {
+            for (from, to) in links {
+                model
+                    .resources
+                    .entry(from.clone())
+                    .or_default()
+                    .semantic_relations
+                    .entry(*relation)
+                    .or_default()
+                    .insert(to.clone(), RelationOrigin::Asserted);
+            }
+        }
+
+        // What holds after each pass, so the second lifts what the first derived. Asserted links
+        // are in here from the start, which is what stops a derivation being recorded for a
+        // direction the graph already stated.
+        let mut held: BTreeMap<SemanticRelation, BTreeSet<(Node, Node)>> =
+            self.semantic_relations.clone();
+        let mut derived: Vec<(SemanticRelation, Node, Node, SkosRule, String)> = Vec::new();
+
+        for (relation, links) in &self.semantic_relations {
+            let (inverse, rule) = relation.inverse();
+            for (from, to) in links {
+                if held
+                    .entry(inverse)
+                    .or_default()
+                    .insert((to.clone(), from.clone()))
+                {
+                    derived.push((
+                        inverse,
+                        to.clone(),
+                        from.clone(),
+                        rule,
+                        format!("{from} {relation} {to}"),
+                    ));
+                }
+            }
+        }
+
+        // Over every relation and not over the two that have a variant, so that
+        // `transitive_variant` is the single place that decides which do — a table saying
+        // `skos:related` lifts into the hierarchy would otherwise be wrong in the table and right
+        // in the closure, and only the table's own test would notice.
+        for relation in SemanticRelation::ALL {
+            let Some((variant, rule)) = relation.transitive_variant() else {
+                continue;
+            };
+            let links = held.get(&relation).cloned().unwrap_or_default();
+            for (from, to) in links {
+                if held
+                    .entry(variant)
+                    .or_default()
+                    .insert((from.clone(), to.clone()))
+                {
+                    let premise = format!("{from} {relation} {to}");
+                    derived.push((variant, from, to, rule, premise));
+                }
+            }
+        }
+
+        for (relation, from, to, rule, premise) in derived {
+            model
+                .resources
+                .entry(from.clone())
+                .or_default()
+                .semantic_relations
+                .entry(relation)
+                .or_default()
+                .insert(to.clone(), RelationOrigin::Entailed(rule));
+            model.derivations.push(Derivation {
+                conclusion: format!("{from} {relation} {to}"),
+                premise,
+                rule,
+            });
+        }
+    }
+
+    /// S19 and S20 — both ends of a semantic relation are `skos:Concept`, by way of S21.
+    ///
+    /// Like S60 and S61 before them these usually report **nothing**: a vocabulary that types its
+    /// concepts already has the answer, and the pass is silent. What they do is make a mistake
+    /// visible. A `skos:broader` pointing at a `skos:Collection` types that collection as a
+    /// concept, and S37's disjointness then says so — without the domain and range the same graph
+    /// reads as clean, because nothing else in it would ever type the collection.
+    ///
+    /// **The citation runs through the super-property, because that is where the rule lives.**
+    /// S19 constrains `skos:semanticRelation`, not `skos:broader`, so a report that cited S19
+    /// against a `skos:broader` statement would name a statement that does not mention the
+    /// property the author used. The chain is therefore printed: the S22 lift is already in the
+    /// derivation list from the pass above, this adds the S21 step to `skos:semanticRelation`,
+    /// and S19 and S20 conclude from that.
+    ///
+    /// The S21 step is recorded **only when a class actually follows from it**. Emitting it for
+    /// every link in the vocabulary would double the derivation list to state something no reader
+    /// asked about; emitting none would leave the class entailment citing a premise that appears
+    /// nowhere. A graph that states `skos:semanticRelation` outright needs no step at all.
+    fn apply_relation_class_rules(&self, model: &mut CoreModel) {
+        let mut links: Vec<(Node, Node, Option<SemanticRelation>)> = Vec::new();
+        for (relation, pairs) in &self.semantic_relations {
+            // The property the S21 step will cite: the transitive variant for the two base
+            // directions, because S21 does not name them, and the relation itself for the three
+            // it does name.
+            let via = relation
+                .transitive_variant()
+                .map_or(*relation, |(variant, _)| variant);
+            for (from, to) in pairs {
+                links.push((from.clone(), to.clone(), Some(via)));
+            }
+        }
+        for (from, to) in &self.semantic_relation_ends {
+            links.push((from.clone(), to.clone(), None));
+        }
+
+        for (from, to, via) in links {
+            let typed = |model: &CoreModel, node: &Node| {
+                model
+                    .resources
+                    .get(node)
+                    .is_some_and(|resource| resource.is_a(SkosClass::Concept))
+            };
+            if typed(model, &from) && typed(model, &to) {
+                continue;
+            }
+            let conclusion = format!("{from} skos:semanticRelation {to}");
+            if let Some(via) = via {
+                model.derivations.push(Derivation {
+                    conclusion: conclusion.clone(),
+                    premise: format!("{from} {via} {to}"),
+                    rule: SemanticRelation::semantic_relation_rule(via),
+                });
+            }
+            entail_class(model, &from, SkosClass::Concept, SkosRule::S19, &conclusion);
+            entail_class(model, &to, SkosClass::Concept, SkosRule::S20, &conclusion);
         }
     }
 
@@ -2692,18 +2951,47 @@ mod tests {
 
     // --- The model as a whole -------------------------------------------------------------
 
+    /// The model reads what it has rules for and counts the rest. `skos:notation` and
+    /// `skos:scopeNote` are §6 and §7, which are their own build-plan items, so they leave nothing
+    /// behind but a number — and a resource mentioned only by one of them is not in the model at
+    /// all, which is what stops the model growing with the graph rather than with its structure.
     #[test]
     fn statements_outside_the_core_model_are_counted_and_dropped() {
         let model = CoreModel::from_statements([
             typed(&ex("A"), SkosClass::Concept),
             Statement::new(ex("A"), skos("prefLabel"), plain("Chemistry")),
+            Statement::new(ex("A"), skos("notation"), plain("CHEM")),
+            Statement::new(ex("A"), skos("scopeNote"), plain("The study of matter.")),
+            Statement::new(
+                ex("A"),
+                "http://example.com/ns/approvedBy".to_owned(),
+                ex("Board"),
+            ),
+        ]);
+
+        assert_eq!(model.statements_read(), 5);
+        assert_eq!(model.count_of(SkosClass::Concept), 1);
+        assert!(model.resource(&ex("Board")).is_none());
+    }
+
+    /// The counterpart, and the behaviour this item changed: a `skos:broader` **is** in the core
+    /// model now, so its object is too — as a `skos:Concept`, under S19 and S20. Before this item
+    /// the same graph left `<B>` unmentioned. Kept beside the test above so the boundary between
+    /// what is read and what is counted is written down in one place.
+    #[test]
+    fn a_semantic_relation_brings_its_object_into_the_model() {
+        let model = CoreModel::from_statements([
+            typed(&ex("A"), SkosClass::Concept),
             Statement::new(ex("A"), skos("broader"), ex("B")),
         ]);
 
-        assert_eq!(model.statements_read(), 3);
-        // Labels and semantic relations are their own items; the model must not half-report them.
-        assert_eq!(model.count_of(SkosClass::Concept), 1);
-        assert!(model.resource(&ex("B")).is_none());
+        assert_eq!(model.count_of(SkosClass::Concept), 2);
+        assert_eq!(
+            model
+                .resource(&ex("B"))
+                .and_then(|resource| resource.classes().get(&SkosClass::Concept)),
+            Some(&ClassOrigin::Entailed(SkosRule::S20))
+        );
     }
 
     #[test]
@@ -4243,6 +4531,392 @@ mod tests {
         assert_eq!(
             SkosRule::S62.statement(),
             "skosxl:labelRelation is an instance of owl:SymmetricProperty."
+        );
+    }
+
+    // ---- Semantic relations, §8 (S18–S26). S24 and S27 are the next build-plan item. ----
+
+    /// The link the graph stated, and the three the four closure rules entail from it.
+    #[test]
+    fn one_broader_statement_produces_all_four_links() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        let from_a = model.resource(&a).expect("A is in the model");
+        assert_eq!(
+            from_a
+                .relations(SemanticRelation::Broader)
+                .and_then(|links| links.get(&b)),
+            Some(&RelationOrigin::Asserted)
+        );
+        assert_eq!(
+            from_a
+                .relations(SemanticRelation::BroaderTransitive)
+                .and_then(|links| links.get(&b)),
+            Some(&RelationOrigin::Entailed(SkosRule::S22)),
+            "S22 lifts skos:broader to skos:broaderTransitive"
+        );
+
+        let from_b = model.resource(&b).expect("B is in the model");
+        assert_eq!(
+            from_b
+                .relations(SemanticRelation::Narrower)
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S25)),
+            "S25 makes skos:narrower the inverse of skos:broader"
+        );
+        assert_eq!(
+            from_b
+                .relations(SemanticRelation::NarrowerTransitive)
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S22)),
+            "the converse lifts too, because the inverses run first"
+        );
+    }
+
+    /// Whichever direction the author typed, the model holds the same four links. If the S22 lift
+    /// ran before the inverse pass this test would fail in exactly one of its two halves.
+    #[test]
+    fn the_direction_the_author_typed_does_not_change_the_answer() {
+        let (a, b) = (ex("A"), ex("B"));
+        let downwards = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+        let upwards = CoreModel::from_statements([s(&b, &skos("narrower"), &a)]);
+
+        for relation in SemanticRelation::ALL {
+            for node in [&a, &b] {
+                let one = downwards
+                    .resource(node)
+                    .and_then(|resource| resource.relations(relation))
+                    .map(|links| links.keys().cloned().collect::<Vec<_>>());
+                let other = upwards
+                    .resource(node)
+                    .and_then(|resource| resource.relations(relation))
+                    .map(|links| links.keys().cloned().collect::<Vec<_>>());
+                assert_eq!(one, other, "{node} {relation}");
+            }
+        }
+    }
+
+    /// S23 — `skos:related` is symmetric, so one statement is one link in both directions.
+    #[test]
+    fn a_related_link_is_symmetric_under_s23() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("related"), &b)]);
+
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|resource| resource.relations(SemanticRelation::Related))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S23))
+        );
+        // Symmetry must not leak into the hierarchy: an associative link is not a broader one.
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::Broader))
+            .is_none());
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::BroaderTransitive))
+            .is_none());
+    }
+
+    /// A graph that states both directions has two asserted links and nothing to derive. Claiming
+    /// to have concluded what the file says outright would be a derivation nobody needed.
+    #[test]
+    fn a_direction_the_graph_states_is_never_reported_as_inferred() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("narrower"), &a)]);
+
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|resource| resource.relations(SemanticRelation::Narrower))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Asserted)
+        );
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| derivation.rule == SkosRule::S25),
+            "S25 had nothing left to conclude: {:?}",
+            model.derivations()
+        );
+    }
+
+    /// S26 — the two transitive variants are each other's inverse, which is the only way an
+    /// asserted `skos:broaderTransitive` gets its converse. S22 cannot supply it: sub-property
+    /// entailment runs upwards, so nothing lifts a transitive link down to `skos:broader`.
+    #[test]
+    fn an_asserted_transitive_link_gets_its_converse_under_s26() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broaderTransitive"), &b)]);
+
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|resource| resource.relations(SemanticRelation::NarrowerTransitive))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S26))
+        );
+        assert!(
+            model
+                .resource(&a)
+                .and_then(|resource| resource.relations(SemanticRelation::Broader))
+                .is_none(),
+            "skos:broaderTransitive does not entail skos:broader"
+        );
+    }
+
+    /// Polyhierarchy: §8 states nothing against a concept with two broader concepts, ISO 25964
+    /// relies on it, and it is counted rather than reported.
+    #[test]
+    fn a_concept_may_have_two_broader_concepts_and_it_is_not_a_finding() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&a, &skos("broader"), &c)]);
+
+        assert_eq!(
+            model.resource(&a).map(Resource::broader_count),
+            Some(2),
+            "both broader concepts are kept"
+        );
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        assert!(model.is_consistent());
+    }
+
+    /// S19 and S20 report nothing when the graph has already typed its concepts — the ordinary
+    /// case, and the reason this pass is quiet on a well-formed vocabulary.
+    #[test]
+    fn the_domain_and_range_are_silent_on_a_vocabulary_that_types_its_concepts() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            typed(&a, SkosClass::Concept),
+            typed(&b, SkosClass::Concept),
+            s(&a, &skos("broader"), &b),
+        ]);
+
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| matches!(derivation.rule, SkosRule::S19 | SkosRule::S20)),
+            "{:?}",
+            model.derivations()
+        );
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| derivation.rule == SkosRule::S21),
+            "the S21 step is only recorded when a class follows from it"
+        );
+    }
+
+    /// The chain a report prints for a concept typed out of a `skos:broader` statement: S22 to the
+    /// transitive variant, S21 to `skos:semanticRelation`, then S19 and S20. Citing S19 against
+    /// the `skos:broader` statement itself would name a statement that does not mention the
+    /// property the author wrote.
+    #[test]
+    fn typing_a_concept_from_a_relation_prints_the_whole_chain() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        assert_eq!(
+            model
+                .resource(&a)
+                .and_then(|r| r.classes().get(&SkosClass::Concept)),
+            Some(&ClassOrigin::Entailed(SkosRule::S19))
+        );
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|r| r.classes().get(&SkosClass::Concept)),
+            Some(&ClassOrigin::Entailed(SkosRule::S20))
+        );
+
+        let step = |rule: SkosRule| {
+            model
+                .derivations()
+                .iter()
+                .find(|derivation| derivation.rule == rule)
+                .unwrap_or_else(|| panic!("no {} step in {:?}", rule.number(), model.derivations()))
+        };
+        assert_eq!(
+            step(SkosRule::S22).conclusion,
+            format!("<{EX}A> skos:broaderTransitive <{EX}B>")
+        );
+        assert_eq!(
+            step(SkosRule::S21).premise,
+            format!("<{EX}A> skos:broaderTransitive <{EX}B>"),
+            "S21 does not name skos:broader, so the citation goes through the variant"
+        );
+        assert_eq!(
+            step(SkosRule::S19).premise,
+            format!("<{EX}A> skos:semanticRelation <{EX}B>")
+        );
+    }
+
+    /// The mistake the domain and range exist to make visible. Without S19 and S20 this graph
+    /// reads as clean: nothing else in it would ever type the collection as a concept.
+    #[test]
+    fn a_broader_link_to_a_collection_is_caught_by_s37() {
+        let (a, group) = (ex("A"), ex("Group"));
+        let model = CoreModel::from_statements([
+            typed(&group, SkosClass::Collection),
+            s(&a, &skos("broader"), &group),
+        ]);
+
+        assert!(!model.is_consistent());
+        assert!(
+            model.findings().iter().any(|finding| matches!(
+                finding,
+                Finding::DisjointClasses {
+                    resource,
+                    rule: SkosRule::S37,
+                    ..
+                } if resource == &group
+            )),
+            "{:?}",
+            model.findings()
+        );
+    }
+
+    /// S18 makes all six object properties, so a literal is the contradiction it is under S3 and
+    /// S30 — and the link is dropped rather than filed under a property whose value it cannot be.
+    #[test]
+    fn a_literal_on_a_semantic_relation_is_refused_under_s18() {
+        let a = ex("A");
+        let model = CoreModel::from_statements([Statement::new(
+            a.clone(),
+            skos("broader"),
+            plain("something broader"),
+        )]);
+
+        assert!(model.findings().iter().any(|finding| matches!(
+            finding,
+            Finding::LiteralOnObjectProperty {
+                rule: SkosRule::S18,
+                ..
+            }
+        )));
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::Broader))
+            .is_none());
+    }
+
+    /// `skos:semanticRelation` stated outright: S19 and S20 type both ends, and no sub-property
+    /// is invented, because the entailment runs upwards and the statement says only that *one* of
+    /// the five holds.
+    #[test]
+    fn the_super_property_types_both_ends_and_is_filed_under_nothing() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("semanticRelation"), &b)]);
+
+        assert!(model
+            .resource(&a)
+            .is_some_and(|r| r.is_a(SkosClass::Concept)));
+        assert!(model
+            .resource(&b)
+            .is_some_and(|r| r.is_a(SkosClass::Concept)));
+        for relation in SemanticRelation::ALL {
+            assert!(
+                model
+                    .resource(&a)
+                    .and_then(|resource| resource.relations(relation))
+                    .is_none(),
+                "{relation} was invented from the super-property"
+            );
+        }
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| derivation.rule == SkosRule::S21),
+            "there is no sub-property step to take: the graph stated the super-property"
+        );
+    }
+
+    /// §8.6.2's Example 26 is inconsistent, and we do **not** say so yet. S27 is the next
+    /// build-plan item and this asserts the honest current behaviour rather than a claim we
+    /// cannot back — see `docs/UNTESTED.md`. It also pins what *is* true today: both links are
+    /// there, closed, and waiting for the condition that reads them.
+    #[test]
+    fn example_26_is_not_yet_reported_and_its_links_are_both_present() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&a, &skos("related"), &b)]);
+
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::BroaderTransitive))
+            .is_some_and(|links| links.contains_key(&b)));
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::Related))
+            .is_some_and(|links| links.contains_key(&b)));
+        assert!(
+            model.is_consistent(),
+            "S27 is not implemented, so nothing may claim to have checked it"
+        );
+    }
+
+    /// S24 is not applied, and a test says so rather than leaving it to be discovered. Example 27
+    /// needs the closure — `<A> broader <B>`, `<B> broader <C>` makes `<A>` transitively broader
+    /// than `<C>` — and the model must not pretend it has it.
+    #[test]
+    fn the_transitive_closure_is_not_taken_and_stops_at_one_step() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
+
+        let from_a = model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::BroaderTransitive))
+            .expect("A has a transitive link to B");
+        assert!(from_a.contains_key(&b));
+        assert!(
+            !from_a.contains_key(&c),
+            "S24 is the next item; claiming the closure now would be a green we did not earn"
+        );
+    }
+
+    /// A blank node is a perfectly good concept, and the closure must not lose one.
+    #[test]
+    fn a_relation_between_blank_nodes_closes_like_any_other() {
+        let (a, b) = (Node::blank("a"), Node::blank("b"));
+        let model = CoreModel::from_statements([s(&a, &skos("narrower"), &b)]);
+
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|resource| resource.relations(SemanticRelation::Broader))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S25))
+        );
+    }
+
+    /// A concept related to itself, or broader than itself. §8 states no condition against either
+    /// — S27 is about `skos:related` and `skos:broaderTransitive` *together* — so neither is a
+    /// finding, and inventing one would be the failure `docs/COMPETITIVE.md` records against the
+    /// incumbents. The same decision `adr/0022` records for a label linked to itself.
+    #[test]
+    fn a_concept_related_to_itself_is_not_a_finding() {
+        let a = ex("A");
+        let model =
+            CoreModel::from_statements([s(&a, &skos("related"), &a), s(&a, &skos("broader"), &a)]);
+
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        assert_eq!(
+            model
+                .resource(&a)
+                .and_then(|resource| resource.relations(SemanticRelation::Related))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Asserted),
+            "the reflexive pair is its own converse, so S23 has nothing to add"
         );
     }
 }

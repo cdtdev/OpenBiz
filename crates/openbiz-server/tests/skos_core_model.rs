@@ -525,3 +525,154 @@ fn inspect_says_nothing_about_skos_xl_for_a_vocabulary_that_does_not_use_it() {
         "the class is still counted, so the reader can see it was looked for: {report}"
     );
 }
+
+/// §8 through the binary: a hierarchy an author wrote in one direction, read in both.
+///
+/// This is what a thesaurus is bought for. `ex:world` and `ex:eurasia` are never typed and never
+/// mentioned except as the far end of a link, and they come out as concepts — which is S19 and S20
+/// doing the work that makes the *next* test's mistake visible. Note that the file states three
+/// `skos:broader` and one `skos:narrower`, mixing the directions exactly as two merged sources do.
+#[test]
+fn inspect_reports_a_hierarchy_and_the_direction_each_link_was_written_in() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "hierarchy.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:apac skos:broader ex:world .\n\
+         ex:emea skos:broader ex:world .\n\
+         ex:emea skos:broader ex:eurasia .\n\
+         ex:world skos:narrower ex:latam .\n\
+         ex:apac skos:related ex:emea .\n",
+    );
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = stdout(&output);
+
+    // Four links, not eight. S25 closes every one into a pair, so counting what each concept
+    // holds would report twice the hierarchy the author wrote.
+    assert!(
+        report.contains("4 hierarchical link(s), 1 of them stated as skos:narrower"),
+        "{report}"
+    );
+    assert!(
+        report.contains("1 associative link(s), 1 converse(s) inferred under S23"),
+        "{report}"
+    );
+    // Polyhierarchy: `ex:emea` sits under two parents. Ordinary in a thesaurus, never a finding.
+    assert!(
+        report.contains("1 concept(s) have more than one broader concept (polyhierarchy)"),
+        "{report}"
+    );
+
+    // The inverse the author did not write, shown with its direction and its statement.
+    assert!(
+        report.contains(
+            "<https://example.org/regions/latam> skos:broader <https://example.org/regions/world>"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("skos:narrower is owl:inverseOf the property skos:broader."),
+        "{report}"
+    );
+    // And the S22 lift, which is what the transitive closure will read when it arrives.
+    assert!(
+        report.contains(
+            "<https://example.org/regions/emea> skos:broaderTransitive \
+             <https://example.org/regions/eurasia>"
+        ),
+        "{report}"
+    );
+
+    // The chain that types an untyped concept: S22 to the variant, S21 to the super-property,
+    // then S19 and S20. A report citing S20 against the `skos:broader` statement itself would
+    // name a statement that does not mention the property the author wrote.
+    assert!(
+        report.contains(
+            "<https://example.org/regions/emea> skos:semanticRelation \
+             <https://example.org/regions/eurasia>"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "skos:broaderTransitive, skos:narrowerTransitive and skos:related are each \
+             sub-properties of skos:semanticRelation."
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("The rdfs:range of skos:semanticRelation is the class skos:Concept."),
+        "{report}"
+    );
+
+    // Two concepts were typed in the file; three more are here only because they are at the end
+    // of a link.
+    assert!(
+        report.contains("skos:Concept            5  (3 inferred)"),
+        "{report}"
+    );
+    assert!(report.contains("findings: 0"), "{report}");
+    assert!(
+        report.contains("no SKOS integrity condition is violated"),
+        "{report}"
+    );
+}
+
+/// The mistake S19 and S20 exist to catch, end to end: a `skos:broader` pointing at a collection.
+///
+/// Without the domain and range this graph reads as clean — nothing else in it would ever type
+/// `ex:reporting` as a concept — so the report would show a tidy hierarchy with a collection
+/// quietly sitting in it. The two statements that catch it are both printed, because a governance
+/// team defending the refusal needs to cite them.
+#[test]
+fn inspect_refuses_a_broader_link_that_points_at_a_collection() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "mislinked.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:apac skos:broader ex:reporting .\n",
+    );
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+
+    assert!(
+        report.contains("The rdfs:range of skos:semanticRelation is the class skos:Concept."),
+        "the range rule is what makes the collection a concept: {report}"
+    );
+    assert!(
+        report.contains(
+            "skos:Collection is disjoint with each of skos:Concept and \
+                         skos:ConceptScheme."
+        ),
+        "and S37 is what makes that a contradiction: {report}"
+    );
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "{report}"
+    );
+    // **One** finding, not several. Iteration 23 closed on the worry that a domain or range rule
+    // entailing a class nobody wanted fans one authoring error out into a list nobody reads. It
+    // does not here, and the reason is structural rather than lucky: S48's fan-out came from
+    // `skosxl:Label` also being *constrained* — S52 wants a literal form, so a concept made a
+    // label picks up a second complaint — and `skos:Concept` carries no such constraint. This
+    // assertion is what would notice if a later item gave it one. See `adr/0023`.
+    assert!(report.contains("findings: 1"), "{report}");
+}
+
+/// A vocabulary with no links gains no section, for the reason the SKOS-XL one is omitted: "0
+/// links" on every report is noise, and the section's presence is itself the answer to "does this
+/// vocabulary have a hierarchy at all?".
+#[test]
+fn inspect_says_nothing_about_semantic_relations_for_a_flat_vocabulary() {
+    let dir = authored();
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+
+    assert!(!report.contains("semantic relations:"), "{report}");
+}

@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 6 of 17 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 7 of 18 items done. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -55,6 +55,13 @@ having no "Integrity Conditions" heading made every severity in it a decision to
 and what plain SKOS cannot express: S59–S62 are applied, a link entails its converse because the
 property is symmetric, and a refinement of it is deliberately *not* closed, because B.4.4.1 warns
 that a sub-property of a symmetric property is not necessarily symmetric — see `adr/0022`.
+**And the vocabulary now has a shape**: §8's semantic relations are read and closed, so a
+hierarchy an author wrote in one direction reads in both, polyhierarchy is counted rather than
+complained about, and a `skos:broader` pointing at a collection is caught by a domain rule on a
+property nobody writes — see `adr/0023`. What is **not** there is the transitive closure, so
+`skos:broaderTransitive` is one step deep and §8.4's integrity condition is unchecked; that is the
+next item and `docs/UNTESTED.md` says exactly which of the specification's examples read as clean
+to us in the meantime.
 
 `openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
 schemes, and collections — including the ones no statement typed, because SKOS itself entails
@@ -685,7 +692,54 @@ the interface is a core differentiator, and building it late means retrofitting 
       > refinement's statement does not reach `skosxl:labelRelation` either, so a thesaurus whose
       > ISO 25964 label relationships are expressed through refinements, which is the ordinary way
       > B.4 is used, reads to us as having none. In `docs/UNTESTED.md`.
-- [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy
+- [x] Semantic relations, part 1 — the links themselves and what they entail (§8, S18–S23, S25,
+      S26)
+      > Split in place at iteration 24 and **done at the same iteration**. The original item read
+      > as one line and is ten specification statements, a closure, a domain-and-range pass and an
+      > integrity condition that none of the others can be tested without; the split is at the
+      > seam where the work changes shape, not at a convenient point in it.
+      > Eight statements applied. **S18** makes all six object properties, so a literal reuses the
+      > finding S3, S30 and S59 already raise. **S25, S26 and S23** close the inverses — a
+      > hierarchy written downwards reads upwards and back, which is what makes two merged sources
+      > comparable — and **S22** lifts both directions into the transitive variants. The inverse
+      > pass runs *first*, and a test compares the whole model of a graph written with
+      > `skos:broader` against the same graph written with `skos:narrower`: the two are identical,
+      > and would not be if the lift ran first.
+      > **S19 and S20 are the domain and range, and they constrain `skos:semanticRelation`** — a
+      > property no author writes. So the citation for a concept typed out of a `skos:broader`
+      > runs S22 → S21 → S19/S20 and the report prints every step, because citing S19 against the
+      > `skos:broader` statement itself would name a statement that does not mention the property
+      > the author used. The S21 step is recorded only when a class actually follows from it, so
+      > a vocabulary that types its own concepts sees none of it.
+      > Polyhierarchy is **counted and never reported**: §8 states nothing against a concept with
+      > two parents and ISO 25964 relies on it. See `adr/0023`, which also records why a concept
+      > related to itself is not a finding, and why the S48-style fan-out iteration 23 worried
+      > about does not occur here — it came from entailing a *constrained* class, and
+      > `skos:Concept` is not one. That is now an assertion in the end-to-end test, not a claim.
+      > **Production caller:** `openbiz inspect` gained a `semantic relations:` section, omitted
+      > entirely for a vocabulary with no links so that its presence answers "does this vocabulary
+      > have a hierarchy at all?". Proven end to end against the real binary.
+      > **Scope, honestly:** S24 and S27 are the item below and are *not* done, so
+      > `skos:broaderTransitive` holds one-step links only and §8.4 is unchecked — four of §8.6's
+      > five examples are marked "not consistent" by the specification and read as clean to us
+      > today. A test pins that rather than leaving it to be found. Also new: the model now holds
+      > something that scales with a vocabulary's *size* rather than its structure, four entries
+      > per stated link, and the ceiling is unmeasured. Both in `docs/UNTESTED.md`.
+- [ ] Semantic relations, part 2 — the transitive closure and §8.4's integrity condition (S24,
+      S27)
+      > Split out of the item above at iteration 24. S24 makes `skos:broaderTransitive` and
+      > `skos:narrowerTransitive` `owl:TransitiveProperty`; S27 makes `skos:related` disjoint with
+      > `skos:broaderTransitive`. They are one item because **S27 cannot be tested without S24**:
+      > §8.6's Examples 27 and 29 are inconsistent only through the closure, and a build that
+      > applied S27 to the one-step links would report Examples 26 and 28 and pass 27 and 29 —
+      > a validator that answers "consistent" for a graph the specification marks otherwise, which
+      > is worse than one that says nothing.
+      > Needs: cycle containment (a vocabulary with `<A> broader <B> broader <A>` must terminate
+      > and must not be reported as broken — §8 states no condition against a cycle), a derivation
+      > that names each step of the path rather than asserting the endpoint, and a decision on the
+      > closure's size taken against the measurement `docs/UNTESTED.md` now asks for.
+      > Acceptance: §8.6's Examples 25–29, all five, each asserted to the consistency the
+      > specification prints beside it.
 - [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number

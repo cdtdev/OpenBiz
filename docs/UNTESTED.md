@@ -29,6 +29,54 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### S24 and S27 are not implemented, so `skos:broaderTransitive` is one step and §8.4 is unchecked
+- **Kind:** partial-standard
+- **What is proven:** S18–S23, S25 and S26 are applied and each has a test naming its number. A
+  `skos:broader` link is closed into all four of `skos:broader`, `skos:narrower`,
+  `skos:broaderTransitive` and `skos:narrowerTransitive`, in whichever direction the author wrote
+  it, and a test asserts the two directions give identical models. Both ends are typed
+  `skos:Concept` through S22, S21 and then S19/S20, and the whole chain is printed by
+  `openbiz inspect`.
+- **What is not:** **S24** — `skos:broaderTransitive` and `skos:narrowerTransitive` are
+  `owl:TransitiveProperty` — is not applied. So `Resource::relations(BroaderTransitive)` holds
+  one-step links only: the ones S22 lifted and the ones the graph stated. A caller that reads it
+  as "the ancestors of this concept" gets a wrong answer for any hierarchy deeper than one level,
+  and a test (`the_transitive_closure_is_not_taken_and_stops_at_one_step`) pins that this is the
+  current behaviour rather than leaving it to be discovered. **S27** — §8.4's only integrity
+  condition, `skos:related` disjoint with `skos:broaderTransitive` — is therefore not applied
+  either, because two of the four examples the specification gives for it (Examples 27 and 29) are
+  inconsistent *only* through the closure. So §8's examples stand as follows today: Example 25 is
+  consistent and we say so; Examples 26, 27, 28 and 29 are marked "not consistent" by the
+  specification and **we report all four as clean**. `example_26_is_not_yet_reported_and_its_links_are_both_present`
+  asserts that, so the gap is a red test the day it is closed and not a silent one.
+- **The risk while it is open** is a false green, and it is the sharpest kind: a vocabulary that
+  violates §8.4 gets "no SKOS integrity condition is violated by this graph" from `openbiz inspect`.
+  That sentence is true of every condition we have implemented and misleading about the one we
+  have not. Nothing in the report says which conditions were checked.
+- **What would close it:** the next build-plan item — the transitive closure with cycle
+  containment, and S27 read off it with a derivation path that names each step. Until then this
+  entry is the only place that says the report's closing sentence is narrower than it reads.
+- **Opened:** iteration 24
+
+### The semantic relation model holds four entries per stated link, and the ceiling is unmeasured
+- **Kind:** partial-coverage
+- **What is proven:** the model is correct on graphs of a handful of links, unit and end to end.
+- **What is not:** the size. The closure materialises every link under four properties — the
+  stated one, its inverse under S25, and both transitive variants under S22 — so a 100k-link
+  thesaurus holds roughly 400k `(Node, RelationOrigin)` entries with the IRIs cloned into each,
+  and the semantic relations are the part of a vocabulary that scales with its size rather than
+  with its structure. `CoreModelBuilder`'s doc comment claims what is kept is "proportional to the
+  resources the model has something to say about rather than to the size of the graph"; that
+  claim was true when labels and notes were counted and dropped, and **this item is the first
+  thing that makes it false**. The derivation list grows with it: three derivations per stated
+  link, all printed by `openbiz inspect`, which prints every one deliberately and without a cap.
+- **What would close it:** a measurement at 10k, 100k and 1M links of peak memory and of the
+  report's size, and then a decision — the candidates are storing one direction and answering the
+  other on read, or not materialising the S22 lift until S24 needs it. Neither should be chosen
+  before the number is known. Note that S24's closure, the next item, is worse than linear in the
+  same data, so the measurement wants taking before it lands rather than after.
+- **Opened:** iteration 24
+
 ### A candidate's evidence is kept forever, and nobody has decided for how long
 - **Kind:** partial-coverage
 - **What is proven:** an applied candidate's staging graph survives the decision, and so does a
