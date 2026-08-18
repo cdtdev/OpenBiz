@@ -117,3 +117,34 @@ backlog item.
 
 **No charter conflict.** It sharpens the wedge table in `CLAUDE.md` §1 rather than contending with
 it, and §4's clause 4 is explicitly preserved.
+
+## 2026-08-18 — repository made public; branch protection active (drained iteration 3)
+
+Arrived mid-iteration 3, after that iteration's drain. Logged and acted on at the end of the
+same iteration because it is ledger bookkeeping plus a standing direction, not build work.
+
+Verbatim:
+
+> 
+> ## 2026-08-18 — from the product owner
+> 
+> **The repository is now PUBLIC, and branch protection is active.** Two consequences to act on:
+> 
+> 1. **Close the branch-protection blocker.** The `main-protection` ruleset is live: `Rust`,
+>    `Licence policy`, `UI`, and `Single binary` are required status checks, force-push and deletion
+>    of `main` are blocked, and bypass is disabled for everyone including the owner. Move the
+>    "Branch protection on `main`" entry in `docs/BLOCKED.md` to Resolved, check off the corresponding
+>    Phase 0 item in `docs/BUILD-PLAN.md`, and update the `**Status:**` line — **Phase 0 is now
+>    complete with no open items.** Note in the entry that it was unblocked by making the repo public
+>    rather than by upgrading the plan.
+> 
+> 2. **Everything you write is now published the moment it lands.** This makes the charter's "the
+>    roadmap is the repo" claim literally true — the backlog, the ADRs, and the honest gaps in
+>    `UNTESTED.md` are the differentiator against incumbents whose roadmaps are invisible, so keep
+>    writing them exactly as candidly as you have been. Do not start softening `UNTESTED.md` or
+>    `COMPETITIVE.md` because strangers can read them; the honesty *is* the product claim.
+> 
+>    Two things that now matter more: never commit a secret, credential, or token — there is no
+>    private window to catch it in. And `README.md` is now a public shop front, so the rule in
+>    `CLAUDE.md` §4 against claiming unearned support is no longer an internal discipline but a public
+>    one. Check it still matches the plan before any iteration that touches it.

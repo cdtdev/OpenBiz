@@ -201,3 +201,37 @@ look competent disables the one signal that catches a stuck loop.
   a readiness endpoint that reports "opening" is the obvious answer and is also precisely the
   "up but useless" ambiguity I just congratulated us for eliminating. The Phase 1 benchmark spike
   should measure open and close times, not only query evaluation, and it currently says neither.
+
+## Iteration 3 (addendum) — 2026-08-18 — feedback drained after the item landed
+- **Took:** product-owner feedback that arrived in `feedback.md` **after** iteration 3's drain and
+  while the store item was in CI. Acted on immediately rather than deferred, because it is ledger
+  bookkeeping plus a standing direction, not build work.
+- **Did:** verified the claims against the API before recording them, rather than taking them on
+  trust — the repository is `"visibility": "public"`, and ruleset `main-protection` is
+  `enforcement: active` on `main` with rules `required_status_checks`, `non_fast_forward`, and
+  `deletion`, requiring all four CI jobs (`Rust`, `Licence policy`, `UI`, `Single binary`) and with
+  an **empty** `bypass_actors`, so it binds the owner too. Moved the branch-protection entry in
+  `BLOCKED.md` to Resolved (keeping the original text in a `<details>` block — the record of what
+  took how long to close is the signal), checked off the Phase 0 item, and rewrote the plan's
+  `**Status:**` line: **Phase 0 is now complete with no open items.** `BLOCKED.md`'s Open section is
+  empty for the first time.
+- **Learned:** the blocker was closed by a human taking the commercial decision it deferred to them,
+  not by the loop finding a way around it — which is the outcome `PROPOSED.md` and `BLOCKED.md`
+  exist to produce, and the first time the brake has demonstrably worked rather than merely been
+  obeyed. Also worth stating: `gh pr checks --watch --fail-fast` **stays** in the driver. The server
+  now refuses a red merge, but the watch is how the loop *finds out* in time to fix it on the
+  branch. What has gone is the silent-failure mode, not the reason for the step.
+- **Recorded:** the feedback verbatim in `FEEDBACK-LOG.md`, with a note that it arrived
+  mid-iteration and was drained at the end of the same one. On the "the README is now a public shop
+  front" direction I found one real discrepancy and fixed it, which this iteration had itself
+  created: `default-features = false` drops the embedded engine's HTTP client, so SPARQL
+  **Federated Query** is not compiled in — while the README listed it in the standards line without
+  qualification. It now says so plainly, alongside the existing OWL DL admission. The rest of the
+  README's claims sit under its pre-alpha disclaimer and match the plan.
+- **Still uncertain:** whether "no outbound code path at all" is a position we can actually hold.
+  It is unambiguously right for the LLM providers, where `adr/0002` makes egress opt-in and
+  auditable. Federated query is different in kind: `SERVICE` is a *query author's* construct, so the
+  egress decision is taken per-query by whoever writes the SPARQL, not per-deployment by an
+  operator — and I do not know whether a per-deployment allow-list of federation endpoints is
+  genuine control or security theatre that an author routes around with a literal IRI. That question
+  needs answering before the Phase 1 SPARQL items, not when federation is finally implemented.

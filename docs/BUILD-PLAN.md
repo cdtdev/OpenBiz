@@ -3,22 +3,22 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** Phase 1 has begun. The embedded store is real: `openbiz-store` opens, stamps, and
-closes an Oxigraph instance inside the binary, and `main.rs` opens it before it binds and closes it
-after a drained shutdown. 59 tests passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`,
-and the UI typecheck/build are green — and the Oxigraph tree needed **no** widening of the §5
-licence allow list. Phase 0 remains complete except for one blocked item — workspace, server, embedded UI, layered
-configuration, harness, and the design for the methodology engine, LLM integration, and enterprise
-awareness (ADRs 0001–0005). 45 tests passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`,
-and the UI typecheck/build are green. **The single binary is real:** the release binary serves the
-full interface with `ui/dist` deleted from disk, checked by CI.
+**Status:** **Phase 0 is complete — no open items.** Branch protection on `main` was the last one
+and is now active, the repository having been made public. Phase 1 has begun: the embedded store is
+real — `openbiz-store` opens, stamps, and closes an Oxigraph instance inside the binary, and
+`main.rs` opens it before it binds and closes it after a drained shutdown. 59 tests passing;
+`cargo fmt`, `cargo clippy -D warnings`, `cargo deny`, and the UI typecheck/build are green, and the
+Oxigraph tree needed **no** widening of the §5 licence allow list. **The single binary is real:** a
+`Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
+interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
+`UNTESTED.md` are readable by anyone.
 
 **Current position:** Phase 1 (RDF core & store). The Oxigraph lifecycle and the promoted
 `Config::load` subprocess test are done. **Next: the named-graph model** — one graph per vocabulary
 plus the system graph — which must give `GraphId::is_directly_writable()` a real enforcement point,
-since today it is a rule with no caller (`UNTESTED.md`). Phase 0's only open item is branch
-protection, blocked on a human decision (see `BLOCKED.md`); a UI test runner was promoted into
-Phase 0 this iteration and is not yet done.
+since today it is a rule with no caller (`UNTESTED.md`). Phase 0 has no open items; the UI test
+runner promoted into it this iteration is the one piece of Phase 0 work still outstanding and is
+tracked as a Phase 0 item rather than a blocker.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -77,9 +77,13 @@ the interface is a core differentiator, and building it late means retrofitting 
       > `docs/CONFIGURATION.md`.
 - [x] GitHub Actions CI: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, UI build
 - [x] `cargo deny` licence policy enforcing `CLAUDE.md` §5, wired into CI
-- [ ] Branch protection on `main` so the loop *cannot* merge red — **BLOCKED**, needs GitHub Pro or
-      a public repo. See `BLOCKED.md`. The loop watches checks itself as a workaround, which is a
-      convention rather than an enforced rule
+- [x] Branch protection on `main` so the loop *cannot* merge red
+      > Unblocked 2026-08-18 by the product owner making the repository **public** — the commercial
+      > decision the blocker deferred to a human, taken rather than worked around. Ruleset
+      > `main-protection` is active on `main` with `Rust`, `Licence policy`, `UI`, and `Single
+      > binary` as required checks, force-push and deletion blocked, and no bypass actors, so the
+      > rule binds the owner too. Merging red is now refused by the server rather than only by the
+      > loop's own discipline. See the Resolved entry in `BLOCKED.md`.
 - [x] Author the iteration driver prompt and the `/openbiz-status` + `/openbiz-control` skills
 - [ ] UI test runner (Vitest + Testing Library) with a test per `Probe` state, wired into CI
       > Promoted from `PROPOSED.md` by the product owner. Today `npm test` is a no-op that passes
