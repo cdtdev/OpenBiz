@@ -25,7 +25,7 @@
 
 use openbiz_skos::{
     ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, RelationOrigin, Resource,
-    SkosClass, Statement, Term,
+    SemanticRelation, SkosClass, Statement, Term,
 };
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
@@ -258,6 +258,89 @@ fn report(graph: &str, model: &CoreModel) -> String {
                 out.push_str(&format!(", ordered by {ordered} well-formed list(s)"));
             }
             out.push('\n');
+        }
+    }
+
+    // The hierarchy, which is what a thesaurus is bought for. Left out entirely for a vocabulary
+    // that has none — a flat list of concepts is a legitimate thing to hold, and printing "0
+    // links" on every one would be the noise the SKOS-XL section above is omitted to avoid.
+    //
+    // **Counted as links and not as statements**, for the reason that section gives: S25 closes
+    // every hierarchical link into a pair, so summing what each resource holds would report twice
+    // the structure the author wrote. `skos:broader` is counted and `skos:narrower` is not,
+    // because after the closure they are the same links seen from the two ends.
+    let hierarchical: usize = model
+        .resources()
+        .map(|(_, resource)| resource.broader_count())
+        .sum();
+    let from_narrower: usize = model
+        .resources()
+        .filter_map(|(_, resource)| resource.relations(SemanticRelation::Broader))
+        .flat_map(|links| links.values())
+        .filter(|origin| matches!(origin, RelationOrigin::Entailed(_)))
+        .count();
+    let associative: usize = model
+        .resources()
+        .map(|(node, resource)| {
+            resource
+                .relations(SemanticRelation::Related)
+                .map_or(0, |links| {
+                    links.keys().filter(|other| *other >= node).count()
+                })
+        })
+        .sum();
+    let associative_converses: usize = model
+        .resources()
+        .filter_map(|(_, resource)| resource.relations(SemanticRelation::Related))
+        .flat_map(|links| links.values())
+        .filter(|origin| matches!(origin, RelationOrigin::Entailed(_)))
+        .count();
+    // A link the graph stated with `skos:broaderTransitive` itself rather than with
+    // `skos:broader`. It is not in the count above and never will be: sub-property entailment
+    // runs upwards, so nothing lifts a transitive link down to `skos:broader`. Reporting it
+    // separately is what stops such a vocabulary reading as one with no hierarchy at all.
+    let stated_transitive: usize = model
+        .resources()
+        .map(|(_, resource)| {
+            resource
+                .relations(SemanticRelation::BroaderTransitive)
+                .map_or(0, |links| {
+                    links
+                        .values()
+                        .filter(|origin| **origin == RelationOrigin::Asserted)
+                        .count()
+                })
+        })
+        .sum();
+    if hierarchical > 0 || associative > 0 || stated_transitive > 0 {
+        out.push_str("\nsemantic relations:\n");
+        out.push_str(&format!(
+            "  {hierarchical} hierarchical link(s), {from_narrower} of them stated as \
+             skos:narrower\n"
+        ));
+        out.push_str(&format!(
+            "  {associative} associative link(s), {associative_converses} converse(s) inferred \
+             under S23\n"
+        ));
+        // Polyhierarchy. §8 states nothing against it and ISO 25964 relies on it, so it is a
+        // number and never a finding — but it is the number a migration from a strictly
+        // single-parent source asks for first, so it is printed whenever there is any.
+        let polyhierarchical = model
+            .resources()
+            .filter(|(_, resource)| resource.broader_count() > 1)
+            .count();
+        if polyhierarchical > 0 {
+            out.push_str(&format!(
+                "  {polyhierarchical} concept(s) have more than one broader concept \
+                 (polyhierarchy)\n"
+            ));
+        }
+        if stated_transitive > 0 {
+            out.push_str(&format!(
+                "  {stated_transitive} link(s) stated with skos:broaderTransitive or \
+                 skos:narrowerTransitive, read one step at a time — the transitive closure S24 \
+                 licenses is not taken\n"
+            ));
         }
     }
 

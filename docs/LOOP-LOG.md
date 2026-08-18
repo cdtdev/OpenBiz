@@ -1767,3 +1767,77 @@ look competent disables the one signal that catches a stuck loop.
   and I have not raised it as a proposal because two findings is not yet a problem, which is
   exactly the reasoning that would justify never raising it. If the next iteration that touches a
   domain rule sees the same fan-out, it should stop treating it as a curiosity.
+
+## Iteration 24 — 2026-08-18
+- **Item:** semantic relations — §8 of the SKOS Reference. `main` was checked first and its most
+  recent run is `success`, so the `SIGTERM` test has now gone two consecutive runs without
+  failing. Two clean runs against an observed rate of two-in-four is *weak* evidence, not a
+  verdict; iteration 22a's doubt stays live and I have not closed it.
+- **The item was split in place, and the seam is the interesting part.** One plan line, ten
+  statements. I split it at S24: this iteration is the one-step closures over what the graph
+  states, the next is the transitive closure and §8.4's integrity condition. The split is not
+  arbitrary — **S27 cannot be tested without S24.** §8.6 gives five examples; 25 is consistent and
+  26, 27, 28 and 29 are not. Examples 27 and 29 are inconsistent *only* through the closure, so a
+  build that applied S27 to the one-step links would report two of them and answer "consistent"
+  for the other two. A validator that passes a graph the specification marks as failing is worse
+  than one that says nothing, so S27 waits for S24 and neither is claimed.
+- **Eight statements applied.** S18 (object properties) reuses the finding S3, S30 and S59 already
+  raise. S25, S26 and S23 close the inverses; S22 lifts both directions into the transitive
+  variants. The ordering is load-bearing and is the thing I would have got wrong if I had not
+  written the test first: **the inverse pass must run before the lift.** Otherwise a hierarchy
+  written with `skos:narrower` ends up short of its `skos:broaderTransitive` links and the model's
+  answer depends on which direction the author happened to type. The test compares two whole
+  models — the same hierarchy written each way — rather than checking a link.
+- **The decision that took the longest was a citation, not an inference.** S19 and S20 are the
+  domain and range, and they constrain **`skos:semanticRelation`** — a property no author writes.
+  So "this is a `skos:Concept` because `<A> skos:broader <B>` and S20" would cite a statement that
+  does not mention the property in the file. The chain is printed instead: S22 to the variant, S21
+  to the super-property, then S19/S20. That is three steps per link, which would double the
+  derivation list on a real vocabulary — so **the S21 step is recorded only when a class actually
+  follows from it**, and a vocabulary that types its own concepts sees none of it. Recording none
+  would have left the class entailment citing a premise printed nowhere, which is the worse half
+  of the trade.
+- **Iteration 23's open worry was answered, and answered smaller than it was posed.** It asked the
+  next iteration touching a domain rule to check whether one authoring error fans out into
+  findings about rules the author never engaged with. It does not here: a `skos:broader` pointing
+  at a `skos:Collection` produces exactly **one** finding, and that is now an assertion in the
+  end-to-end test rather than an observation. The reason is structural — S48's fan-out came from
+  `skosxl:Label` being a *constrained* class (S52 wants a literal form, so a concept made a label
+  picks up a second complaint), and `skos:Concept` is constrained by nothing. So the worry is
+  about entailing constrained classes, not about domain and range rules, and Phase 2's remaining
+  domain-and-range items all entail `skos:Concept`. I have written it down as understood rather
+  than carrying it forward as a doubt, because carrying a resolved doubt is how the
+  non-convergence signal gets diluted.
+- **One design change came out of the mutation testing rather than out of thinking.** The S22 lift
+  originally iterated the two relations that have a transitive variant. The mutation that lifts
+  `skos:related` into `skos:broaderTransitive` was then caught by *one* test — the table's own —
+  because the hard-coded loop ignored the table. Iterating all five and asking
+  `transitive_variant()` makes the table the only place that decides, and the same mutation now
+  fails a model-level test too. A duplication that only a unit test can see is exactly the kind
+  that survives a refactor.
+- **Tests: 470 Rust (from 446) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny` and the
+  UI untouched. Seven mutations, each red: the S22 lift disabled (6 failures), the inverse closure
+  disabled (6), S19/S20 not applied (6), `skos:related` lifted into the hierarchy (2),
+  `skos:related`'s inverse pointed at `skos:broader` (3), links counted as ordered pairs (1), and
+  `skos:semanticRelation` not read at all (1).
+- **Recorded:** `adr/0023`. Two `UNTESTED.md` entries opened — the S24/S27 gap, naming which of
+  §8.6's examples read as clean to us, and the model's size. One pre-existing test was rewritten
+  rather than deleted: `statements_outside_the_core_model_are_counted_and_dropped` used
+  `skos:broader` as its example of something dropped, which this item makes false. It now uses
+  `skos:notation` and a non-SKOS property, and a second test beside it asserts the new behaviour,
+  so the boundary between what is read and what is counted is written down in one place.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T23:28Z. Checked
+  before writing this header, per iterations 16–23.
+- **Still uncertain:** whether the core model can go on materialising everything it concludes.
+  This item is the first thing in the crate that scales with a vocabulary's **size** rather than
+  its structure — four `(Node, RelationOrigin)` entries per stated link, plus three derivations,
+  where before the labels and notes were counted and dropped. `CoreModelBuilder`'s own doc comment
+  still claims otherwise and is now narrower than it reads. I opened an `UNTESTED.md` entry asking
+  for a measurement at 10k, 100k and 1M links, and the reason it is a doubt rather than a task is
+  that **the next item makes it worse before anyone measures it**: S24's closure is superlinear in
+  the same data, and a deep hierarchy's transitive closure is quadratic in the worst case. There
+  is a real chance the right answer is to stop materialising and answer on read, and that is a
+  decision better taken before the closure is built on top of the current shape than after. I did
+  not take it this iteration because guessing at an architecture from an unmeasured fear is the
+  other way to get it wrong, and one item per iteration means the measurement is its own item. If
+  the next iteration starts S24 without a number in front of it, it should stop and get one first.
