@@ -89,6 +89,12 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
+
+      # Vitest exits non-zero when it finds no test files (`passWithNoTests: false` in
+      # vite.config.ts states it rather than leaning on the default). Deleting the suite therefore
+      # turns this job red instead of quietly leaving a green step that asserts nothing.
+      - run: npm test
+
       - run: npm run build
 
   single-binary:

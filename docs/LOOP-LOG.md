@@ -235,3 +235,75 @@ look competent disables the one signal that catches a stuck loop.
   operator — and I do not know whether a per-deployment allow-list of federation endpoints is
   genuine control or security theatre that an author routes around with a literal IRI. That question
   needs answering before the Phase 1 SPARQL items, not when federation is finally implemented.
+
+## Iteration 4 — 2026-08-18
+- **Took:** Phase 0 — "UI test runner (Vitest + Testing Library) with a test per `Probe` state,
+  wired into CI", the last unchecked Phase 0 item. **First, though, the iteration landed dangling
+  work:** the previous iteration's addendum sat on `item/phase0-close-branch-protection` as **open
+  PR #7**, pushed but never merged, so `main` did not contain the branch-protection close, the
+  README's federation correction, or the addendum log entry. All four checks were already green; it
+  merged as `423b1e3` before anything new was started. Worth naming as a loop failure mode: the
+  driver's step 7 ends with a merge, and an iteration that dies between `push` and `merge` leaves no
+  trace anywhere except an open PR that nothing reads. `git status` was clean and `main`'s last run
+  was `success`, so both of step 1's tripwires said "fine".
+- **Did:** `ui/` has a test runner and CI runs it. Ten assertions over `App` in `src/App.test.tsx`,
+  covering all three `Probe` states — the single `/healthz` call and loading text on mount, the
+  success line naming status and version, `role="alert"` for an HTTP refusal / a transport rejection
+  / a non-`Error` rejection, the unmount abort, the `AbortError` swallow, and a StrictMode
+  double-mount that must not paint a spurious alert. Queries are by accessible role and visible
+  text, never test IDs, so the assertions are about what a user perceives. `passWithNoTests: false`
+  is stated explicitly in `vite.config.ts`, and `npm test` is a step in the `UI` job.
+- **Tests:** 59 Rust (unchanged) + **10 UI (new)**. `cargo fmt`, `cargo clippy -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses bans sources`, `npm run typecheck`,
+  `npm test`, `npm run build` all green. **The suite was proven to discriminate before it was
+  trusted:** seven mutations of `App.tsx` — dropping the `response.ok` guard, dropping the
+  `AbortError` swallow, dropping the unmount abort, never leaving the loading state, removing
+  `role="alert"`, probing `/health` instead of `/healthz`, and blanking the non-`Error` message —
+  were each run against the suite and each turned it red.
+- **Learned:** three things, and the first is the real one. (1) **My first draft was a false green.**
+  The `AbortError` mutant *survived*: the suite passed against an `App` that reports every aborted
+  probe as "Cannot reach server". The cause was that my `fetch` stub ignored the `AbortSignal` it
+  was handed, so the branch it claimed to cover was never entered — and the test I had written for
+  it, the StrictMode one, passed for an unrelated reason. Had I stopped at "10 tests green" I would
+  have checked off an item whose headline assertion was decorative. The stub now rejects with a real
+  `AbortError` when its signal fires, and a second, direct test targets the branch without relying
+  on StrictMode's timing. **Mutation testing is what turned a plausible suite into an evidenced
+  one**, and the only reason it happened is that the charter demands a failing test be proven to
+  catch the bug. (2) **The item's own promoted description was wrong**, in the direction that
+  flatters us less: `npm test` was not "a no-op that passes silently" — there was no `test` script,
+  so it exited 1, and the `UI` CI job never invoked it at all. Same effect, different mechanism, and
+  the falsehood was in the loop's reporting rather than in npm's behaviour. Corrected in the plan
+  and in `UNTESTED.md` rather than quietly fixed. (3) **`LIBCLANG_PATH` alone does not rebuild the
+  store on this machine.** `bindgen` got past "unable to find libclang" and died on
+  `'stdbool.h' file not found`, because libclang could not locate its own resource dir; it needs
+  `BINDGEN_EXTRA_CLANG_ARGS=-resource-dir=.../clang/20` as well. The `UNTESTED.md` entry described
+  only the first symptom, so it read as "already known" while describing a different failure. Both
+  variables are now written down verbatim.
+- **Recorded:** closed the `UNTESTED.md` entry "The UI has no test suite at all" and opened its
+  honest successor, "The UI suite asserts on jsdom, and covers one component" — jsdom is not a
+  browser, `main.tsx` is untested, and §4.4's keyboard-navigability clause is still unenforced
+  because `App` has nothing to tab to. Amended the store-toolchain entry with the full incantation.
+  Opened a third: **the UI dependency tree is outside the §5 licence gate.** `cargo deny` covers the
+  Rust tree; nothing covers npm, so §5's "every new dependency gets a licence check" is done by hand
+  for `ui/`. I did it by hand — the four packages added are MIT, and a sweep of all 153 installed
+  packages found one unlisted licence, `caniuse-lite` under **CC-BY-4.0**: pre-existing, transitive
+  via Vite's `browserslist`, build-time only, a data package that never reaches the binary, and
+  attribution-only rather than copyleft. On substance that is §5's "unlisted but permissive" case,
+  not the forbidden one — but §5 requires an ADR for that judgement and I did not write one, because
+  bundling a licensing decision into a test-runner commit is how allow lists get widened quietly.
+  It is a proposal instead, covering the gate *and* the ADR, for a human to promote. Also recorded a
+  **parity finding**: a UI test runner is hygiene, not a wedge — we were behind and have caught up —
+  and on the accessibility half of the "joyless UI" row we currently match the incumbents'
+  intentions and have shipped nothing better. Nil LLM opportunity, with reasoning: generating tests
+  is a fact about our process, not something a taxonomist would ever invoke.
+- **Still uncertain:** whether the loop can actually keep §4.4's keyboard clause once Phase 3 starts
+  producing components faster than one per iteration. Today the clause is satisfied vacuously — no
+  interactive element exists — so nothing has ever tested whether we honour it under pressure, and
+  the harness that would let us is now in place with no rule pointing at it. I do not know what the
+  forcing mechanism should be: a lint cannot tell an interactive component from a static one, a
+  review checklist is exactly the convention-not-enforcement thing branch protection replaced, and a
+  blanket "every component needs a keyboard test" produces meaningless tests for a heading. The
+  narrower and more troubling version: this iteration only discovered its own false green because
+  mutation testing is cheap on one 45-line component, and I have no idea whether that practice
+  survives contact with a design system — if it does not, "the UI suite is green" degrades back into
+  the same unexamined claim it was this morning, just with more files.

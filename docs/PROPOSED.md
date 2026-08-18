@@ -29,7 +29,7 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 ## Open proposals
 
 ### Add a UI test runner before Phase 3 begins
-- **Status:** promoted (→ Phase 0).
+- **Status:** promoted (→ Phase 0) · **done, iteration 4.**
 - **Gap:** `ui/package.json` has no `test` script, so there is no UI test runner at all. The
   iteration driver's `npm test` step is a no-op that passes silently, which is worse than having no
   step — it reads as a green suite. `App.tsx` has three `Probe` states (loading, ok, error) and none
@@ -42,6 +42,29 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Cost & impact:** ~1 iteration. Vitest plus Testing Library, both MIT. Adds a CI step. No runtime
   or binary-size impact — dev dependencies only, never embedded.
 - **Suggested phase:** Phase 0, or as the first item of Phase 3.
+
+### Bring the UI dependency tree under the §5 licence gate
+- **Gap:** `cargo deny check licenses` enforces `CLAUDE.md` §5 across the Rust tree in CI. Nothing
+  equivalent exists for `ui/`, so §5's "every new dependency gets a licence check" is, for npm, a
+  convention the loop follows by hand — which is precisely the enforcement gap branch protection
+  was opened for on the git side. Adding four dev dependencies this iteration made it concrete: the
+  check happened, but only because the iteration chose to do it.
+- **Why load-bearing:** Phase 3 is eleven items of UI and will pull in a component library, an
+  icon set, and a router. That is the moment an npm subtree acquires something copyleft or
+  source-available, and the moment it is most expensive to discover late. An open-core product
+  whose licence policy covers one of its two dependency trees does not have a licence policy.
+- **The concrete finding that prompted this:** a hand sweep of all 153 installed packages found one
+  unlisted licence — `caniuse-lite` under **CC-BY-4.0**, pre-existing, transitive via Vite's
+  `browserslist`, build-time only, and a data package whose contents never reach the binary.
+  CC-BY-4.0 is attribution-only, not copyleft, so on substance this is a §5 "unlisted but
+  permissive" call rather than a wall. **It should be recorded in an ADR, and it is not** — the
+  proposal should cover writing that ADR alongside the gate, not just the gate.
+- **Cost & impact:** ~1 iteration. Candidate tools are `license-checker-rseidelsohn` (BSD-3) or a
+  ~30-line `node` script over `node_modules` with no new dependency at all — the sweep run this
+  iteration was the latter and worked fine, which argues for checking it in rather than adding a
+  tool. Adds one CI step to the `UI` job. No runtime or binary-size impact.
+- **Suggested phase:** Phase 0, or as the first item of Phase 3 — before the component library
+  lands, not after.
 
 ### Headless-browser smoke test against the release binary
 - **Status:** promoted (→ Phase 3).
@@ -94,9 +117,25 @@ Items where the honest answer to *"what would be materially better than the incu
 we can only match"** — recorded per the product owner's standing direction (`FEEDBACK-LOG.md`,
 2026-08-18) rather than shipped quietly as parity.
 
-_None yet. Iteration 2 (layered configuration) found a real "better": the incumbents' weakness is not
-the file format but that a deployment's effective configuration is unknowable, so provenance on every
-setting and a hard error on an unrecognised key beat parity rather than matching it. See `adr/0005`._
+_Iteration 2 (layered configuration) found a real "better": the incumbents' weakness is not the file
+format but that a deployment's effective configuration is unknowable, so provenance on every setting
+and a hard error on an unrecognised key beat parity rather than matching it. See `adr/0005`._
+
+### A UI test runner is table stakes, and we are behind on the thing it enables
+- **Iteration 4 (UI test runner).** The honest answer here is not even "we can only match" — it is
+  **"we were behind and have now caught up"**. Every incumbent's UI is tested; ours had zero
+  assertions. Installing Vitest is hygiene, not a differentiator, and framing it as a wedge would be
+  dishonest. The one genuinely better thing in it is small and worth naming precisely: the suite was
+  **proven to discriminate** before it was trusted, by killing seven mutations of the component. A
+  green suite nobody has tried to break is a claim, not evidence.
+- **The wedge this touches, and where we are still behind:** the charter's row is "dated, dense,
+  joyless UI" → "visually stunning and modern", and `CLAUDE.md` §4.4 requires anything user-facing
+  to be **keyboard-navigable**. The incumbents are genuinely weak here — dense, mouse-driven,
+  specialist-facing screens. We now have the harness to assert keyboard behaviour and **no rule that
+  forces anyone to use it**; `App` has no interactive element, so the gap is invisible today and
+  will not be on the first Phase 3 item. Recorded in `UNTESTED.md`. This is a parity finding in the
+  strict sense: on accessibility we currently match the incumbents' *intentions* and have shipped
+  nothing that beats them.
 
 ---
 
@@ -121,3 +160,12 @@ candidate seam. One adjacent observation worth carrying to Phase 10 rather than 
 proposal — "which layer produced this value" and "which model, prompt version, and inputs produced
 this suggestion" are the same question, and the Phase 10 proposal model should not invent a second
 vocabulary for it._
+
+_Iteration 4 (UI test runner): none found, and this one is worth being blunt about. Writing tests is
+something an LLM is good at, but that is a fact about **our** development process, not a product
+capability — Phase 10's agent list is for things an OpenBiz **user** would invoke, and no taxonomist
+asks their vocabulary tool to generate Vitest specs. The mutation sweep points the other way if
+anything: the one mutant that survived the first draft survived because the test's `fetch` stub was
+subtly unfaithful to the real API's abort semantics, which is exactly the class of plausible-looking
+wrongness an LLM produces most readily and a human reviewer least reliably catches. Whatever Phase
+10 builds, it should assume its output needs an adversarial check that is not itself generated._

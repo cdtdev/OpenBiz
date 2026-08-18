@@ -3,22 +3,23 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **Phase 0 is complete — no open items.** Branch protection on `main` was the last one
-and is now active, the repository having been made public. Phase 1 has begun: the embedded store is
-real — `openbiz-store` opens, stamps, and closes an Oxigraph instance inside the binary, and
-`main.rs` opens it before it binds and closes it after a drained shutdown. 59 tests passing;
-`cargo fmt`, `cargo clippy -D warnings`, `cargo deny`, and the UI typecheck/build are green, and the
+**Status:** **Phase 0 is complete, and this time the UI half of "green" means something.** Branch
+protection on `main` is active, the repository having been made public; the last open Phase 0 item
+was the missing UI test runner, and Vitest plus Testing Library now run 10 assertions over `App`'s
+three `Probe` states in CI. Phase 1 has begun: the embedded store is real — `openbiz-store` opens,
+stamps, and closes an Oxigraph instance inside the binary, and `main.rs` opens it before it binds
+and closes it after a drained shutdown. 59 Rust tests and 10 UI tests passing; `cargo fmt`,
+`cargo clippy -D warnings`, `cargo deny`, and the UI typecheck/test/build are green, and the
 Oxigraph tree needed **no** widening of the §5 licence allow list. **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store). The Oxigraph lifecycle and the promoted
-`Config::load` subprocess test are done. **Next: the named-graph model** — one graph per vocabulary
-plus the system graph — which must give `GraphId::is_directly_writable()` a real enforcement point,
-since today it is a rule with no caller (`UNTESTED.md`). Phase 0 has no open items; the UI test
-runner promoted into it this iteration is the one piece of Phase 0 work still outstanding and is
-tracked as a Phase 0 item rather than a blocker.
+**Current position:** Phase 1 (RDF core & store). Phase 0 is closed — every item checked, nothing
+deferred. The Oxigraph lifecycle and the promoted `Config::load` subprocess test are done.
+**Next: the named-graph model** — one graph per vocabulary plus the system graph — which must give
+`GraphId::is_directly_writable()` a real enforcement point, since today it is a rule with no caller
+(`UNTESTED.md`).
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -85,10 +86,21 @@ the interface is a core differentiator, and building it late means retrofitting 
       > rule binds the owner too. Merging red is now refused by the server rather than only by the
       > loop's own discipline. See the Resolved entry in `BLOCKED.md`.
 - [x] Author the iteration driver prompt and the `/openbiz-status` + `/openbiz-control` skills
-- [ ] UI test runner (Vitest + Testing Library) with a test per `Probe` state, wired into CI
-      > Promoted from `PROPOSED.md` by the product owner. Today `npm test` is a no-op that passes
-      > silently, which reads as a green suite — worse than having no step. Must land before Phase 3
-      > builds a design system on top of an untested component tree.
+- [x] UI test runner (Vitest + Testing Library) with a test per `Probe` state, wired into CI
+      > Promoted from `PROPOSED.md` by the product owner. **Correction to the promoted text:**
+      > `npm test` was not "a no-op that passes silently" — there was no `test` script at all, so it
+      > exited 1 with `Missing script: "test"`, and the `UI` CI job never invoked it. The effect was
+      > the same (zero UI assertions ever ran) but the mechanism was different, and the loop's own
+      > report of a green UI suite was the actual falsehood.
+      > **Better, not parity:** a test step that goes green because it found nothing to run is the
+      > failure this item exists to prevent, so `passWithNoTests: false` is stated explicitly in
+      > `vite.config.ts` and deleting the suite now turns CI red. And the suite was proven to
+      > *discriminate* before it was trusted: seven mutations of `App.tsx` — dropping the
+      > `response.ok` guard, dropping the `AbortError` swallow, dropping the unmount abort, never
+      > leaving the loading state, removing `role="alert"`, probing the wrong endpoint, and blanking
+      > the non-`Error` message — were each confirmed to turn the suite red. The first draft of the
+      > suite let the `AbortError` mutant live, because the `fetch` stub ignored its `AbortSignal`;
+      > that is fixed and is why the stub now rejects on abort the way a real `fetch` does.
 
 ---
 
