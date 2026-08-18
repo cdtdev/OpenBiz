@@ -98,6 +98,25 @@ fn statements_in(backup: &str, graph: &str) -> usize {
         .count()
 }
 
+/// One statement out of [`CONCEPTS`], as the file an operator would hand to `openbiz retract`:
+/// the hierarchy link they have decided is wrong.
+const WRONG_LINK: &str = concat!(
+    "<https://example.org/regions/apac> ",
+    "<http://www.w3.org/2004/02/skos/core#broader> ",
+    "<https://example.org/regions/emea> .\n",
+);
+
+/// Seed a store and get the concepts *into* the vocabulary, so there is something to remove.
+fn seeded_and_populated() -> tempfile::TempDir {
+    let dir = seeded();
+    let imported = run(dir.path(), &["import", REGIONS, "concepts.ttl"]);
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    let approved = run(dir.path(), &["approve", "1"]);
+    assert!(approved.status.success(), "{}", stderr(&approved));
+    std::fs::write(dir.path().join("wrong-link.nt"), WRONG_LINK).expect("write the retraction");
+    dir
+}
+
 /// The whole review loop, in the order an operator would walk it.
 #[test]
 fn an_import_is_proposed_reviewed_and_only_then_applied() {
@@ -214,6 +233,176 @@ fn a_rejected_import_leaves_the_vocabulary_alone_and_the_evidence_readable() {
     );
 }
 
+/// The removing half of the seam, walked the way the adding half is: propose, read, decide.
+#[test]
+fn a_retraction_is_proposed_reviewed_and_only_then_applied() {
+    let dir = seeded_and_populated();
+
+    let proposed = run(dir.path(), &["retract", REGIONS, "wrong-link.nt"]);
+    assert!(
+        proposed.status.success(),
+        "the retraction failed: {}",
+        stderr(&proposed)
+    );
+    let said = stdout(&proposed);
+    assert!(
+        said.contains("candidate 2") && said.contains("removes 1 statement"),
+        "the retraction must say what it proposed and under what number: {said}"
+    );
+    assert!(
+        said.contains("nothing has been written to the vocabulary"),
+        "an operator must be told the vocabulary is untouched: {said}"
+    );
+
+    // Proposing removed nothing: all five statements are still there.
+    let after_proposal = backup(dir.path(), "after-proposal.nq");
+    assert_eq!(
+        statements_in(&after_proposal, REGIONS),
+        5,
+        "proposing a removal must not remove anything"
+    );
+    assert_eq!(
+        statements_in(&after_proposal, "urn:openbiz:graph:candidate:2:removals"),
+        1,
+        "the statement to be removed must be staged where a reviewer can read it"
+    );
+
+    // The review says which way the change runs. "1 statement" without "remove" is not a review.
+    let shown = stdout(&run(dir.path(), &["candidate", "2"]));
+    for expected in [
+        "removes 1 statement",
+        "would remove",
+        "urn:openbiz:graph:candidate:2:removals",
+        "broader",
+        "ada@example.org",
+    ] {
+        assert!(
+            shown.contains(expected),
+            "a reviewer needs {expected:?} to decide, and it is not in: {shown}"
+        );
+    }
+    assert!(
+        !shown.contains("would add"),
+        "a candidate that adds nothing must not offer an empty additions section: {shown}"
+    );
+
+    let listed = stdout(&run(dir.path(), &["candidates"]));
+    assert!(
+        listed.contains("removes 1 statement"),
+        "the list must distinguish a removal from an addition: {listed}"
+    );
+
+    let approved = run(dir.path(), &["approve", "2"]);
+    assert!(
+        approved.status.success(),
+        "the approval failed: {}",
+        stderr(&approved)
+    );
+    assert!(
+        stdout(&approved).contains("removes 1 statement")
+            && stdout(&approved).contains("ada@example.org"),
+        "an approval must say what it did and who took it: {}",
+        stdout(&approved)
+    );
+
+    let after_approval = backup(dir.path(), "after-approval.nq");
+    assert_eq!(
+        statements_in(&after_approval, REGIONS),
+        4,
+        "approval is what takes the statement out of the vocabulary"
+    );
+    assert!(
+        !after_approval.contains(&format!(
+            "skos/core#broader> <https://example.org/regions/emea> <{REGIONS}>"
+        )),
+        "and it is the proposed statement that went: {after_approval}"
+    );
+    assert_eq!(
+        statements_in(&after_approval, "urn:openbiz:graph:candidate:2:removals"),
+        1,
+        "an approved removal is the one change the vocabulary no longer records, so the staged \
+         evidence must outlive it"
+    );
+}
+
+/// A removal the vocabulary cannot satisfy is refused where the operator is standing, with a
+/// non-zero status a script can act on.
+#[test]
+fn retracting_a_statement_the_vocabulary_does_not_hold_is_refused() {
+    let dir = seeded_and_populated();
+    std::fs::write(
+        dir.path().join("absent.nt"),
+        "<https://example.org/regions/apac> \
+         <http://www.w3.org/2004/02/skos/core#prefLabel> \"Asia Pacific\"@en .\n",
+    )
+    .expect("write the file");
+
+    let refused = run(dir.path(), &["retract", REGIONS, "absent.nt"]);
+    assert!(
+        !refused.status.success(),
+        "a removal that matches nothing must fail: {}",
+        stdout(&refused)
+    );
+    let said = stderr(&refused);
+    assert!(
+        said.contains("are not in") && said.contains("Asia Pacific"),
+        "and must show what was missing: {said}"
+    );
+
+    let after = backup(dir.path(), "after-refusal.nq");
+    assert_eq!(statements_in(&after, REGIONS), 5, "nothing may have moved");
+    assert!(
+        !stdout(&run(dir.path(), &["candidates"])).contains("candidate 2"),
+        "and no candidate may have been left behind"
+    );
+}
+
+/// The stale-approval refusal, end to end: the vocabulary moves under a pending review.
+#[test]
+fn approving_a_retraction_the_vocabulary_has_outgrown_is_refused_rather_than_half_applied() {
+    let dir = seeded_and_populated();
+
+    // Two reviewers raise the same removal before either is decided.
+    for _ in 0..2 {
+        let proposed = run(dir.path(), &["retract", REGIONS, "wrong-link.nt"]);
+        assert!(proposed.status.success(), "{}", stderr(&proposed));
+    }
+    let applied = run(dir.path(), &["approve", "2"]);
+    assert!(applied.status.success(), "{}", stderr(&applied));
+
+    let refused = run(dir.path(), &["approve", "3"]);
+    assert!(
+        !refused.status.success(),
+        "approving a removal the vocabulary has outgrown must fail: {}",
+        stdout(&refused)
+    );
+    let said = stderr(&refused);
+    assert!(
+        said.contains("no longer there") && said.contains("propose the removal again"),
+        "and must say what happened and what to do about it: {said}"
+    );
+
+    // The candidate is still open, so it can be closed deliberately rather than left half-decided.
+    let shown = stdout(&run(dir.path(), &["candidate", "3"]));
+    assert!(
+        shown.contains("proposed"),
+        "a refused approval must leave the candidate open: {shown}"
+    );
+    let rejected = run(dir.path(), &["reject", "3"]);
+    assert!(
+        rejected.status.success(),
+        "and a candidate that can no longer be applied must still be closeable: {}",
+        stderr(&rejected)
+    );
+
+    let after = backup(dir.path(), "after.nq");
+    assert_eq!(
+        statements_in(&after, REGIONS),
+        4,
+        "the first approval stands and the second changed nothing"
+    );
+}
+
 #[test]
 fn importing_into_a_vocabulary_that_does_not_exist_is_refused() {
     let dir = seeded();
@@ -302,7 +491,14 @@ fn a_candidate_that_never_existed_is_named_rather_than_guessed_at() {
 fn the_usage_names_every_command_it_can_parse() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let help = stdout(&run(dir.path(), &["help"]));
-    for command in ["import", "candidates", "candidate", "approve", "reject"] {
+    for command in [
+        "import",
+        "retract",
+        "candidates",
+        "candidate",
+        "approve",
+        "reject",
+    ] {
         assert!(
             help.contains(command),
             "usage does not mention {command}, so nobody can discover it"

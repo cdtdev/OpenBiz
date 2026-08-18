@@ -17,7 +17,7 @@ mod sparql;
 mod ui;
 
 pub use cli::{
-    back_up, candidates, decide, import, restore, show, ArgsError, Command, CommandError,
+    back_up, candidates, decide, import, restore, retract, show, ArgsError, Command, CommandError,
     ACTOR_VARIABLE, USAGE,
 };
 pub use config::{Config, ConfigError, Setting, Source};
