@@ -1332,3 +1332,33 @@ Do not delete it — the record of what took how long to close is the signal.
   do, `install()` moves to the top of `main` and this shrinks to argument parsing. If they do not,
   this entry is the floor and should be marked environment-limited instead.
 - **Opened:** iteration 22
+
+### `the_graph_registry_is_read_at_startup` failed twice on CI and has not been reproduced
+- **Kind:** partial-coverage
+- **What is proven:** the test passes on the loop machine — 27 consecutive runs, 12 of them with
+  every core saturated, at eight test threads. It has passed on every CI run since, including the
+  two after the changes below.
+- **What is not:** *why it failed*. It failed on iteration 22's branch and again on `main` after
+  the merge, both times on `assert!(server.wait_for_exit().success())` with no status, no child
+  log, and no way to tell a hard kill from a non-zero exit out of `main`. Two real defects were
+  found while looking, and either could explain it, but **neither is confirmed as the cause**:
+  1. **The stop signals were registered lazily**, on the first poll of the future handed to
+     `axum::serve(..).with_graceful_shutdown(..)` — which happens after the port is logged. A
+     `SIGTERM` in that window is a hard kill under the default disposition. Fixed at iteration 22
+     (`StopSignals::install`), with two tests and two mutations. This explains the first failure
+     cleanly and **cannot** explain the second, which ran with the fix in place.
+  2. **The readiness probe only proved the port was bound**, not that the server answered. The
+     listener is bound and logged before `axum::serve` is entered, so a TCP connect succeeds out
+     of the accept backlog — the probe could return while the process was still short of serving,
+     and it left an accepted-but-never-answered connection behind for the graceful drain. Fixed at
+     iteration 22 in both `graceful_shutdown.rs` and `backup_restore.rs`, which had the same
+     harness copied.
+- **What would close it:** a reproduction, or enough green CI runs to say the two fixes above
+  covered it. The assertions now print the child's exit status and its whole log, so the next
+  failure — if there is one — arrives with its evidence attached. That instrumentation is the
+  real deliverable here: the previous two failures were unusable.
+- **Watch for:** a third failure. If one comes with a non-zero exit *and* an `anyhow` message in
+  the log, the cause is one of `serve`'s two post-drain refusals — "the store was still in use
+  after the server drained" or "the store did not close cleanly" — and that is a product defect
+  under load, not a test one.
+- **Opened:** iteration 22

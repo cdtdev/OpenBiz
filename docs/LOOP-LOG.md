@@ -1653,3 +1653,43 @@ look competent disables the one signal that catches a stuck loop.
   indefensible. So I have raised the urgency on the existing `PROPOSED.md` entry rather than
   writing a fourth "still uncertain" about it — by iteration 18's own rule that is a decision to
   take, and by `CLAUDE.md` §7 it is not mine to promote.
+
+## Iteration 22a — 2026-08-18 (same iteration, after the merge)
+- **`main` went red on the merge, on the same test I had just fixed.** `cargo test --workspace`
+  failed on `the_graph_registry_is_read_at_startup`, the `SIGTERM` test — the second CI failure of
+  the day and the first ever on `main`. Per the driver, fixing that is the item; nothing else was
+  taken.
+- **I could not reproduce it, and I am saying so rather than closing it.** 27 consecutive local
+  runs, 12 of them with all twelve cores saturated at eight test threads: green every time. The
+  two CI failures printed `assertion failed: server.wait_for_exit().success()` and nothing else —
+  no exit status, no child log, no way to tell a `SIGTERM` hard kill from a non-zero exit out of
+  `main`. That is a test that cannot be debugged from its own output, and it is why the day's
+  first fix was aimed at a cause I had *reasoned* to rather than one I had seen.
+- **So the first thing landed is the instrumentation.** Both bare assertions now print the exit
+  status and the whole child log, like every other assertion in that file already did. If there is
+  a third failure it will arrive with its evidence, and the entry in `UNTESTED.md` says exactly
+  what to read in it: an `anyhow` message would mean one of `serve`'s two post-drain refusals,
+  which would be a product defect under load rather than a test one.
+- **And a second real defect, found while looking.** `wait_until_serving` returned as soon as a TCP
+  connect succeeded. But `serve` binds the listener and logs its port *before* handing it to
+  `axum::serve`, so a connect succeeds out of the kernel's accept backlog while the process is
+  still short of serving anything — the probe could return early, and it left an accepted-but-
+  never-answered connection behind for the graceful drain. It now completes a `GET /healthz`. The
+  same harness had been copied into `backup_restore.rs`, so the same latent flake was there too
+  and is fixed in both.
+- **Two defects, neither confirmed as the cause.** The signal-registration race explains the first
+  failure cleanly and **cannot** explain the second, which ran with that fix already merged. The
+  probe race could explain either. `UNTESTED.md` records both, records that the cause is unknown,
+  and says what a third failure would prove. Calling this closed would be the comfortable green
+  the ledgers exist to prevent.
+- **Tests: 432 Rust and 30 UI**, unchanged in number by this branch — the work was making two
+  existing assertions legible and one probe honest, not adding coverage.
+- **Still uncertain:** whether `main` is now actually green or merely green *this time*. The
+  observed failure rate was two runs in four; the two fixes remove two mechanisms; I have no
+  evidence that they remove *the* mechanism, and a test that fails half the time on a machine I
+  cannot reproduce on is indistinguishable from one that fails a tenth of the time until enough
+  runs accumulate. The next iteration should read `main`'s CI history before taking a plan item,
+  and if a third failure comes it should treat the `anyhow` branch as the prime suspect rather
+  than reaching for another test-harness fix — `Arc::into_inner` refusing after the drain is a
+  real possibility under a loaded runner, and it would be a product defect wearing a flaky test's
+  clothes.

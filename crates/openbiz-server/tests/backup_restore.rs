@@ -170,11 +170,18 @@ impl Server {
             .and_then(|value| value.parse().ok())
     }
 
+    /// Block until the server **answers a request**, not merely until its port is bound.
+    ///
+    /// `serve` logs the port it bound before it hands the listener to `axum::serve`, so a TCP
+    /// connect succeeds out of the accept backlog while the process is still some way from
+    /// serving. Completing one exchange proves the path and leaves no abandoned connection behind
+    /// for the graceful drain to reason about. Same change, same reason, as in
+    /// `graceful_shutdown.rs`.
     fn wait_until_serving(&self) {
         let deadline = Instant::now() + PATIENCE;
         while Instant::now() < deadline {
             if let Some(addr) = self.listening_on() {
-                if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+                if try_get(addr, "/healthz").is_some_and(|response| response.contains("200")) {
                     return;
                 }
             }
@@ -725,4 +732,25 @@ fn a_version_three_backup_is_brought_forward_by_the_step_that_allows_removals() 
         written.contains("Europe, Middle East and Africa"),
         "the content must have survived: {written}"
     );
+}
+
+/// `GET <path>` against a child that may not be answering yet, for the readiness probe.
+///
+/// Returns `None` for anything that is not a completed exchange — a refused connection, a reset
+/// mid-response, a server that is bound but not yet serving. A readiness probe must never turn a
+/// "not yet" into a panic.
+fn try_get(addr: SocketAddr, path: &str) -> Option<String> {
+    let mut socket = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
+    socket
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok()?;
+    socket
+        .write_all(
+            format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .ok()?;
+    let mut response = String::new();
+    socket.read_to_string(&mut response).ok()?;
+    Some(response)
 }
