@@ -18,20 +18,26 @@ format chooser read from the server, and the export carries none of OpenBiz's ow
 **And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
 four results formats and all six RDF syntaxes, over a default dataset that is the user's
 vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-212 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
-`cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
+224 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+`cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
+narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
+the published EBNF rather than against the library that wrote the bytes, which found two real
+defects nobody had seen (see `adr/0012`). **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
 **Current position:** Phase 1 (RDF core & store), 7 of 12 items done (the serialisation item
-was split in two — see the split note below). The **SPARQL 1.1 Query endpoint** landed this
-iteration: three protocol request forms, four results formats, six RDF serialisations, content
-negotiation across both families from one `Accept` header, and two bounds that refuse rather than
-truncate. The decision with the most product in it is the **default dataset** — a query naming no
-dataset sees the registered vocabulary graphs and nothing else, so a taxonomist's first query
-returns their vocabulary rather than the union of everything including our bookkeeping, and a
-query's own `FROM` is still honoured verbatim. See `adr/0011`.
+was split in two — see the split note below). **Iteration 10 was a blind-spot pass and took no plan
+item**, so the count is unchanged and that is correct rather than a stall. It closed the oldest
+recurring doubt in the loop log — that "round-trip tested" meant Oxigraph agreeing with itself —
+by reading our N-Triples and N-Quads exports with a checker transcribed from the specifications'
+own grammars. **It found two defects the round trip could not see.** The store rewrites the lexical
+form of any literal it can interpret, so `"007"^^xsd:integer` comes back `"7"` and two triples
+differing only in padding collapse into one; and our N-Triples breaks one of Canonical N-Triples
+§4's five constraints by escaping a tab. Both are pinned as tests that fail if the behaviour changes
+in either direction, owned in `UNTESTED.md`, and the fixes are decisions a human takes in
+`PROPOSED.md` rather than work the loop authorised itself. See `adr/0012`.
 
 **Next: SPARQL 1.1 Update, guarded by authorisation.** Note that authorisation does not exist yet
 (`UNTESTED.md`: "The JSON API has no authentication"), so that item is likely to need a split or a

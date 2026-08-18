@@ -157,7 +157,7 @@ Do not delete it — the record of what took how long to close is the signal.
 
 ---
 
-### The round trip is proven against our own reader, not against the specs' test suites
+### ~~The round trip is proven against our own reader~~ — HALF CLOSED, iteration 10
 - **Kind:** partial-standard
 - **What is proven:** every one of the six syntaxes survives serialise → parse → compare, over
   content chosen to be hostile: two language tags in non-Latin and accented scripts, an
@@ -176,6 +176,76 @@ Do not delete it — the record of what took how long to close is the signal.
   against fixtures produced by an independent tool (`rapper`, `riot`) so a divergence surfaces as a
   diff rather than as a customer's failed import.
 - **Opened:** iteration 8
+- **Half closed, iteration 10.** Two of the six are now checked against a reader **we wrote from
+  the published EBNF**, sharing no code with the writer: `crates/openbiz-store/src/spec_conformance.rs`
+  reads our N-Triples and N-Quads exports against [N-Triples §7] and [N-Quads §4], enforces the
+  absolute-IRI requirement of [N-Triples §2.2], checks the five layout constraints of
+  [Canonical N-Triples §4], and compares our bytes against [N-Triples Example 3] as published. The
+  checker is itself proven to discriminate: twenty-one documents each violating exactly one named
+  production or constraint are required to be rejected. See `adr/0012`.
+  **It found two defects** — both now their own entries below, and both invisible to the round
+  trip that preceded it. That is the answer to the question this entry was opened to ask.
+  **Still open for the other four.** Turtle, TriG, RDF/XML, and JSON-LD remain proven only against
+  our own reader, and the wording above applies to them unchanged. The W3C rdf-tests suites remain
+  the thing that would close it properly for all six; that is now a `PROPOSED.md` item rather than
+  a line in this entry, because folding it in here is what made it feel handled for two iterations.
+
+  [N-Triples §7]: https://www.w3.org/TR/n-triples/#sec-grammar
+  [N-Quads §4]: https://www.w3.org/TR/n-quads/#sec-grammar
+  [N-Triples §2.2]: https://www.w3.org/TR/n-triples/#sec-iri
+  [Canonical N-Triples §4]: https://www.w3.org/TR/n-triples/#canonical-ntriples
+  [N-Triples Example 3]: https://www.w3.org/TR/n-triples/#sec-literals
+
+### The store silently rewrites the lexical form of any literal it can interpret
+- **Kind:** partial-standard
+- **What is proven:** measured exactly, and pinned by
+  `the_store_rewrites_the_lexical_form_of_the_datatypes_it_models_natively`. Written in, read back
+  out: `"1.663E-4"^^xsd:double` → `"0.0001663"`; `"1.0E1"^^xsd:float` → `"10"`;
+  `"007"^^xsd:integer` → `"7"`; `"+7"^^xsd:integer` → `"7"`;
+  `"007"^^xsd:nonNegativeInteger` → `"7"`; `"4.00"^^xsd:decimal` → `"4"`;
+  `"1"^^xsd:boolean` → `"true"`; `"2026-08-19T00:00:00+00:00"^^xsd:dateTime` →
+  `"2026-08-19T00:00:00Z"`. Untouched: `xsd:string`, a datatype the engine does not know, an
+  already-canonical lexical form, and — the perverse case — a value that is *invalid* for its
+  datatype (`"abc"^^xsd:nonNegativeInteger` survives byte-for-byte). `RDF 1.1` defines a literal as
+  the pair (lexical form, datatype IRI), so these are **different terms**, not different spellings.
+  `two_triples_that_differ_only_in_lexical_form_collapse_into_one` proves the sharper harm: two
+  distinct triples go in and one comes out.
+- **What is not:** **nothing about this is disclosed to a user.** No API field, no export header, no
+  interface warning. `RdfSyntax::records_graph_names` exists precisely so a different kind of
+  silent loss is stated before a download, and this one is larger and unstated. **The loss is the
+  store's, not the export's** — `the_rewrite_is_the_stores_and_not_the_exports` runs a `CONSTRUCT`
+  that never touches `export_graph` and gets `"7"` back too, so every reader inherits it and a fix
+  has to touch stored data rather than a serialiser. Still unmeasured: whether the rewrite happens
+  at insert or at read (it is the term encoding either way, but which one decides whether existing
+  stores can be repaired in place), and the full set of affected datatypes — the eight above are
+  the ones tried, and the rule is the engine's, not ours.
+- **What would close it:** the fix is a decision, not a patch, so it is in `PROPOSED.md` — upstream
+  work, a term encoding of our own, or accepting the loss and *disclosing* it. Disclosure is the
+  cheapest and is not a fix; a governance team cannot sign off a vocabulary whose notations
+  changed. Until one is chosen, no OpenBiz surface may claim that an export round-trips.
+- **Opened:** iteration 10
+
+### Our N-Triples is one constraint short of Canonical N-Triples
+- **Kind:** partial-standard
+- **What is proven:** [Canonical N-Triples §4] requires that `ECHAR` be used only for U+0022,
+  U+005C, U+000A and U+000D — "ECHAR MUST NOT be used for characters that are allowed directly in
+  `STRING_LITERAL_QUOTE`". A tab is allowed directly and our writer emits `\t`. Pinned by
+  `our_n_triples_export_is_canonical_n_triples_but_for_one_known_violation`, which requires exactly
+  this one violation and no other, so a second one appearing is a failure. The other four
+  constraints hold: single-space separators, no comments, no `UCHAR` (accented Latin, CJK, and an
+  emoji are all written raw), and the carriage return and line feed correctly escaped.
+- **What is not:** nothing is *lost* — the document is valid N-Triples and any conforming reader
+  recovers the same term, which is why iteration 8's round trip could not see it. What is not true
+  is that two tools serialising one graph produce the same bytes, which is what makes a vocabulary
+  diffable in git. Whether the other five syntaxes have an equivalent layout-level divergence is
+  unknown; only N-Triples has a canonical form defined, so for the others the question does not
+  even have a spec-shaped answer.
+- **What would close it:** either upstream, or an N-Triples writer of our own — it is the simplest
+  of the six and the one where writing it is genuinely cheap. In `PROPOSED.md`; not taken here
+  because replacing a serialiser is a decision about the engine boundary, not a blind-spot fix.
+- **Opened:** iteration 10
+
+  [Canonical N-Triples §4]: https://www.w3.org/TR/n-triples/#canonical-ntriples
 
 ### The HTTP export buffers the whole graph in memory
 - **Kind:** partial-coverage
