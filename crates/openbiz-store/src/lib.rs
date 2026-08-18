@@ -49,6 +49,13 @@ mod results;
 mod spec_conformance;
 mod syntax;
 
+/// What Oxigraph's query evaluation costs at 10k, 100k, and 1M concepts, measured through our own
+/// query entry point against the queries the interface will issue. Test-only: it generates and
+/// loads its own vocabulary, and the sizes that take minutes are `#[ignore]`d. See
+/// `docs/adr/0013-oxigraph-query-scale.md` for the numbers.
+#[cfg(test)]
+mod scale;
+
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;

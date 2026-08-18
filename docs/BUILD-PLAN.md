@@ -5,7 +5,7 @@ The backlog and the burn-down. One `- [ ]` per item; check it off only when it m
 
 **Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
 memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is seven items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
+Phase 1 is eight items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
 the binary; it has a **named-graph model with a real enforcement point** — one graph per
 vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
 authoring, and a single write choke point that every write passes through — and **that model is now
@@ -22,31 +22,36 @@ vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rat
 `cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
 narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
 the published EBNF rather than against the library that wrote the bytes, which found two real
-defects nobody had seen (see `adr/0012`). **The single binary is real:** a
-`Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
+defects nobody had seen (see `adr/0012`). **And the engine is now measured rather than trusted:**
+the charter's standing warning that Oxigraph's query evaluation is unoptimised has a number against
+it at 10k, 100k, and 1M concepts, taken through our own query entry point against the queries the
+interface will issue — navigation is flat and fast, the tree's *first* query is a 21-second cliff
+with a 0.6 ms fix, and label search does not scale (see `adr/0013`). **The single binary is real:**
+a `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 7 of 12 items done (the serialisation item
-was split in two — see the split note below). **Iteration 10 was a blind-spot pass and took no plan
-item**, so the count is unchanged and that is correct rather than a stall. It closed the oldest
-recurring doubt in the loop log — that "round-trip tested" meant Oxigraph agreeing with itself —
-by reading our N-Triples and N-Quads exports with a checker transcribed from the specifications'
-own grammars. **It found two defects the round trip could not see.** The store rewrites the lexical
-form of any literal it can interpret, so `"007"^^xsd:integer` comes back `"7"` and two triples
-differing only in padding collapse into one; and our N-Triples breaks one of Canonical N-Triples
-§4's five constraints by escaping a tab. Both are pinned as tests that fail if the behaviour changes
-in either direction, owned in `UNTESTED.md`, and the fixes are decisions a human takes in
-`PROPOSED.md` rather than work the loop authorised itself. See `adr/0012`.
+**Current position:** Phase 1 (RDF core & store), 8 of 12 items done (the serialisation item was
+split in two — see the split note below). **Iteration 11 took the Oxigraph benchmark spike, and it
+reached it by refusing two items rather than by skipping them.** SPARQL 1.1 Update and the Graph
+Store Protocol both sit above the two things that do not exist yet — the candidate seam (§3) and
+the RDF parser — and an *applying* Update endpoint would additionally be an unauthenticated
+arbitrary-write path and a creation path that skips discovery (§1.7). Both carry a deferral note
+saying exactly what they wait on; neither is checked off and neither is claimed. The spike then
+found that the risk `CLAUDE.md` §3 names is real but is not where it was expected: bound-term
+navigation is 0.2–0.6 ms flat across two orders of magnitude, and the thing that falls over is the
+concept tree's own first query — 21.6 s at a million concepts, *served* rather than refused, with a
+0.6 ms alternative that is a **modelling** decision Phase 2 has to take rather than a tuning knob
+Phase 3 can turn. See `adr/0013`.
 
-**Next: SPARQL 1.1 Update, guarded by authorisation.** Note that authorisation does not exist yet
-(`UNTESTED.md`: "The JSON API has no authentication"), so that item is likely to need a split or a
-blocker — the guard is the harder half and it is not obviously Phase 1 work. Parsing the six
-syntaxes remains deliberately deferred behind the candidate seam or backup/restore (see the split
-note). Vocabulary *creation* over HTTP remains deliberately absent — §1.7 requires discovery to run
-before creation and `DiscoveryProvider` does not exist until Phase 2 — so `POST /api/graphs`
-answers 405 rather than being quietly added. **There is no SPARQL console in the interface**; the
-endpoint's caller is HTTP, and the console is an open §4.4 gap in `UNTESTED.md` and a proposal.
+**Next: the literal-precision spike**, which is the second of Phase 1's two spikes and now has a
+concrete reason to exist: iteration 10 measured that the store rewrites the lexical form of every
+literal it can interpret, and that spike is where the boundary of that behaviour gets characterised
+and our documented answer decided. After it: backup and restore, then the store-format migration
+framework. **SPARQL Update and the Graph Store Protocol are deliberately not next** — see their
+deferral notes. Vocabulary *creation* over HTTP remains deliberately absent for the same §1.7
+reason, so `POST /api/graphs` answers 405. **There is still no SPARQL console in the interface**;
+the endpoint's caller is HTTP, and the console is an open §4.4 gap in `UNTESTED.md` and a proposal.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -267,10 +272,62 @@ the interface is a core differentiator, and building it late means retrofitting 
       > caller is HTTP, so the console is recorded as an open §4.4 gap in `UNTESTED.md` and proposed
       > rather than quietly folded in here. See `adr/0011`.
 - [ ] SPARQL 1.1 Update endpoint, guarded by authorisation
+      > **Deferred at iteration 11, and the reason is a charter constraint rather than effort.**
+      > An *applying* Update endpoint fails three of `CLAUDE.md`'s clauses at once, and only one of
+      > them is the authorisation the item's own title names. (1) **§3:** "any path that changes a
+      > vocabulary takes *candidates*, not just direct writes" — `INSERT DATA` is the most direct
+      > write there is, and landing it now means retrofitting a review seam onto an endpoint whose
+      > entire contract is *"this has already happened"*. (2) **§1.7:**
+      > `INSERT DATA { GRAPH <new> … }` brings a vocabulary into existence, and a creation path
+      > that skips `DiscoveryProvider` and records no justification is exactly what
+      > `POST /api/graphs` answers 405 to prevent — adding the same capability under a different
+      > verb is routing around our own rule, not implementing a standard. (3) **The guard:** there
+      > is no authentication at all yet, and an unauthenticated arbitrary-write endpoint on a
+      > governance product is not a partial feature, it is a defect.
+      > The evaluation half is genuinely cheap — Oxigraph parses and applies updates already, and
+      > `Store::query` has recognised an update *as* an update since iteration 9 — and that is
+      > precisely why the split was refused rather than taken. The cheap half is the half that does
+      > the damage; splitting here would land the write and defer the control.
+      > **It lands with Phase 2's candidate seam and Phase 6's approval path**, where an update
+      > stops meaning "apply this" and starts meaning "propose this change set, show me the diff,
+      > and let a human approve it". That is the version worth having, it is the one no incumbent
+      > offers, and it is not reachable from Phase 1. Nothing is checked off and nothing is claimed
+      > in the meantime.
 - [ ] SPARQL Graph Store Protocol
-- [ ] **Spike:** benchmark Oxigraph query evaluation at 10k / 100k / 1M concepts. Record real
+      > **Deferred at iteration 11, on the item above's dependency and on the parser's.** `PUT`,
+      > `POST`, `DELETE`, and `PATCH` *are* this protocol, and every one of them is a direct write
+      > to a vocabulary: they need the RDF parser (deferred above) and the candidate seam, the same
+      > two things. What would be left is `GET` and `HEAD`, which `GET /api/export` already serves
+      > under a different URL — so shipping the read half alone would be a second spelling of an
+      > existing capability plus four 405s, and calling that "Graph Store Protocol" would misreport
+      > a standard. `CLAUDE.md` §4 minds that considerably more than it minds an unchecked box.
+- [x] **Spike:** benchmark Oxigraph query evaluation at 10k / 100k / 1M concepts. Record real
       numbers in an ADR. Upstream states evaluation is unoptimised — find where that bites us
       *before* we build the UI on top of it
+      > **Better, not parity.** Every vendor in this market publishes a benchmark, and two habits
+      > make almost all of them useless to the person asking *"will this hold my vocabulary?"*.
+      > They measure a **benchmark suite** — BSBM, LUBM — which has no concept tree in it and so
+      > cannot answer the only question a taxonomist has; and they are **unreproducible**, being
+      > numbers from hardware you do not have over a dataset you cannot generate. Here every probe
+      > is one *interaction* — draw the tree's first level, expand a node, open a concept, type in
+      > the search box, show a breadcrumb, list a subtree — timed through `Store::query`, the same
+      > call `/api/sparql` makes, so the measured time includes serialising the answer because that
+      > is what a caller actually waits for. And the generator, the queries, and the harness are in
+      > the repo: anyone who doubts the numbers can produce their own. The harness asserts **every
+      > probe's answer count against the generator's own arithmetic before believing its timing**,
+      > because a benchmark whose queries match nothing measures an empty loop very quickly.
+      > **It found where it bites, and the answer was not where the charter's warning pointed.**
+      > Every bound-term lookup — expand, open, resolve a label, walk a breadcrumb — is 0.2–0.6 ms
+      > *flat* from 10k to 1M. What falls over is the **first query the interface issues**: finding
+      > top concepts by `FILTER NOT EXISTS { ?c skos:broader ?p }` costs 89 ms at 10k, 1.16 s at
+      > 100k, and **21.6 s at 1M** — and it is *served*, not refused, because 21.6 s fits inside
+      > the 30 s deadline. A scheme that states its top concepts with `skos:hasTopConcept` answers
+      > the identical question in **0.6 ms, flat**. Three more findings: `LIMIT 50` does not bound
+      > the work, so type-ahead search is linear in the graph and costs ~0.5 s per keystroke at 1M;
+      > our *own* 100 000-answer cap refuses "everything under this branch" at 1M (111 110 rows);
+      > and a million concepts loads through the transactional write path in five minutes and
+      > occupies ~6 GB. See `adr/0013`, which also lists what it did **not** measure — concurrency,
+      > memory, a cold cache, and a realistically lumpy vocabulary.
 - [ ] **Spike:** characterise Oxigraph's numeric/calendar/duration literal precision limits and
       decide our documented behaviour at the boundary
 - [ ] Backup and restore to a single portable file; restore verified against a live store

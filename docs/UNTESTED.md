@@ -97,21 +97,57 @@ Do not delete it — the record of what took how long to close is the signal.
   bigger than any vocabulary we have.
 - **What would close it:** a real measurement at the cap, then either a bounded streaming body that
   can still discard a partial document, or a documented maximum response size.
+- **Still open after iteration 11.** `adr/0013` measured time, not memory, so it did not touch this.
+  It did narrow the worst case worth measuring: the largest answer any probe produced was 111 110
+  rows, and it was refused by the row cap before the body was built — so the practical worst case is
+  an answer just under 100 000 rows, not an unbounded one.
 - **Opened:** iteration 9
 
-### The query limits are hard-coded, and the defaults are chosen rather than measured
+### The query limits are hard-coded — ~~and the defaults are chosen rather than measured~~
 - **Kind:** inspected-only
 - **What is proven:** both bounds work and both refuse rather than truncate — the row cap is tested
   for solutions and for constructed triples, and the deadline is tested to cancel a runaway join.
   `QueryLimits` is a parameter type, so wiring it to configuration touches no caller.
-- **What is not:** nothing reads configuration into it; every production call uses
-  `QueryLimits::default()`. And the numbers themselves — 100 000 answers, 30 seconds — are
-  reasoned, not measured. Neither has been checked against how long an unoptimised evaluator
-  actually takes over a real vocabulary, so 30 s may refuse legitimate work or 100 000 rows may be
-  far more memory than the §1.5 commitment tolerates.
-- **What would close it:** the Phase 1 benchmark spike, then config keys with the provenance
-  `adr/0005` requires.
-- **Opened:** iteration 9
+  **Half closed, iteration 11.** The numbers are no longer reasoned: `adr/0013` measures them, and
+  both were wrong in a way reasoning would not have found. The **100 000-answer cap refuses a
+  legitimate query at a million concepts** — "everything under this branch" answers with 111 110
+  rows in 1.6 s and is refused, which is the designed behaviour and still a capability the customer
+  does not have. And the **30 s deadline does not protect interactivity**: the concept tree's own
+  first query takes 21.6 s at 1M and is *served*, because 21.6 s is inside 30 s.
+- **What is not:** nothing reads configuration into it; every production call still uses
+  `QueryLimits::default()`, so a deployment whose largest subtree exceeds 100 000 concepts cannot
+  raise the cap. And there is still no second, smaller bound for queries a human is waiting on —
+  the deadline is a runaway guard and nothing else.
+- **What would close it:** config keys with the provenance `adr/0005` requires, and a decision on
+  an interactivity budget. Both are in `PROPOSED.md`.
+- **Opened:** iteration 9 · **half closed:** iteration 11
+
+### What the scale spike did not measure: concurrency, memory, a cold cache, and a lumpy vocabulary
+- **Kind:** partial-coverage
+- **What is proven:** `adr/0013`'s timings, load rate, and disk figures, at 10k / 100k / 1M
+  concepts, each probe's answer count asserted against the generator before its timing was
+  believed, median of three runs after a warm-up, on the machine the ADR names.
+- **What is not**, and each of these could move the numbers materially:
+  - **Concurrency.** One process, one query at a time, no writer running. What a 21-second query
+    does to nine other users, and what the `adr/0009` write lock costs under a concurrent load, is
+    unmeasured. Partly environment-limited (`CLAUDE.md` §8).
+  - **Memory.** Timings only. The endpoint buffers a whole answer twice (entry below) and this run
+    did not weigh it, so the §1.5 "modest memory at rest" commitment is still unevidenced under
+    load.
+  - **A cold cache.** The page cache is warm because the load had just written the data. The
+    first query after a restart, against a store larger than RAM, is a different number and is the
+    one an operator actually meets in the morning.
+  - **Disk after compaction.** ~840 bytes per quad was measured immediately after loading, with no
+    compaction run. It is an upper bound; the settled size is unknown.
+  - **A realistic vocabulary shape.** The fixture is a balanced ten-way tree with uniform label
+    lengths. Real thesauri have concepts with thousands of children and label lengths spanning two
+    orders of magnitude, and a regular shape flatters an index.
+- **What would close it:** for the first two, Phase 13's benchmark harness with a concurrent driver
+  and RSS sampling. For the cold cache, a restart between load and probe — cheap, and deliberately
+  not folded into this iteration. For the shape, a fixture derived from a real published
+  vocabulary, which needs the licence question `CLAUDE.md` §6 raises about fixture data settled
+  first.
+- **Opened:** iteration 11
 
 ### The timeout answers 503, which is the least-wrong code rather than a right one
 - **Kind:** inspected-only
