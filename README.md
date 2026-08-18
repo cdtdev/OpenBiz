@@ -76,6 +76,42 @@ immature dependency can be swapped without touching application code.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full charter and [`docs/`](docs/) for architecture decisions.
 
+## Backup and restore
+
+```sh
+openbiz backup /backups/openbiz-$(date +%F).nq   # write the whole store to one file
+openbiz restore /backups/openbiz-2026-08-19.nq   # rebuild an empty store from one
+```
+
+A backup is **N-Quads**: every vocabulary plus OpenBiz's own graph registry, in a W3C
+Recommendation that any conforming RDF tool can read. It is not a snapshot of our storage engine,
+so it stays readable if OpenBiz changes what it stores data in — and it is line-based, so it
+`grep`s, `diff`s between two days, and compresses well.
+
+Both commands need the store to themselves, so **stop the server first**. The store's location
+comes from the same configuration the server uses (`OPENBIZ_DATA_DIR`, or `data_dir` in
+`openbiz.toml`), and the commands log which one they used.
+
+What they refuse, and why:
+
+- **A backup never overwrites an existing file.** The file most likely to be in the way is the last
+  good backup.
+- **A restore needs an empty store** — restore into a fresh data directory and point the server at
+  that. A restore replaces a store; merging one into a populated store would interleave two
+  histories with no way to separate them afterwards.
+- **A restore refuses anything that would not open afterwards**: a file with no store format stamp
+  (most often an *export* of one vocabulary rather than a backup of a store), a stamp from a newer
+  build, statements in a graph the file's own registry does not list. All of it is checked inside
+  one transaction, so a refused restore leaves the target store exactly as it was.
+
+Exit status is `0` on success, `1` if the operation failed, and `2` if the arguments were not
+understood — so a wrapper script can tell "retry this" from "you typed it wrong". `openbiz help`
+prints the full usage.
+
+There is **no online backup yet**: see [`docs/adr/0015`](docs/adr/0015-backup-and-restore.md) for
+why these are commands rather than HTTP endpoints, and `docs/PROPOSED.md` for the authenticated
+endpoint that would remove the need to stop the server.
+
 ## Development
 
 Requires a recent stable Rust toolchain and Node.js.

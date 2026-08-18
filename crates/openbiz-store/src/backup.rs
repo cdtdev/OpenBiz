@@ -489,6 +489,7 @@ mod tests {
         let report = source.backup(&mut backup).expect("back the store up");
         assert_eq!(report.graphs(), 3, "two vocabularies and the system graph");
         assert!(report.quads() >= 10, "10 concept statements plus metadata");
+        let source_quads = source.quad_count().expect("count the source store");
         source.close().expect("close the source store");
 
         let target_dir = temp_dir();
@@ -505,6 +506,21 @@ mod tests {
             contents(&target),
             before,
             "the restored store holds different statements from the one that was backed up"
+        );
+        // Counted as well as compared: the comparison above goes through the serialiser, so it
+        // proves the two stores *write* the same file, and this proves they hold the same number
+        // of statements without that round trip in the way.
+        //
+        // Neither can see one thing, and it is worth writing down because a deliberate break was
+        // run against these tests to find out. Dropping a statement the target store writes for
+        // *itself* when it opens — its own registry entry, its own stamp — is invisible to both,
+        // because restoring a statement the store already holds is idempotent and the two stores
+        // agree afterwards either way. That mutation is genuinely equivalent rather than
+        // undetected; dropping any other statement fails both assertions, which was checked.
+        assert_eq!(
+            target.quad_count().expect("count the restored store"),
+            source_quads,
+            "the restored store holds a different number of statements from the source"
         );
 
         let restored_registry: Vec<String> = target
