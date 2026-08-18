@@ -24,7 +24,24 @@ take the next item. Silently substituting a weaker implementation is how a chart
 
 ## Open
 
-_None._
+### Candidate seam, part 3 — over HTTP and in the interface (Phase 2)
+- **Blocked on:** there is no authentication. `POST /api/candidates` and an approve endpoint are
+  an unauthenticated "apply this arbitrary change to a customer's vocabulary" until an identity
+  sits behind them, and the seam's whole value is that an approval is recorded against a person.
+- **Unblocked by:** Phase 6's authentication item landing — specifically, a request-scoped actor
+  the handler can pass to `Store::decide` in place of today's `OPENBIZ_ACTOR` environment
+  variable, and a way to refuse an unauthenticated caller. It does not need an enterprise IdP;
+  local accounts are enough to unblock this entry.
+- **Tried:** nothing. It was split out at iteration 17 *because* it is blocked, so that the two
+  halves that are not blocked could land. The reasoning is recorded on the item in
+  `docs/BUILD-PLAN.md` and has not changed.
+- **Workaround in place:** the command line. `openbiz import`, `retract`, `candidates`,
+  `candidate <id>`, `approve`, `reject` are complete, so a deployment can use the seam today.
+  **The cost is real:** a reviewer has to be on the server's console, which rules out the
+  distributed review a governance function actually runs on.
+- **Opened:** iteration 17 · **recorded here at iteration 21**, which is late — it was named on
+  the plan item from the start but never entered this file, so the loop's own "do not re-attempt
+  something already recorded as blocked" check could not see it.
 
 ## Resolved
 

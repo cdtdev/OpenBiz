@@ -359,6 +359,36 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   datatype IRI of a derived integer type is dropped, not just the lexical form — so whichever option
   is chosen here has to cover that too. Read the two together; they are one decision.
 
+### Decide where entailments live, because our answers and our exports now disagree
+- **Status:** proposed.
+- **Gap:** `openbiz inspect` reports facts nobody stated — a concept scheme found under S5, a
+  `skos:member` found under S36, `skos:inScheme` found under S7. `openbiz export` and
+  `GET /api/export` hand out the **asserted** graph, so none of those statements are in the file a
+  customer downloads. Both behaviours are individually defensible and were individually argued for
+  (`adr/0019`, and iteration 20's log). Together they mean the same vocabulary answers two
+  different questions two different ways, and **nothing in the build tells the person holding the
+  export that this is so**. S11 — every SKOS label entails an `rdfs:label` — is the newest case
+  and the most visible one: a generic RDF browser, a DCAT catalogue, or a SPARQL query written
+  against `rdfs:label` finds nothing in our export, silently.
+- **Why load-bearing:** this is not a tidy-up. "Report zero where a real vocabulary has thousands"
+  is the exact failure iteration 20 built the entailment path to prevent, and the export path has
+  it, aimed outwards. It is also a decision with no default that is merely conservative:
+  materialising entailments puts statements into a customer's vocabulary that they never wrote and
+  cannot delete, which iteration 20 argued against and this proposal does *not* ask to reverse.
+  The likely answer is a third option neither iteration has designed — an entailed *view*, selected
+  at export and at query time, so a caller says which one they want and the file says which one it
+  is. That needs deciding before Phase 4's SHACL validation, which will otherwise have to pick one
+  silently, and before Phase 8's Git export, where the diff a reviewer reads depends on it.
+- **Cost & impact:** one iteration to decide and write the ADR; probably two to three to implement
+  across export, SPARQL, and the report, and it touches the candidate seam's apply step — a place
+  now touched four times for four reasons, which is itself a signal. No new dependency. The runtime
+  cost is whatever the chosen shape is: recomputing per request, a cache invalidated at the seam,
+  or a materialised graph kept separate from the user's.
+- **Why the loop is not deciding it:** it has been the "still uncertain" line of iterations 18, 20
+  and 21, which by the loop's own rule (iteration 18) makes it a design change rather than a
+  nuisance — and the cost of getting it wrong falls on a customer's exported data, not on us.
+- **Suggested phase:** Phase 2, before the concept tree; at the latest before Phase 4.
+
 ### Decide what to do about the store dropping derived integer datatypes
 - **Status:** proposed.
 - **Gap:** `"5"^^xsd:int` is stored, and returned, as `"5"^^xsd:integer`. So are `xsd:short`,

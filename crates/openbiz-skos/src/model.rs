@@ -61,6 +61,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::ns;
 
 /// `rdf:type`.
@@ -168,6 +169,9 @@ pub enum SkosRule {
     S7,
     S8,
     S9,
+    S12,
+    S13,
+    S14,
     S29,
     S31,
     S33,
@@ -188,6 +192,9 @@ impl SkosRule {
             SkosRule::S7 => "S7",
             SkosRule::S8 => "S8",
             SkosRule::S9 => "S9",
+            SkosRule::S12 => "S12",
+            SkosRule::S13 => "S13",
+            SkosRule::S14 => "S14",
             SkosRule::S29 => "S29",
             SkosRule::S30 => "S30",
             SkosRule::S31 => "S31",
@@ -212,6 +219,17 @@ impl SkosRule {
             SkosRule::S7 => "skos:topConceptOf is a sub-property of skos:inScheme.",
             SkosRule::S8 => "skos:topConceptOf is owl:inverseOf the property skos:hasTopConcept.",
             SkosRule::S9 => "skos:ConceptScheme is disjoint with skos:Concept.",
+            SkosRule::S12 => {
+                "The rdfs:range of each of skos:prefLabel, skos:altLabel and skos:hiddenLabel is \
+                 the class of RDF plain literals."
+            }
+            SkosRule::S13 => {
+                "skos:prefLabel, skos:altLabel and skos:hiddenLabel are pairwise disjoint \
+                 properties."
+            }
+            SkosRule::S14 => {
+                "A resource has no more than one value of skos:prefLabel per language tag."
+            }
             SkosRule::S29 => "skos:OrderedCollection is a sub-class of skos:Collection.",
             SkosRule::S30 => {
                 "skos:member and skos:memberList are each instances of owl:ObjectProperty."
@@ -549,6 +567,46 @@ pub enum Finding {
         /// How many distinct list heads it names.
         lists: usize,
     },
+    /// A resource has two or more `skos:prefLabel` values with the same language tag. S14.
+    ///
+    /// Per *tag*, not per language: `"color"@en` beside `"colour"@en-GB` is consistent, and
+    /// §5.6.5 with Example 18 says so. The tags are compared lower-cased, which is the value
+    /// space RDF 1.1 Concepts §3.3 defines.
+    MultiplePreferredLabels {
+        /// The over-labelled resource.
+        resource: Node,
+        /// The language tag they share, lower-cased, or `None` for untagged labels.
+        language: Option<String>,
+        /// The competing lexical forms, in a stable order.
+        labels: Vec<String>,
+    },
+    /// One resource carries the same label under two of the three labelling properties. S13.
+    ///
+    /// The label is the same *RDF term* — same lexical form, same language tag. Example 19 is
+    /// consistent precisely because `"love"@en` and `"love"@en-GB` are different terms.
+    LabelPropertiesClash {
+        /// The resource.
+        resource: Node,
+        /// The label they share.
+        label: LexicalLabel,
+        /// The properties that carry it, in a stable order.
+        kinds: Vec<LabelKind>,
+    },
+    /// A labelling property was given something that is not an RDF plain literal. S12.
+    ///
+    /// **Not an integrity condition.** §5.4 lists exactly two of those and this is not one of
+    /// them; §5.6.2 says of this case that "an application may reject such data but is not
+    /// required to". We report it and read on, because refusing it would mean turning away data
+    /// the standard permits. The value takes no part in S13 or S14: a term with no language tag
+    /// and no claim to be a string cannot be put in the per-language buckets those are about.
+    NonPlainLiteralLabel {
+        /// The labelled resource.
+        resource: Node,
+        /// Which labelling property, as a CURIE.
+        property: String,
+        /// What it was given.
+        value: Term,
+    },
     /// An object property was given a literal value. S3 or S30.
     LiteralOnObjectProperty {
         /// The subject.
@@ -569,9 +627,12 @@ impl Finding {
             Finding::DisjointClasses { .. } | Finding::LiteralOnObjectProperty { .. } => {
                 Severity::Inconsistent
             }
-            Finding::DefectiveMemberList { .. } | Finding::MultipleMemberLists { .. } => {
-                Severity::IllFormed
+            Finding::MultiplePreferredLabels { .. } | Finding::LabelPropertiesClash { .. } => {
+                Severity::Inconsistent
             }
+            Finding::DefectiveMemberList { .. }
+            | Finding::MultipleMemberLists { .. }
+            | Finding::NonPlainLiteralLabel { .. } => Severity::IllFormed,
         }
     }
 }
@@ -605,6 +666,48 @@ impl fmt::Display for Finding {
                 "{resource} has {lists} skos:memberList values\n    SKOS permits this — S35 makes \
                  skos:memberList functional but §9.6.2 explains why that cannot be an integrity \
                  condition — so this is our judgement, not the specification's",
+            ),
+            Finding::MultiplePreferredLabels {
+                resource,
+                language,
+                labels,
+            } => write!(
+                f,
+                "{resource} has {} skos:prefLabel values in {}: {}\n    and {}",
+                labels.len(),
+                match language {
+                    Some(language) => format!("@{language}"),
+                    None => "no language".to_owned(),
+                },
+                labels.join(", "),
+                SkosRule::S14,
+            ),
+            Finding::LabelPropertiesClash {
+                resource,
+                label,
+                kinds,
+            } => write!(
+                f,
+                "{resource} carries {label} under {}\n    and {}",
+                kinds
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                SkosRule::S13,
+            ),
+            Finding::NonPlainLiteralLabel {
+                resource,
+                property,
+                value,
+            } => write!(
+                f,
+                "{resource} {property} {value}, which is not an RDF plain literal\n    and \
+                 {}\n    SKOS permits this — \u{a7}5.4 lists two integrity conditions on labels \
+                 and this is not one of them, and \u{a7}5.6.2 says an application \"may reject \
+                 such data but is not required to\" — so this is our judgement, not the \
+                 specification's",
+                SkosRule::S12,
             ),
             Finding::LiteralOnObjectProperty {
                 subject,
@@ -647,6 +750,7 @@ pub struct Resource {
     has_top_concept: BTreeSet<Node>,
     members: BTreeSet<Node>,
     member_lists: Vec<MemberList>,
+    labels: BTreeMap<LexicalLabel, BTreeSet<LabelKind>>,
 }
 
 impl Resource {
@@ -683,6 +787,50 @@ impl Resource {
     /// Its `skos:memberList` values. More than one is a [`Finding::MultipleMemberLists`].
     pub fn member_lists(&self) -> &[MemberList] {
         &self.member_lists
+    }
+
+    /// Every label it carries, and which properties carry each one.
+    ///
+    /// Ordered by language tag and then by lexical form, so iterating groups a resource's labels
+    /// by language. A label under more than one property is a [`Finding::LabelPropertiesClash`];
+    /// the map keeps it once, with both kinds, rather than reporting it twice.
+    pub fn labels(&self) -> &BTreeMap<LexicalLabel, BTreeSet<LabelKind>> {
+        &self.labels
+    }
+
+    /// Its labels of one kind, in the same order.
+    pub fn labels_of(&self, kind: LabelKind) -> impl Iterator<Item = &LexicalLabel> {
+        self.labels
+            .iter()
+            .filter(move |(_, kinds)| kinds.contains(&kind))
+            .map(|(label, _)| label)
+    }
+
+    /// Its preferred label in `language`, if it has one.
+    ///
+    /// The tag is matched exactly, lower-cased — `en` does not answer a request for `en-GB`, and
+    /// §5.6.5 is explicit that they are different tags. BCP 47's "lookup" fallback, which §5.6.5
+    /// *suggests* an application implement, is deliberately not done here: it is a presentation
+    /// policy, it needs a configured preference order to be useful, and doing it silently would
+    /// mean a caller asking for French sometimes getting English with no way to tell.
+    pub fn preferred_label_in(&self, language: &str) -> Option<&LexicalLabel> {
+        self.labels_of(LabelKind::Preferred)
+            .find(|label| label.is_in(language))
+    }
+
+    /// A label to show when nothing has said which language it wants.
+    ///
+    /// The first preferred label in language-tag order, or failing that the first alternative —
+    /// §5.6.4 says a resource may have alternatives and no preferred label, and showing its IRI
+    /// when it has a perfectly good `skos:altLabel` would be a worse answer than an imprecise one.
+    ///
+    /// **Deterministic but arbitrary across languages**, which is why every caller in this build
+    /// prints the tag beside it. A configured display-language order is a separate decision and
+    /// is recorded in `docs/UNTESTED.md` rather than guessed at here.
+    pub fn display_label(&self) -> Option<&LexicalLabel> {
+        self.labels_of(LabelKind::Preferred)
+            .next()
+            .or_else(|| self.labels_of(LabelKind::Alternative).next())
     }
 }
 
@@ -747,6 +895,46 @@ impl CoreModel {
         &self.findings
     }
 
+    /// How many labels of each kind the graph carries, per language tag.
+    ///
+    /// Ordered by tag, with untagged labels first. This is the shape of the question a
+    /// multilingual programme asks — *which languages is this thesaurus actually in, and how far
+    /// behind is each one?* — and it is counts rather than labels, so its size is the number of
+    /// languages and not the size of the vocabulary.
+    pub fn label_coverage(&self) -> Vec<LanguageCoverage> {
+        let mut by_language: BTreeMap<Option<String>, LanguageCoverage> = BTreeMap::new();
+        for resource in self.resources.values() {
+            let mut preferred_here: BTreeSet<Option<String>> = BTreeSet::new();
+            for (label, kinds) in &resource.labels {
+                let entry = by_language
+                    .entry(label.language.clone())
+                    .or_insert_with(|| LanguageCoverage {
+                        language: label.language.clone(),
+                        preferred: 0,
+                        alternative: 0,
+                        hidden: 0,
+                        resources_with_preferred: 0,
+                    });
+                for kind in kinds {
+                    match kind {
+                        LabelKind::Preferred => {
+                            entry.preferred += 1;
+                            preferred_here.insert(label.language.clone());
+                        }
+                        LabelKind::Alternative => entry.alternative += 1,
+                        LabelKind::Hidden => entry.hidden += 1,
+                    }
+                }
+            }
+            for language in preferred_here {
+                if let Some(entry) = by_language.get_mut(&language) {
+                    entry.resources_with_preferred += 1;
+                }
+            }
+        }
+        by_language.into_values().collect()
+    }
+
     /// Whether any finding says the graph violates a SKOS integrity condition.
     pub fn is_consistent(&self) -> bool {
         !self
@@ -772,6 +960,7 @@ pub struct CoreModelBuilder {
     member_list: BTreeMap<Node, BTreeSet<Node>>,
     first: BTreeMap<Node, Vec<Term>>,
     rest: BTreeMap<Node, Vec<Term>>,
+    labels: BTreeMap<Node, BTreeMap<LexicalLabel, BTreeSet<LabelKind>>>,
     findings: Vec<Finding>,
     statements_read: usize,
 }
@@ -821,6 +1010,14 @@ impl CoreModelBuilder {
                     b.member_list.entry(s).or_default().insert(o);
                 })
             }
+            _ if LabelKind::from_iri(&predicate).is_some() => {
+                // Unreachable `None` — the guard has already matched the IRI. Written as a `let`
+                // rather than an `unwrap()` because `CLAUDE.md` §6 forbids the latter outside
+                // tests, and because a mis-edited guard should drop a label, not abort a scan.
+                if let Some(kind) = LabelKind::from_iri(&predicate) {
+                    self.label(subject, &predicate, kind, object);
+                }
+            }
             // The list vocabulary is RDF's, not SKOS's, so a literal `rdf:first` is legal RDF and
             // is not a SKOS finding. It becomes a `ListDefect` if it turns up in a list we walk,
             // and stays silent otherwise — plenty of graphs carry lists that are nothing to do
@@ -847,6 +1044,31 @@ impl CoreModelBuilder {
                 property: curie(predicate),
                 literal,
                 rule,
+            }),
+        }
+    }
+
+    /// Record a label, or raise S12's finding if the value is not one.
+    ///
+    /// A value that is not a plain literal is **not** kept: S13 asks whether two properties carry
+    /// the same label and S14 asks how many preferred labels a language has, and a term that is
+    /// neither a language-tagged string nor a string has no answer to either. Keeping it would
+    /// mean inventing a bucket for it and then reporting a clash that the specification does not
+    /// describe.
+    fn label(&mut self, subject: Node, predicate: &str, kind: LabelKind, object: Term) {
+        match LexicalLabel::of(&object) {
+            Some(label) => {
+                self.labels
+                    .entry(subject)
+                    .or_default()
+                    .entry(label)
+                    .or_default()
+                    .insert(kind);
+            }
+            None => self.findings.push(Finding::NonPlainLiteralLabel {
+                resource: subject,
+                property: curie(predicate),
+                value: object,
             }),
         }
     }
@@ -878,9 +1100,66 @@ impl CoreModelBuilder {
         // the shorter one is the one a reader can check.
         Self::entail_super_classes(&mut model);
         self.resolve_member_lists(&mut model);
+        self.attach_labels(&mut model);
         Self::check_disjointness(&mut model);
+        Self::check_label_conditions(&mut model);
 
         model
+    }
+
+    /// Hand each resource the labels read for it.
+    ///
+    /// Labels entail no class. §5.6.1 states that the three properties have **no domain**, so
+    /// their effective domain is `rdfs:Resource` — Example 16 labels an `owl:Class` and is
+    /// consistent. A model that made a `skos:Concept` out of anything with a `skos:prefLabel`
+    /// would miscount every vocabulary that labels its own concept scheme, which is most of them.
+    fn attach_labels(&mut self, model: &mut CoreModel) {
+        for (node, labels) in std::mem::take(&mut self.labels) {
+            model.resources.entry(node).or_default().labels = labels;
+        }
+    }
+
+    /// S13 and S14 — the two integrity conditions the specification states on lexical labels.
+    ///
+    /// Both are per resource, and neither is affected by anything inferred, so this runs last and
+    /// reads only what was asserted.
+    fn check_label_conditions(model: &mut CoreModel) {
+        let mut found = Vec::new();
+        for (node, resource) in &model.resources {
+            // S13: the three properties are pairwise disjoint, so one label under two of them is
+            // a violation. The map is keyed by the label, so a clash is a key with two kinds —
+            // no pairwise comparison is needed, and none is done.
+            for (label, kinds) in &resource.labels {
+                if kinds.len() > 1 {
+                    found.push(Finding::LabelPropertiesClash {
+                        resource: node.clone(),
+                        label: label.clone(),
+                        kinds: kinds.iter().copied().collect(),
+                    });
+                }
+            }
+
+            // S14: at most one preferred label per language tag. Untagged labels are one bucket
+            // of their own — the condition says "per language tag", and a resource with two
+            // untagged preferred labels has two values for a tag that happens to be absent.
+            let mut by_language: BTreeMap<Option<String>, Vec<String>> = BTreeMap::new();
+            for label in resource.labels_of(LabelKind::Preferred) {
+                by_language
+                    .entry(label.language.clone())
+                    .or_default()
+                    .push(format!("{label}"));
+            }
+            for (language, labels) in by_language {
+                if labels.len() > 1 {
+                    found.push(Finding::MultiplePreferredLabels {
+                        resource: node.clone(),
+                        language,
+                        labels,
+                    });
+                }
+            }
+        }
+        model.findings.extend(found);
     }
 
     /// S8 — `skos:topConceptOf` and `skos:hasTopConcept` are inverses, so each implies the other.
@@ -1931,5 +2210,559 @@ mod tests {
 
         assert_eq!(forwards.resources, backwards.resources);
         assert_eq!(forwards.findings, backwards.findings);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Lexical labels — SKOS Reference §5. Every test below is one of the specification's own
+    // numbered examples, asserted to be what the specification says it is. §5.4 states exactly
+    // two integrity conditions, S13 and S14, and the examples are the specification's own
+    // evidence for where the line falls.
+    // ---------------------------------------------------------------------------------------
+
+    /// `"value"@tag`, the shape every SKOS label arrives in.
+    fn tagged(value: &str, language: &str) -> Term {
+        Term::Literal(Literal {
+            value: value.to_owned(),
+            language: Some(language.to_owned()),
+            datatype: crate::labels::RDF_LANG_STRING.to_owned(),
+        })
+    }
+
+    /// `<subject> skos:<kind> <object>`.
+    fn labelled(subject: &Node, kind: LabelKind, object: Term) -> Statement {
+        Statement::new(subject.clone(), kind.property_iri(), object)
+    }
+
+    /// Every finding of one shape, rendered, so an assertion can name what it expected to see.
+    fn findings_matching(model: &CoreModel, needle: &str) -> Vec<String> {
+        model
+            .findings()
+            .iter()
+            .map(ToString::to_string)
+            .filter(|finding| finding.contains(needle))
+            .collect()
+    }
+
+    /// Example 10 — labels in two languages, all three kinds. Consistent.
+    #[test]
+    fn example_10_labels_in_two_languages_are_consistent() {
+        let model = CoreModel::from_statements(vec![
+            labelled(
+                &ex("MyResource"),
+                LabelKind::Preferred,
+                tagged("animals", "en"),
+            ),
+            labelled(
+                &ex("MyResource"),
+                LabelKind::Alternative,
+                tagged("fauna", "en"),
+            ),
+            labelled(
+                &ex("MyResource"),
+                LabelKind::Hidden,
+                tagged("aminals", "en"),
+            ),
+            labelled(
+                &ex("MyResource"),
+                LabelKind::Preferred,
+                tagged("animaux", "fr"),
+            ),
+            labelled(
+                &ex("MyResource"),
+                LabelKind::Alternative,
+                tagged("faune", "fr"),
+            ),
+        ]);
+
+        let resource = model
+            .resource(&ex("MyResource"))
+            .expect("a labelled resource");
+        assert_eq!(resource.labels().len(), 5);
+        assert_eq!(
+            resource
+                .preferred_label_in("en")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("\"animals\"@en")
+        );
+        assert_eq!(
+            resource
+                .preferred_label_in("fr")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("\"animaux\"@fr")
+        );
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+    }
+
+    /// Example 11 — four preferred labels on one resource, in four Japanese script tags.
+    ///
+    /// The example that would fail a model comparing primary subtags rather than whole tags:
+    /// all four are Japanese, and all four are consistent.
+    #[test]
+    fn example_11_four_japanese_script_tags_are_four_different_languages() {
+        let model = CoreModel::from_statements(vec![
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Preferred,
+                tagged("\u{6771}", "ja-Hani"),
+            ),
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Preferred,
+                tagged("\u{3072}\u{304c}\u{3057}", "ja-Hira"),
+            ),
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Alternative,
+                tagged("\u{3042}\u{305a}\u{307e}", "ja-Hira"),
+            ),
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Preferred,
+                tagged("\u{30d2}\u{30ac}\u{30b7}", "ja-Kana"),
+            ),
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Alternative,
+                tagged("\u{30a2}\u{30ba}\u{30de}", "ja-Kana"),
+            ),
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Preferred,
+                tagged("higashi", "ja-Latn"),
+            ),
+            labelled(
+                &ex("AnotherResource"),
+                LabelKind::Alternative,
+                tagged("azuma", "ja-Latn"),
+            ),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        let coverage = model.label_coverage();
+        assert_eq!(coverage.len(), 4, "four tags, four languages: {coverage:?}");
+        assert!(coverage.iter().all(|language| language.preferred == 1));
+    }
+
+    /// Example 12 — two preferred labels with the same tag. **Not consistent.** S14.
+    #[test]
+    fn example_12_two_preferred_labels_in_one_language_violate_s14() {
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "en")),
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("adoration", "en")),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        assert_eq!(
+            model.findings(),
+            [Finding::MultiplePreferredLabels {
+                resource: ex("Love"),
+                language: Some("en".to_owned()),
+                labels: vec!["\"adoration\"@en".to_owned(), "\"love\"@en".to_owned()],
+            }]
+        );
+        assert_eq!(model.findings()[0].severity(), Severity::Inconsistent);
+        let rendered = model.findings()[0].to_string();
+        assert!(rendered.contains("S14"), "{rendered}");
+        assert!(rendered.contains("no more than one value"), "{rendered}");
+    }
+
+    /// Examples 13, 14 and 15 — the three ways one label can sit under two properties. S13.
+    #[test]
+    fn examples_13_14_and_15_a_label_under_two_properties_violates_s13() {
+        for (first, second) in [
+            (LabelKind::Preferred, LabelKind::Alternative),
+            (LabelKind::Alternative, LabelKind::Hidden),
+            (LabelKind::Preferred, LabelKind::Hidden),
+        ] {
+            let model = CoreModel::from_statements(vec![
+                labelled(&ex("Love"), first, tagged("love", "en")),
+                labelled(&ex("Love"), second, tagged("love", "en")),
+            ]);
+
+            assert!(
+                !model.is_consistent(),
+                "{first} with {second}: {:?}",
+                model.findings()
+            );
+            assert_eq!(
+                model.findings(),
+                [Finding::LabelPropertiesClash {
+                    resource: ex("Love"),
+                    label: LexicalLabel {
+                        language: Some("en".to_owned()),
+                        text: "love".to_owned(),
+                    },
+                    kinds: vec![first, second],
+                }],
+                "{first} with {second}"
+            );
+            let rendered = model.findings()[0].to_string();
+            assert!(rendered.contains("S13"), "{rendered}");
+            assert!(rendered.contains("pairwise disjoint"), "{rendered}");
+        }
+    }
+
+    /// One label under two properties is **one** finding, not one per property.
+    ///
+    /// The map is keyed by the label, so this is a property of the structure rather than of a
+    /// de-duplicating pass — which is why it is worth pinning: a change to the key would turn
+    /// every clash into two identical findings and nothing else would notice.
+    #[test]
+    fn a_clashing_label_is_held_once_with_both_properties() {
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "en")),
+            labelled(&ex("Love"), LabelKind::Alternative, tagged("love", "en")),
+        ]);
+
+        let resource = model.resource(&ex("Love")).expect("a labelled resource");
+        assert_eq!(resource.labels().len(), 1);
+        assert_eq!(model.findings().len(), 1);
+        assert_eq!(resource.labels_of(LabelKind::Preferred).count(), 1);
+        assert_eq!(resource.labels_of(LabelKind::Alternative).count(), 1);
+    }
+
+    /// Example 16 — labelling an `owl:Class` is consistent, and entails no SKOS class.
+    ///
+    /// §5.6.1: the three properties have no stated domain. A model that made a `skos:Concept`
+    /// out of everything with a `skos:prefLabel` would miscount every vocabulary that labels its
+    /// own concept scheme, which is nearly all of them.
+    #[test]
+    fn example_16_labelling_any_resource_is_consistent_and_entails_no_class() {
+        let model = CoreModel::from_statements(vec![
+            Statement::new(
+                ex("MyClass"),
+                RDF_TYPE,
+                Node::iri("http://www.w3.org/2002/07/owl#Class"),
+            ),
+            labelled(
+                &ex("MyClass"),
+                LabelKind::Preferred,
+                tagged("animals", "en"),
+            ),
+            labelled(
+                &ex("MyClass"),
+                LabelKind::Alternative,
+                tagged("fauna", "en"),
+            ),
+            labelled(&ex("MyClass"), LabelKind::Hidden, tagged("aminals", "en")),
+            labelled(
+                &ex("MyClass"),
+                LabelKind::Preferred,
+                tagged("animaux", "fr"),
+            ),
+            labelled(
+                &ex("MyClass"),
+                LabelKind::Alternative,
+                tagged("faune", "fr"),
+            ),
+        ]);
+
+        let resource = model.resource(&ex("MyClass")).expect("a labelled resource");
+        assert!(resource.classes().is_empty(), "{:?}", resource.classes());
+        assert_eq!(model.count_of(SkosClass::Concept), 0);
+        assert!(model.derivations().is_empty(), "{:?}", model.derivations());
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// Example 17 — alternatives with no preferred label. Consistent, and no entailments follow.
+    #[test]
+    fn example_17_alternatives_without_a_preferred_label_are_consistent() {
+        let model = CoreModel::from_statements(vec![
+            labelled(
+                &ex("Love"),
+                LabelKind::Alternative,
+                tagged("adoration", "en"),
+            ),
+            labelled(&ex("Love"), LabelKind::Alternative, tagged("desire", "en")),
+        ]);
+
+        let resource = model.resource(&ex("Love")).expect("a labelled resource");
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        assert_eq!(resource.preferred_label_in("en"), None);
+        assert_eq!(
+            resource.display_label().map(ToString::to_string).as_deref(),
+            Some("\"adoration\"@en"),
+            "an alternative is a better answer than an IRI when there is no preferred label"
+        );
+    }
+
+    /// Example 18 — `en`, `en-US` and `en-GB` are three tags, so three preferred labels are fine.
+    #[test]
+    fn example_18_three_english_tags_are_three_languages() {
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Colour"), LabelKind::Preferred, tagged("color", "en")),
+            labelled(
+                &ex("Colour"),
+                LabelKind::Preferred,
+                tagged("color", "en-US"),
+            ),
+            labelled(
+                &ex("Colour"),
+                LabelKind::Preferred,
+                tagged("colour", "en-GB"),
+            ),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        let resource = model.resource(&ex("Colour")).expect("a labelled resource");
+        assert_eq!(
+            resource
+                .preferred_label_in("en-GB")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("\"colour\"@en-gb")
+        );
+        assert_eq!(
+            resource
+                .preferred_label_in("en")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("\"color\"@en"),
+            "a request for en is not answered with en-GB — \u{a7}5.6.5 makes them different tags"
+        );
+    }
+
+    /// Example 19 — the same lexical form under two properties, in two tags. Consistent.
+    ///
+    /// The narrow edge of S13: the condition is about the same *RDF term*, and `"love"@en` and
+    /// `"love"@en-GB` are not the same term. A model comparing lexical forms alone would refuse
+    /// this graph, which the specification says is fine.
+    #[test]
+    fn example_19_the_same_text_under_two_tags_does_not_clash() {
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "en")),
+            labelled(&ex("Love"), LabelKind::Alternative, tagged("love", "en-GB")),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+    }
+
+    /// RDF 1.1 Concepts §3.3 — language tags have a lower-case value space, so `@EN` is `@en`.
+    ///
+    /// Oxigraph normalises tags on the way in, so this can only be reached by a caller that is
+    /// not the store — a parsed file, a discovery result, an agent's proposal. The crate is
+    /// engine-free by `docs/adr/0019` and so cannot rely on the store having done it.
+    #[test]
+    fn a_language_tag_in_upper_case_is_the_same_language() {
+        let clash = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "EN")),
+            labelled(&ex("Love"), LabelKind::Alternative, tagged("love", "en")),
+        ]);
+        assert_eq!(
+            findings_matching(&clash, "S13").len(),
+            1,
+            "{:?}",
+            clash.findings()
+        );
+
+        let too_many = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "EN")),
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("adoration", "en")),
+        ]);
+        assert_eq!(
+            findings_matching(&too_many, "S14").len(),
+            1,
+            "{:?}",
+            too_many.findings()
+        );
+    }
+
+    /// S14 counts per language *tag*, and "no tag" is a bucket like any other.
+    #[test]
+    fn two_untagged_preferred_labels_violate_s14() {
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, plain("love")),
+            labelled(&ex("Love"), LabelKind::Preferred, plain("adoration")),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let rendered = model.findings()[0].to_string();
+        assert!(rendered.contains("in no language"), "{rendered}");
+    }
+
+    /// S12 — not an integrity condition. §5.4 lists two and this is not one of them.
+    ///
+    /// The distinction is the whole point: a vocabulary carrying `skos:prefLabel "4"^^xsd:integer`
+    /// is odd, and it is still a SKOS vocabulary. §5.6.2 says an application "may reject such
+    /// data but is not required to", so we report and read on.
+    #[test]
+    fn s12_a_label_that_is_not_a_plain_literal_is_ill_formed_and_not_inconsistent() {
+        let typed_literal = Term::Literal(Literal {
+            value: "4".to_owned(),
+            language: None,
+            datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+        });
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, typed_literal.clone()),
+            labelled(
+                &ex("Love"),
+                LabelKind::Alternative,
+                Term::Node(ex("Adoration")),
+            ),
+        ]);
+
+        assert!(
+            model.is_consistent(),
+            "S12 is a usage convention, not an integrity condition: {:?}",
+            model.findings()
+        );
+        assert_eq!(model.findings().len(), 2);
+        assert!(model
+            .findings()
+            .iter()
+            .all(|finding| finding.severity() == Severity::IllFormed));
+        let rendered = model.findings()[0].to_string();
+        assert!(rendered.contains("S12"), "{rendered}");
+        assert!(rendered.contains("our judgement"), "{rendered}");
+
+        // And it takes no part in either integrity condition, because it is in no language. A
+        // resource whose *only* SKOS statements are refused labels is therefore not in the model
+        // at all — the findings name it, and `resources()` keeps its documented meaning of "what
+        // the model has something to say about". The two together are the honest answer: the
+        // graph mentioned it, and we learned nothing about it in SKOS terms.
+        assert_eq!(model.resource(&ex("Love")), None);
+        assert!(model
+            .findings()
+            .iter()
+            .all(|finding| finding.to_string().contains("<http://example.com/ns/Love>")));
+    }
+
+    /// A concept with one good label and one refused value keeps the good one.
+    #[test]
+    fn a_refused_label_does_not_take_the_rest_of_the_resource_with_it() {
+        let model = CoreModel::from_statements(vec![
+            typed(&ex("Cat"), SkosClass::Concept),
+            labelled(&ex("Cat"), LabelKind::Preferred, tagged("cat", "en")),
+            labelled(
+                &ex("Cat"),
+                LabelKind::Alternative,
+                Term::Literal(Literal {
+                    value: "4".to_owned(),
+                    language: None,
+                    datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                }),
+            ),
+        ]);
+
+        let resource = model.resource(&ex("Cat")).expect("a typed concept");
+        assert!(resource.is_a(SkosClass::Concept));
+        assert_eq!(
+            resource.display_label().map(ToString::to_string).as_deref(),
+            Some("\"cat\"@en")
+        );
+        assert_eq!(findings_matching(&model, "S12").len(), 1);
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// A value that is not a label does not silently become one under a different property.
+    ///
+    /// Two properties, one non-plain value: with the value discarded there is nothing for S13 to
+    /// compare, and inventing a bucket for it would report a clash the specification does not
+    /// describe.
+    #[test]
+    fn a_non_plain_value_under_two_properties_is_two_findings_and_no_clash() {
+        let typed_literal = Term::Literal(Literal {
+            value: "4".to_owned(),
+            language: None,
+            datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+        });
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, typed_literal.clone()),
+            labelled(&ex("Love"), LabelKind::Alternative, typed_literal),
+        ]);
+
+        assert_eq!(findings_matching(&model, "S12").len(), 2);
+        assert!(findings_matching(&model, "S13").is_empty());
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// The multilingual question a programme actually asks: how far behind is each language?
+    #[test]
+    fn label_coverage_counts_every_language_and_the_resources_it_reaches() {
+        let model = CoreModel::from_statements(vec![
+            typed(&ex("Cat"), SkosClass::Concept),
+            labelled(&ex("Cat"), LabelKind::Preferred, tagged("cat", "en")),
+            labelled(&ex("Cat"), LabelKind::Alternative, tagged("feline", "en")),
+            labelled(&ex("Cat"), LabelKind::Preferred, tagged("chat", "fr")),
+            typed(&ex("Dog"), SkosClass::Concept),
+            labelled(&ex("Dog"), LabelKind::Preferred, tagged("dog", "en")),
+            labelled(&ex("Dog"), LabelKind::Hidden, tagged("dgo", "en")),
+        ]);
+
+        let coverage = model.label_coverage();
+        assert_eq!(coverage.len(), 2);
+        assert_eq!(coverage[0].language.as_deref(), Some("en"));
+        assert_eq!(coverage[0].preferred, 2);
+        assert_eq!(coverage[0].alternative, 1);
+        assert_eq!(coverage[0].hidden, 1);
+        assert_eq!(coverage[0].resources_with_preferred, 2);
+        assert_eq!(coverage[0].total(), 4);
+        assert_eq!(coverage[1].language.as_deref(), Some("fr"));
+        assert_eq!(coverage[1].preferred, 1);
+        assert_eq!(
+            coverage[1].resources_with_preferred, 1,
+            "one of the two concepts has a French preferred label, which is the gap a \
+             translation programme is looking for"
+        );
+    }
+
+    /// A label under two properties is counted under both, because it is two labellings.
+    #[test]
+    fn coverage_counts_a_clashing_label_under_each_property_that_carries_it() {
+        let model = CoreModel::from_statements(vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "en")),
+            labelled(&ex("Love"), LabelKind::Alternative, tagged("love", "en")),
+        ]);
+
+        let coverage = model.label_coverage();
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0].preferred, 1);
+        assert_eq!(coverage[0].alternative, 1);
+        assert_eq!(coverage[0].resources_with_preferred, 1);
+    }
+
+    #[test]
+    fn the_display_label_is_stable_whichever_order_the_labels_arrive_in() {
+        let statements = vec![
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("amour", "fr")),
+            labelled(&ex("Love"), LabelKind::Preferred, tagged("love", "en")),
+            labelled(
+                &ex("Love"),
+                LabelKind::Alternative,
+                tagged("adoration", "en"),
+            ),
+        ];
+        let forwards = CoreModel::from_statements(statements.clone());
+        let backwards = CoreModel::from_statements(statements.into_iter().rev());
+
+        let of = |model: &CoreModel| {
+            model
+                .resource(&ex("Love"))
+                .and_then(Resource::display_label)
+                .map(ToString::to_string)
+        };
+        assert_eq!(of(&forwards), of(&backwards));
+        assert_eq!(of(&forwards).as_deref(), Some("\"love\"@en"));
+    }
+
+    /// A resource with no labels at all has no coverage and no findings.
+    #[test]
+    fn an_unlabelled_vocabulary_reports_no_languages() {
+        let model = CoreModel::from_statements(vec![typed(&ex("Cat"), SkosClass::Concept)]);
+
+        assert!(model.label_coverage().is_empty());
+        assert_eq!(
+            model
+                .resource(&ex("Cat"))
+                .expect("a concept")
+                .display_label(),
+            None
+        );
+        assert!(model.is_consistent());
     }
 }

@@ -45,10 +45,12 @@ const CONCEPTS: &str = r#"
 
 ex:emea a skos:Concept ;
     skos:prefLabel "Europe, Middle East and Africa"@en ;
+    skos:altLabel "EMEA"@en ;
     skos:topConceptOf ex:scheme .
 
 ex:apac a skos:Concept ;
     skos:prefLabel "Asia-Pacific"@en ;
+    skos:prefLabel "Asie-Pacifique"@fr ;
     skos:topConceptOf ex:scheme .
 
 ex:reporting a skos:OrderedCollection ;
@@ -87,8 +89,14 @@ fn authored() -> tempfile::TempDir {
         stderr(&restored)
     );
 
-    std::fs::write(dir.path().join("concepts.ttl"), CONCEPTS).expect("write the import");
-    let imported = run(dir.path(), &["import", REGIONS, "concepts.ttl"]);
+    import_and_approve(dir.path(), "concepts.ttl", CONCEPTS);
+    dir
+}
+
+/// Put `turtle` into the vocabulary the way a user does: propose it, then approve it.
+fn import_and_approve(data_dir: &Path, file: &str, turtle: &str) {
+    std::fs::write(data_dir.join(file), turtle).expect("write the import");
+    let imported = run(data_dir, &["import", REGIONS, file]);
     assert!(
         imported.status.success(),
         "the import failed: {}",
@@ -103,14 +111,12 @@ fn authored() -> tempfile::TempDir {
         .nth(2)
         .expect("the import names the candidate it raised")
         .to_owned();
-    let approved = run(dir.path(), &["approve", &id]);
+    let approved = run(data_dir, &["approve", &id]);
     assert!(
         approved.status.success(),
         "the approval failed: {}",
         stderr(&approved)
     );
-
-    dir
 }
 
 #[test]
@@ -167,6 +173,24 @@ fn inspect_reports_a_vocabulary_in_skos_terms_and_names_the_rule_behind_every_in
         "{report}"
     );
 
+    // The labels, which are what a person recognises any of this by. Note that the scheme is
+    // named by a label it does not have — it has none — so it is listed by IRI alone, while the
+    // collection and the concepts carry theirs.
+    assert!(report.contains("languages:"), "{report}");
+    assert!(
+        report.contains("@en  2 preferred on 2 resource(s), 1 alternative, 0 hidden"),
+        "{report}"
+    );
+    assert!(
+        report.contains("@fr  1 preferred on 1 resource(s), 0 alternative, 0 hidden"),
+        "the French half of the thesaurus is one concept behind, and the report is where a \
+         translation programme sees that: {report}"
+    );
+    assert!(
+        report.contains("0 concept(s) have no skos:prefLabel in any language"),
+        "{report}"
+    );
+
     assert!(
         report.contains("findings: 0"),
         "a well-formed thesaurus must produce no findings: {report}"
@@ -175,6 +199,51 @@ fn inspect_reports_a_vocabulary_in_skos_terms_and_names_the_rule_behind_every_in
         report.contains("no SKOS integrity condition is violated"),
         "{report}"
     );
+}
+
+/// The commonest real defect: two sources merged, and one concept ends up with two preferred
+/// labels in the same language. It has to survive the whole path — a file, an import, an
+/// approval, a store on disk, and a report — to be worth anything to an operator.
+#[test]
+fn inspect_finds_a_duplicate_preferred_label_after_a_second_import_lands() {
+    let dir = authored();
+
+    let clean = stdout(&run(dir.path(), &["inspect", REGIONS]));
+    assert!(
+        clean.contains("no SKOS integrity condition is violated"),
+        "{clean}"
+    );
+
+    import_and_approve(
+        dir.path(),
+        "merged.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:apac skos:prefLabel \"Asia Pacific\"@en .\n",
+    );
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    let report = stdout(&output);
+
+    assert!(report.contains("S14"), "{report}");
+    assert!(
+        report.contains(
+            "A resource has no more than one value of skos:prefLabel per language \
+                         tag."
+        ),
+        "the finding must quote the specification, not merely cite it: {report}"
+    );
+    assert!(
+        report.contains("\"Asia Pacific\"@en") && report.contains("\"Asia-Pacific\"@en"),
+        "the finding must name both labels, because fixing it means choosing between them: \
+         {report}"
+    );
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "{report}"
+    );
+    // Still exits 0 — `inspect` reports, it does not gate. Recorded in `docs/UNTESTED.md`.
+    assert!(output.status.success(), "{}", stderr(&output));
 }
 
 /// A typo in a vocabulary IRI must not read as "that vocabulary is empty and fine".
