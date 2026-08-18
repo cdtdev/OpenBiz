@@ -31,6 +31,89 @@ Do not delete it — the record of what took how long to close is the signal.
 
 ---
 
+### The round trip is proven against our own reader, not against the specs' test suites
+- **Kind:** partial-standard
+- **What is proven:** every one of the six syntaxes survives serialise → parse → compare, over
+  content chosen to be hostile: two language tags in non-Latin and accented scripts, an
+  `xsd:integer`, a literal carrying a quote, a newline, a backslash and an emoji, an IRI with a
+  percent-encoded space, and a blank node. Four mutants of the serialiser were confirmed to break
+  it. Empty graphs are proven to produce *readable empty documents* in all six, which is the case
+  that separates RDF/XML and JSON-LD from the line-based syntaxes.
+- **What is not:** the reader in that round trip is the same library as the writer. Self-consistency
+  is what is proven; **conformance is not**. If Oxigraph's Turtle writer and Turtle reader shared a
+  misreading of the grammar, this test would pass and a third-party consumer would still choke.
+  `CLAUDE.md` §4.5 requires a standards claim to be backed by the spec's own examples, so until
+  that exists the claim this build makes is *round-trip fidelity*, not "we implement Turtle".
+  Nothing yet reads an OpenBiz export with a tool we did not write.
+- **What would close it:** run the W3C RDF test suites (rdf-tests) for each syntax against our
+  export path, and — cheaper and worth doing first — assert a handful of exports byte-for-byte
+  against fixtures produced by an independent tool (`rapper`, `riot`) so a divergence surfaces as a
+  diff rather than as a customer's failed import.
+- **Opened:** iteration 8
+
+### The HTTP export buffers the whole graph in memory
+- **Kind:** partial-coverage
+- **What is proven:** `Store::export_graph` genuinely streams — quads go to the writer as they are
+  read, and the backend's iterator holds one snapshot for the whole scan, so peak memory in the
+  *store* is one quad and a concurrent commit cannot tear the file. It takes no write lock, proven
+  by exporting from inside an open write transaction.
+- **What is not:** the HTTP layer collects that stream into a `Vec<u8>` to build the response body,
+  so a single request is bounded by memory rather than by graph size, and N concurrent exports of a
+  large vocabulary are bounded by N times that. Nothing has exported more than nine quads. The
+  serialisation itself has never been timed. The work runs on `spawn_blocking`, so it does not stall
+  the async runtime — that much is by construction, and also untested.
+- **What would close it:** the Phase 1 benchmark spike, which now owes a **fifth** number: export
+  wall-clock and peak RSS at 10k / 100k / 1M concepts, per syntax. If the number is bad the fix is a
+  streaming body (`Body::from_stream` over a channel fed by the blocking task), which is a change to
+  this handler and to nothing above it.
+- **Opened:** iteration 8
+
+### The interface's download path has never run against a real store with content
+- **Kind:** partial-coverage
+- **What is proven:** under jsdom, the chooser renders exactly the formats the server advertises in
+  the order it advertises them, every link's `href` is the escaped export URL for the chosen format,
+  changing the format rewrites every link, and the lossy-syntax warning appears and disappears with
+  the choice. Three mutations of the component were confirmed to break it. Against the real binary,
+  `GET /api/export` was exercised by hand for TriG, N-Quads via `Accept`, and a 404.
+- **What is not:** the two halves have never met. A vocabulary cannot be created over HTTP (§1.7
+  holds that until `DiscoveryProvider` exists) and the store's public API creates only *empty*
+  vocabularies, so **no download link has ever been clicked against a graph with statements in it**.
+  The `Content-Disposition` filename, the browser's save behaviour, and what a 404 looks like to a
+  user who clicked a link for a vocabulary deleted in another tab are all unobserved.
+- **What would close it:** either Phase 2's authoring path, which will put content in a vocabulary,
+  or the browser-driven test recorded in "Nothing renders the UI in a browser". Whichever lands
+  first should exercise this.
+- **Opened:** iteration 8
+
+### `X-OpenBiz-Graph` is our own header, and nothing reads it
+- **Kind:** no-production-caller
+- **What is proven:** the header is on every export response, carries the graph's IRI, and is
+  percent-escaped to ASCII so a non-ASCII IRI cannot make it an invalid header value. The escaping
+  is unit-tested including the escaping of `%` itself.
+- **What is not:** no client parses it — not our own interface, which already knows which graph it
+  asked for. It exists so that an export in a triple syntax still *states* which graph it is, which
+  is a real gap, but the value of an answer nobody reads is an assumption. Nor is it a registered
+  header name or a standard: a consumer would have to be told about it. `Link: <iri>; rel="canonical"`
+  or an RDF-level provenance statement in the payload may be better answers.
+- **What would close it:** the import path (the next plan item) using it to default the target graph
+  when a Turtle file is re-uploaded — which is the use case that would prove the header earns its
+  place, or show that it does not.
+- **Opened:** iteration 8
+
+### An export's registry check and its scan are two snapshots
+- **Kind:** inspected-only
+- **What is proven:** by reading Oxigraph's `Store::quads_for_pattern`, the *scan* takes one
+  snapshot and holds it for the whole iteration, so an export is internally consistent.
+- **What is not:** `contains_graph` runs first, on its own earlier snapshot. A graph deregistered in
+  the gap would be exported anyway; a graph registered in the gap would 404 despite existing. Both
+  are unreachable today because **nothing in this build deregisters a graph**, so the window is
+  argued from the code rather than closed by it — the same shape as the kill-window argument in
+  iteration 7 and equally untested.
+- **What would close it:** a read transaction spanning the check and the scan, added when the first
+  deletion path arrives. Doing it now would put a lock-shaped API in front of a race that cannot
+  happen, and the test for it could not be written.
+- **Opened:** iteration 8
+
 ### ~~The UI is built but nothing serves it~~ — CLOSED, iteration 1
 - **Closed by:** `rust-embed` embedding `ui/dist`, a router fallback serving it, 13 tests in
   `crates/openbiz-server/src/ui.rs`, an end-to-end test over a real socket in
@@ -103,7 +186,13 @@ Do not delete it — the record of what took how long to close is the signal.
   the absence of the guard reports as a failed assertion rather than as a stuck job. Not done here
   because `std` has no `join_timeout`; it needs a channel-with-timeout dance that is more test
   machinery than the one assertion justifies today.
-- **Opened:** iteration 7
+- **Amended, iteration 8:** a **second** test now has the same shape.
+  `exporting_does_not_block_on_the_write_lock` exports from inside an open write transaction; if
+  `export_graph` ever took the write lock, that test would hang rather than fail. The property is
+  worth asserting — an export must never be able to block an author — but two hanging tests is now
+  a pattern rather than a one-off, and the timeout helper this entry describes would pay for itself
+  across both.
+- **Opened:** iteration 7 · **Amended:** iteration 8
 
 ### The UI suite asserts on jsdom, and covers one component
 - **Kind:** narrowly-proven
@@ -123,10 +212,20 @@ Do not delete it — the record of what took how long to close is the signal.
   has now survived a second component without being tested: `Vocabularies` renders a heading, a
   list, and paragraphs, so there is still nothing to tab to and `CLAUDE.md` §4.4 is still satisfied
   **vacuously**. Two iterations of UI have now been added without the clause ever being exercised.
+- **Amended, iteration 8:** the interface has its **first interactive control** — the export format
+  chooser — so (3) is no longer vacuous. It is now *narrowly* satisfied: a test asserts the control
+  is a native `<select>` with an associated `<label>` rather than a `div` with a click handler, that
+  the download is a real `<a href>`, and that both accept focus. That is the thing which *makes* a
+  tab order, but it is not the tab order: jsdom has no real focus semantics, so nothing proves the
+  sequence a keyboard user actually walks, that the chooser is reachable before the links it
+  governs, or that the `role="alert"` states are announced. Point (3) has therefore changed from
+  "untested because untestable" to "tested at the only level jsdom permits", which is progress and
+  is not closure. Coverage is now 29 assertions across the same two components.
 - **What would close it:** for (1) the Playwright item; for (2) a test that mounts `main.tsx`
-  against a document with and without `#root`; for (3) a Phase 3 convention, ideally a lint or a
-  shared test helper, that makes an interactive component without a keyboard test fail.
-- **Opened:** iteration 4 · **Amended:** iteration 6
+  against a document with and without `#root`; for (3) the same Playwright item, which is the only
+  place a real tab order can be walked — plus the Phase 3 convention, ideally a lint or a shared
+  test helper, that makes an interactive component without a keyboard test fail.
+- **Opened:** iteration 4 · **Amended:** iterations 6, 8
 
 ### Nothing renders the UI in a browser
 - **Kind:** environment-limited
@@ -300,11 +399,15 @@ Do not delete it — the record of what took how long to close is the signal.
   unmeasured scan. But the consequence is that an unmeasured scan is now on a *hot* path rather than
   a once-per-process one, and it also serialises the whole registry into a JSON body with no paging.
   The 4 000-graph deployment gets a 4 000-element response on every page load.
+- **Widened again, iteration 8:** the interface now reads the registry *and* `/api/export/formats`
+  on mount, so a page load is two requests rather than one — the second is a constant-size response
+  built from a six-element array and is not a scan, so it does not widen the measurement problem,
+  but it does mean the vocabulary list's time-to-first-paint now waits on two round trips.
 - **What would close it:** the Phase 1 benchmark spike should register 10k graphs and time
   `graphs()`, startup, **and the endpoint**, alongside the query evaluation and `close()` numbers it
   already owes. If the number is bad, the answer is paging or a `?kind=` filter — both API changes,
   which is why the spike should land before Phase 3 builds an interface on top of this shape.
-- **Opened:** iteration 5 · **Widened:** iteration 6
+- **Opened:** iteration 5 · **Widened:** iterations 6, 8
 
 ### Durability is proven for one quad, not for a vocabulary
 - **Kind:** partial-coverage

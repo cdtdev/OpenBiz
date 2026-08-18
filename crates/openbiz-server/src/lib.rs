@@ -8,6 +8,7 @@ use axum::{routing::get, Json, Router};
 use openbiz_api::Health;
 
 mod config;
+mod export;
 mod graphs;
 mod shutdown;
 mod ui;
@@ -30,6 +31,8 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/graphs", get(graphs::list))
+        .route("/api/export", get(export::export))
+        .route("/api/export/formats", get(export::formats))
         .fallback_service(get(ui::serve))
         .with_state(state)
 }
@@ -172,6 +175,183 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// The end-to-end shape of an export: the right bytes, and headers that say what they are.
+    /// The system graph is used because it is the one graph a fresh store has content in — and
+    /// exporting it is a real operator answer to "what is actually in my store?", which is the
+    /// opacity `CLAUDE.md` §1 exists to attack.
+    #[tokio::test]
+    async fn a_graph_is_exported_with_headers_that_describe_it() {
+        let (_dir, store, router) = with_store();
+        store
+            .create_vocabulary_graph(&GraphId::vocabulary("http://acme.example/v/finance").unwrap())
+            .expect("a fresh IRI registers");
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export?graph=urn%3Aopenbiz%3Agraph%3Asystem&format=nquads")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/n-quads; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_DISPOSITION],
+            "attachment; filename=\"system.nq\""
+        );
+        assert_eq!(response.headers()["x-openbiz-graph"], SYSTEM_GRAPH_IRI);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).expect("UTF-8");
+        assert!(
+            text.contains("http://acme.example/v/finance"),
+            "the registry entry for the vocabulary belongs in the system graph: {text}"
+        );
+        assert!(
+            text.lines()
+                .all(|line| line.ends_with(&format!("<{SYSTEM_GRAPH_IRI}> ."))),
+            "every N-Quads line must name the graph it came from: {text}"
+        );
+    }
+
+    /// A vocabulary that exists and holds nothing exports as nothing — and that is a 200, not a
+    /// 404. It is the state every vocabulary is in between being created and its first concept.
+    #[tokio::test]
+    async fn an_empty_vocabulary_exports_as_an_empty_document() {
+        let (_dir, store, router) = with_store();
+        store
+            .create_vocabulary_graph(&GraphId::vocabulary("http://acme.example/v/empty").unwrap())
+            .expect("a fresh IRI registers");
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export?graph=http%3A%2F%2Facme.example%2Fv%2Fempty")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "text/turtle; charset=utf-8",
+            "no format and no Accept means the readable default"
+        );
+    }
+
+    /// The difference between "there is no such vocabulary" and "here is your vocabulary, it is
+    /// empty" is one a caller cannot recover from being told wrongly.
+    #[tokio::test]
+    async fn exporting_a_graph_that_does_not_exist_is_a_404_not_an_empty_file() {
+        let (_dir, _store, router) = with_store();
+        let (status, error) = get_json::<openbiz_api::ApiError>(
+            router,
+            "/api/export?graph=http%3A%2F%2Facme.example%2Fv%2Fnope",
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(
+            error.message.contains("http://acme.example/v/nope"),
+            "the refusal must name what was asked for: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn an_export_must_name_a_graph() {
+        let (_dir, _store, router) = with_store();
+        let (status, error) = get_json::<openbiz_api::ApiError>(router, "/api/export").await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            error.message.contains("/api/graphs"),
+            "point the caller at the list of graphs: {}",
+            error.message
+        );
+    }
+
+    /// A misspelled format is refused rather than served as the default, because a caller who
+    /// asked for JSON-LD and silently received Turtle finds out from their parser.
+    #[tokio::test]
+    async fn a_format_we_do_not_have_is_refused_and_the_alternatives_are_named() {
+        let (_dir, _store, router) = with_store();
+        let (status, error) = get_json::<openbiz_api::ApiError>(
+            router,
+            "/api/export?graph=urn%3Aopenbiz%3Agraph%3Asystem&format=turtel",
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        for token in ["turtle", "ntriples", "nquads", "trig", "rdfxml", "jsonld"] {
+            assert!(error.message.contains(token), "{token} must be offered");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_accept_header_chooses_the_syntax_when_no_format_is_given() {
+        let (_dir, _store, router) = with_store();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export?graph=urn%3Aopenbiz%3Agraph%3Asystem")
+                    .header("accept", "application/ld+json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/ld+json; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unsatisfiable_accept_is_a_406() {
+        let (_dir, _store, router) = with_store();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export?graph=urn%3Aopenbiz%3Agraph%3Asystem")
+                    .header("accept", "text/csv")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    /// The interface renders whatever this returns, so it is the thing that stops the format
+    /// chooser drifting from what the serialiser can actually produce.
+    #[tokio::test]
+    async fn the_export_formats_are_advertised_for_the_interface_to_render() {
+        let (_dir, _store, router) = with_store();
+        let (status, formats) =
+            get_json::<openbiz_api::ExportFormats>(router, "/api/export/formats").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(formats.formats.len(), 6);
+        assert_eq!(formats.formats[0].token, "turtle");
+        assert!(
+            formats.formats.iter().any(|it| it.records_graph_names)
+                && formats.formats.iter().any(|it| !it.records_graph_names),
+            "the interface can only warn about lossy syntaxes if both kinds are advertised"
+        );
     }
 
     /// Routes the API does not claim now fall through to the embedded UI rather than 404ing —

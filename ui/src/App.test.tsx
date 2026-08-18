@@ -15,10 +15,10 @@ function abortError() {
  * rot untested while the suite stayed green. It records the signals handed to the *health* probe so
  * the unmount path can be asserted on.
  *
- * `App` also renders `Vocabularies`, which reads `/api/graphs` on mount. That request always
- * succeeds here, and with an empty registry: these tests are about the health probe, and a registry
- * that could also fail would put a second `role="alert"` on the page and make every assertion below
- * ambiguous. `Vocabularies` has its own suite for its own states.
+ * `App` also renders `Vocabularies`, which reads `/api/graphs` and `/api/export/formats` on mount.
+ * Both always succeed here — an empty registry and the real format list: these tests are about the
+ * health probe, and a registry that could also fail would put a second `role="alert"` on the page
+ * and make every assertion below ambiguous. `Vocabularies` has its own suite for its own states.
  */
 function stubFetch(outcome: () => Promise<Response>) {
   const signals: AbortSignal[] = [];
@@ -35,19 +35,27 @@ function stubFetch(outcome: () => Promise<Response>) {
       }
       signal?.addEventListener("abort", () => reject(abortError()));
       const settle =
-        url === "/healthz"
-          ? outcome()
-          : Promise.resolve(
-              new Response(JSON.stringify({ graphs: [] }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              }),
-            );
+        url === "/healthz" ? outcome() : Promise.resolve(json(bodyFor(url)));
       settle.then(resolve, reject);
     });
   });
   vi.stubGlobal("fetch", fetch);
   return { fetch, signals };
+}
+
+/** A 200 carrying `body` as JSON. */
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** What the endpoints `Vocabularies` reads answer with while these tests exercise `App`. */
+function bodyFor(url: string): unknown {
+  return url === "/api/export/formats"
+    ? { formats: [{ token: "turtle", label: "Turtle", mediaType: "text/turtle", fileExtension: "ttl", recordsGraphNames: false }] }
+    : { graphs: [] };
 }
 
 /** Every URL `fetch` was asked for, in call order. */

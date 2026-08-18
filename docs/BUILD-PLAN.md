@@ -12,20 +12,23 @@ authoring, and a single write choke point that every write passes through — an
 visible to a user**: `GET /api/graphs` serves the registry, and the interface lists the
 vocabularies in it while keeping OpenBiz's own graphs out of the user's list and counted rather
 than hidden. **Writes are transactional and serialised**, which closed a real corruption race in
-the creation path. 105 Rust tests and 22 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+the creation path. **A graph can be got back out**: `GET /api/export` serialises any registered
+graph to any of the six syntaxes §2 commits to, the interface offers it per vocabulary with a
+format chooser read from the server, and the export carries none of OpenBiz's own bookkeeping.
+143 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 5 of 11 items done. Writes are now
-transactional: `Store::transaction` is all-or-nothing, rolls back on error *and* on panic, and is
-serialised against other writers by a lock we own — because the backend's transaction was measured
-and does **not** serialise. Readers are never blocked and never see an uncommitted write. **Next:
-parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, and JSON-LD, round-trip tested** —
-which is also what gives the store a term model of its own, and so what lets raw triple writing
-become part of the public transaction API rather than staying private. Vocabulary *creation* over
-HTTP remains deliberately absent — §1.7 requires discovery to run before creation and
+**Current position:** Phase 1 (RDF core & store), 6 of 12 items done (the serialisation item
+was split in two — see the split note below). Serialisation
+landed this iteration: `RdfSyntax` is our own enum over the six syntaxes §2 names, `Store::export_graph`
+streams one graph into any of them, and `GET /api/export` serves it with content negotiation, a
+404 for a graph that is not registered, and headers that say what the file is. **Next: parse those
+same six syntaxes** — deliberately deferred behind the candidate seam or backup/restore, because a
+parser's caller is an import and an import mutates a vocabulary (see the split note). Vocabulary
+*creation* over HTTP remains deliberately absent — §1.7 requires discovery to run before creation and
 `DiscoveryProvider` does not exist until Phase 2 — so `POST /api/graphs` answers 405 rather than
 being quietly added.
 
@@ -183,7 +186,37 @@ the interface is a core differentiator, and building it late means retrofitting 
       > The production caller is store startup: the format stamp and the system graph's registry
       > entry now commit **together**, closing a window where a kill left a stamped store this
       > build reports as inconsistent.
-- [ ] Parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, JSON-LD — round-trip tested
+- [x] Serialise a named graph to Turtle, N-Triples, N-Quads, TriG, RDF/XML, and JSON-LD, and
+      export it over HTTP and from the interface — proven faithful by re-parsing every syntax and
+      comparing the statements back
+      > **Better, not parity.** Every incumbent exports RDF; three things they do badly are what
+      > this item is actually about. (1) **The export is not what you saw.** PoolParty and TopBraid
+      > EDG keep project bookkeeping in the same store as the content, so a consumer has to be told
+      > which parts to ignore — the round trip `CLAUDE.md` §1.3 requires. Here a vocabulary export
+      > cannot contain our metadata because our metadata was never in the vocabulary; the
+      > named-graph model (`adr/0007`) pays for itself, and a test asserts `urn:openbiz:` appears in
+      > no export. (2) **Silent lossiness.** Turtle, N-Triples, and RDF/XML have nowhere to record a
+      > graph name, so an export in one of them cannot say which vocabulary it is — universally
+      > true and universally unmentioned, so users discover it from a re-import that lands in the
+      > wrong place. Here `recordsGraphNames` comes from the constant the serialiser branches on, is
+      > served to the interface, and is stated before the download; `X-OpenBiz-Graph` carries the
+      > identity the payload cannot. (3) **Export is a wizard or a job you come back for**, so it
+      > cannot be scripted, scheduled, or diffed in CI. Here it is `GET /api/export?graph=…&format=…`
+      > and the interface uses the same URL a runbook would. Also: a graph that does not exist is a
+      > 404, never an empty file, and a format we do not have is a 400 naming the ones we do —
+      > silently substituting the default is how a caller finds out from their own parser.
+      > **Scope, honestly:** this is the serialise half. Parsing is the item below, and the round
+      > trip is proven against our own reader, which is fidelity rather than conformance — see
+      > `docs/UNTESTED.md`.
+- [ ] Parse those same six syntaxes into the store, round-tripped against the serialiser above
+      > **Split note (iteration 8).** One item wearing two hats, and the seam between them is a
+      > charter constraint rather than convenience. A parser's production caller is an *import*, an
+      > import mutates a vocabulary, and `CLAUDE.md` §3 says a change to a vocabulary arrives as a
+      > reviewable **candidate** — the seam that is Phase 2's first item. Landing the parser now
+      > would mean either code with no caller (§4.1) or a direct-write import to retrofit later,
+      > which is the exact failure §3 warns about. It lands with whichever comes first: backup and
+      > restore below, which parses N-Quads and touches no vocabulary, or Phase 2's candidate seam.
+      > Serialisation has no such dependency — an export is a read.
 - [ ] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)
 - [ ] SPARQL 1.1 Update endpoint, guarded by authorisation
 - [ ] SPARQL Graph Store Protocol

@@ -69,6 +69,44 @@ pub struct GraphList {
     pub graphs: Vec<GraphSummary>,
 }
 
+/// One serialisation `GET /api/export` can produce, as advertised by `GET /api/export/formats`.
+///
+/// The list is served rather than hard-coded in the frontend on purpose. The UI and the server
+/// ship in one binary (`CLAUDE.md` §1.2), so a divergence between what the interface offers and
+/// what the server can produce would never be caught by a type check or a deployment — it would be
+/// caught by a user picking a format and getting a 400. Serving the list makes the interface
+/// unable to offer a format the serialiser does not have.
+///
+/// `records_graph_names` is the field that earns the endpoint. Turtle, N-Triples, and RDF/XML are
+/// *triple* syntaxes: there is nowhere in the file to record which graph a statement came from, so
+/// an export in one of them cannot say which vocabulary it is. Every tool in this market has that
+/// property and none of them mention it, which is why users discover it from a re-import that
+/// lands in the wrong place. Here it comes from the same constant the serialiser branches on, so
+/// the interface cannot say one thing while the writer does another.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFormat {
+    /// The value to pass as `?format=`.
+    pub token: String,
+    /// The name to show a human.
+    pub label: String,
+    /// The IANA media type, also accepted in `Accept`.
+    pub media_type: String,
+    /// The conventional file extension, without a dot.
+    pub file_extension: String,
+    /// Whether the syntax can record which graph the statements belong to.
+    pub records_graph_names: bool,
+}
+
+/// Every serialisation this build can export, in the order the interface should offer them.
+///
+/// The first entry is the default a caller gets when they express no preference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportFormats {
+    /// The formats, most readable first.
+    pub formats: Vec<ExportFormat>,
+}
+
 /// The body of any failed API response.
 ///
 /// One shape for every error so a client has exactly one thing to parse. `message` is written for
@@ -157,6 +195,27 @@ mod tests {
     fn an_api_error_carries_its_message_under_a_stable_key() {
         let json = serde_json::to_string(&ApiError::new("the roof is on fire")).expect("ok");
         assert_eq!(json, r#"{"message":"the roof is on fire"}"#);
+    }
+
+    /// The wire keys are the contract the TypeScript reads. Asserted literally, because renaming
+    /// a field is a breaking change that `serde` would otherwise perform silently.
+    #[test]
+    fn an_export_format_publishes_camel_case_keys() {
+        let json = serde_json::to_string(&ExportFormats {
+            formats: vec![ExportFormat {
+                token: "turtle".to_owned(),
+                label: "Turtle".to_owned(),
+                media_type: "text/turtle".to_owned(),
+                file_extension: "ttl".to_owned(),
+                records_graph_names: false,
+            }],
+        })
+        .expect("serialisable");
+
+        assert_eq!(
+            json,
+            r#"{"formats":[{"token":"turtle","label":"Turtle","mediaType":"text/turtle","fileExtension":"ttl","recordsGraphNames":false}]}"#
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Vocabularies } from "./Vocabularies";
 
@@ -10,10 +10,15 @@ function abortError() {
 /**
  * A `fetch` whose outcome the test decides, honouring the `AbortSignal` the way the real one does.
  * A stub that ignored the signal would leave the abort path untested while the suite stayed green.
+ *
+ * `outcome` receives the URL, because the component reads two endpoints — the registry and the
+ * list of serialisations it may offer. A stub that answered both with the same body would let a
+ * component that fetched the wrong URL pass.
  */
-function stubFetch(outcome: () => Promise<Response>) {
+function stubFetch(outcome: (url: string) => Promise<Response>) {
   const signals: AbortSignal[] = [];
-  const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+  const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
     const signal = init?.signal;
     if (signal) {
       signals.push(signal);
@@ -24,7 +29,7 @@ function stubFetch(outcome: () => Promise<Response>) {
         return;
       }
       signal?.addEventListener("abort", () => reject(abortError()));
-      outcome().then(resolve, reject);
+      outcome(url).then(resolve, reject);
     });
   });
   vi.stubGlobal("fetch", fetch);
@@ -36,14 +41,34 @@ function neverSettles() {
   return stubFetch(() => new Promise<Response>(() => {}));
 }
 
-/** Serve a registry exactly as `GET /api/graphs` would. */
+/** A 200 carrying `body` as JSON. */
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * The serialisations the real server advertises, in the order it advertises them.
+ *
+ * Copied from `openbiz_store::RdfSyntax` rather than invented, so a test that renders a format
+ * chooser renders the one a user would actually see. The server-side test
+ * `the_advertised_formats_are_the_ones_the_store_has` is what keeps that list true.
+ */
+const FORMATS = [
+  { token: "turtle", label: "Turtle", mediaType: "text/turtle", fileExtension: "ttl", recordsGraphNames: false },
+  { token: "ntriples", label: "N-Triples", mediaType: "application/n-triples", fileExtension: "nt", recordsGraphNames: false },
+  { token: "nquads", label: "N-Quads", mediaType: "application/n-quads", fileExtension: "nq", recordsGraphNames: true },
+  { token: "trig", label: "TriG", mediaType: "application/trig", fileExtension: "trig", recordsGraphNames: true },
+  { token: "rdfxml", label: "RDF/XML", mediaType: "application/rdf+xml", fileExtension: "rdf", recordsGraphNames: false },
+  { token: "jsonld", label: "JSON-LD", mediaType: "application/ld+json", fileExtension: "jsonld", recordsGraphNames: true },
+];
+
+/** Serve a registry exactly as `GET /api/graphs` would, alongside the advertised formats. */
 function registry(graphs: Array<{ iri: string; kind: string }>) {
-  return stubFetch(
-    async () =>
-      new Response(JSON.stringify({ graphs }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
+  return stubFetch(async (url) =>
+    json(url === "/api/export/formats" ? { formats: FORMATS } : { graphs }),
   );
 }
 
@@ -66,12 +91,14 @@ describe("Vocabularies", () => {
     expect(screen.queryByRole("list")).toBeNull();
   });
 
-  it("reads the registry once on mount", () => {
+  it("reads the registry and the offered formats once each, on mount", () => {
     const { fetch } = neverSettles();
     render(<Vocabularies />);
 
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[0]).toBe("/api/graphs");
+    expect(fetch.mock.calls.map((call) => String(call[0]))).toEqual([
+      "/api/graphs",
+      "/api/export/formats",
+    ]);
   });
 
   it("lists each vocabulary by its IRI", async () => {
@@ -84,8 +111,8 @@ describe("Vocabularies", () => {
 
     const items = await screen.findAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
-      "http://example.org/v/animals",
-      "http://example.org/v/plants",
+      "http://example.org/v/animals Download",
+      "http://example.org/v/plants Download",
     ]);
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -105,7 +132,9 @@ describe("Vocabularies", () => {
     render(<Vocabularies />);
 
     const items = await screen.findAllByRole("listitem");
-    expect(items.map((item) => item.textContent)).toEqual(["http://example.org/v/animals"]);
+    expect(items.map((item) => item.textContent)).toEqual([
+      "http://example.org/v/animals Download",
+    ]);
     expect(screen.queryByText(/urn:openbiz:/)).toBeNull();
   });
 
@@ -188,6 +217,139 @@ describe("Vocabularies", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe("Cannot list vocabularies: Failed to fetch");
+  });
+
+  /**
+   * The download is a link to a plain URL, not a button that opens a wizard. That is the point:
+   * whatever the interface can do here, `curl` and a scheduled job can do identically. The
+   * accessible name carries the vocabulary and the format, because a page of links all reading
+   * "Download" is unusable to anyone navigating by link list.
+   */
+  it("offers each vocabulary as a download at a plain URL", async () => {
+    registry([
+      { iri: "http://example.org/v/animals", kind: "vocabulary" },
+      { iri: "http://example.org/v/plants", kind: "vocabulary" },
+    ]);
+    render(<Vocabularies />);
+
+    const link = await screen.findByRole("link", {
+      name: "Download http://example.org/v/animals as Turtle",
+    });
+    expect(link.getAttribute("href")).toBe(
+      "/api/export?graph=http%3A%2F%2Fexample.org%2Fv%2Fanimals&format=turtle",
+    );
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+  });
+
+  /** An IRI with a query, a hash, or a space must survive into the URL as one parameter. */
+  it("escapes the IRI into the download URL rather than splicing it in", async () => {
+    registry([{ iri: "http://example.org/v/a b?x=1#frag", kind: "vocabulary" }]);
+    render(<Vocabularies />);
+
+    const link = await screen.findByRole("link");
+    expect(link.getAttribute("href")).toBe(
+      "/api/export?graph=http%3A%2F%2Fexample.org%2Fv%2Fa%20b%3Fx%3D1%23frag&format=turtle",
+    );
+  });
+
+  /**
+   * The chooser renders what the *server* said it can write. Hard-coding the list here is the
+   * failure this replaces: the UI and the server ship in one binary, so a divergence would never
+   * be caught by a build — only by a user picking a format and being refused.
+   */
+  it("offers exactly the formats the server advertises, in the order it advertised them", async () => {
+    registry([{ iri: "http://example.org/v/animals", kind: "vocabulary" }]);
+    render(<Vocabularies />);
+
+    const chooser = (await screen.findByLabelText("Download format")) as HTMLSelectElement;
+    expect(Array.from(chooser.options).map((option) => option.value)).toEqual(
+      FORMATS.map((format) => format.token),
+    );
+    expect(chooser.value).toBe("turtle");
+  });
+
+  it("rewrites every download link when a different format is chosen", async () => {
+    registry([
+      { iri: "http://example.org/v/animals", kind: "vocabulary" },
+      { iri: "http://example.org/v/plants", kind: "vocabulary" },
+    ]);
+    render(<Vocabularies />);
+
+    const chooser = await screen.findByLabelText("Download format");
+    fireEvent.change(chooser, { target: { value: "nquads" } });
+
+    expect(
+      screen.getAllByRole("link").map((link) => link.getAttribute("href")),
+    ).toEqual([
+      "/api/export?graph=http%3A%2F%2Fexample.org%2Fv%2Fanimals&format=nquads",
+      "/api/export?graph=http%3A%2F%2Fexample.org%2Fv%2Fplants&format=nquads",
+    ]);
+  });
+
+  /**
+   * The honesty the incumbents skip. Turtle cannot record which graph a statement belongs to, so a
+   * Turtle export cannot say which vocabulary it is — and a user finds that out from a re-import
+   * that lands in the wrong place. The warning is derived from `recordsGraphNames`, which the
+   * server reads from the same constant its serialiser branches on, so it cannot say one thing
+   * while the writer does another.
+   */
+  it("warns when the chosen format cannot say which vocabulary the file came from", async () => {
+    registry([{ iri: "http://example.org/v/animals", kind: "vocabulary" }]);
+    render(<Vocabularies />);
+
+    expect(
+      await screen.findByText(
+        "Turtle cannot record which graph a statement belongs to, so the file will not say which vocabulary it came from. Download as N-Quads or TriG or JSON-LD to keep that.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Download format"), {
+      target: { value: "nquads" },
+    });
+    expect(screen.queryByText(/cannot record which graph/)).toBeNull();
+  });
+
+  /**
+   * `CLAUDE.md` §4.4 requires anything user-facing to be keyboard-navigable. jsdom cannot prove a
+   * tab order, so what is asserted is the thing that makes one: native controls with real labels,
+   * rather than a `div` with a click handler. The remaining gap is recorded in `UNTESTED.md`.
+   */
+  it("uses native controls, so it is reachable without a mouse", async () => {
+    registry([{ iri: "http://example.org/v/animals", kind: "vocabulary" }]);
+    render(<Vocabularies />);
+
+    const chooser = await screen.findByLabelText("Download format");
+    expect(chooser.tagName).toBe("SELECT");
+
+    const link = screen.getByRole("link");
+    expect(link.tagName).toBe("A");
+    expect(link.getAttribute("href")).toBeTruthy();
+
+    chooser.focus();
+    expect(document.activeElement).toBe(chooser);
+    (link as HTMLElement).focus();
+    expect(document.activeElement).toBe(link);
+  });
+
+  /**
+   * The registry and the format list fail independently. A server that can list vocabularies but
+   * not describe its serialisations must still show the vocabularies — losing the list because the
+   * download menu is unavailable would be a much larger failure than the one that happened.
+   */
+  it("still lists the vocabularies when the formats cannot be read", async () => {
+    stubFetch(async (url) =>
+      url === "/api/export/formats"
+        ? new Response("{}", { status: 500, headers: { "content-type": "application/json" } })
+        : json({ graphs: [{ iri: "http://example.org/v/animals", kind: "vocabulary" }] }),
+    );
+    render(<Vocabularies />);
+
+    const items = await screen.findAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual(["http://example.org/v/animals"]);
+    expect(screen.queryByRole("link")).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Cannot offer downloads: server responded 500",
+    );
   });
 
   it("aborts the in-flight read when it unmounts", async () => {
