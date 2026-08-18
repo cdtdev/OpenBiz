@@ -113,7 +113,11 @@ fn produces(migration: &dyn Migration) -> u32 {
 /// The invariant — checked by [`plan`] at runtime and by a test at build time — is that the
 /// versions form an unbroken run from 1 up to [`FORMAT_VERSION`]. Adding a migration and bumping
 /// `FORMAT_VERSION` are one change; either alone is a bug the chain check catches.
-static MIGRATIONS: &[&dyn Migration] = &[&RegisterSystemGraph, &AllowCandidateGraphs];
+static MIGRATIONS: &[&dyn Migration] = &[
+    &RegisterSystemGraph,
+    &AllowCandidateGraphs,
+    &AllowCandidateRemovals,
+];
 
 /// 1 → 2: the system graph is listed in the graph registry.
 ///
@@ -183,6 +187,46 @@ impl Migration for AllowCandidateGraphs {
         "recorded that this store may hold candidate graphs and candidate records, which nothing \
          on disk needed changing for; the version exists so a build without the candidate seam \
          refuses the store as too new rather than reporting its registry as corrupt"
+    }
+
+    fn apply(&self, _transaction: &mut Transaction<'_>) -> Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+/// 3 → 4: a candidate may propose removals as well as additions.
+///
+/// The second migration that changes nothing on disk, and the reason is sharper than the last
+/// one's. Format version 4 gives a candidate a second staging graph and two more fields on its
+/// record, both of which a version-3 build ignores rather than refuses — `read_record` looks up
+/// the predicates it knows and does not object to ones it does not.
+///
+/// That is precisely why the version exists. A version-3 build opening this store would read a
+/// candidate that removes twelve statements as a candidate that removes nothing, show a reviewer a
+/// diff missing half its content, and on approval apply only the additions **while recording that
+/// the whole candidate was applied**. Every step of that succeeds; nothing anywhere says the
+/// vocabulary is now different from what was approved. A refusal at open is the only place that
+/// can be caught, and the stamp is what makes the refusal happen.
+///
+/// Nothing is brought forward because nothing needs to be: a version-3 store's candidates are
+/// additions-only, and an absent removal count means zero by construction rather than by a
+/// default this migration writes in.
+struct AllowCandidateRemovals;
+
+impl Migration for AllowCandidateRemovals {
+    fn id(&self) -> &'static str {
+        "0004-allow-candidate-removals"
+    }
+
+    fn applies_at(&self) -> u32 {
+        3
+    }
+
+    fn describe(&self) -> &'static str {
+        "recorded that a candidate in this store may propose removals, which no existing candidate \
+         needed changing for; the version exists because a build without removals would read such \
+         a candidate as removing nothing, show a reviewer half the diff, and apply half the change \
+         while recording that it had applied all of it"
     }
 
     fn apply(&self, _transaction: &mut Transaction<'_>) -> Result<(), StoreError> {

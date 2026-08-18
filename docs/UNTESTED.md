@@ -44,18 +44,76 @@ Do not delete it — the record of what took how long to close is the signal.
   duplication actually costs at the scale `adr/0013` used. The policy is in `PROPOSED.md`.
 - **Opened:** iteration 17
 
-### A candidate cannot propose a removal, so nothing that needs one is reachable
+### ~~A candidate cannot propose a removal, so nothing that needs one is reachable~~ — CLOSED, iteration 18
+- Closed by part 2 of the seam: `Store::propose_retraction`, `openbiz retract`, and an apply path
+  that removes inside the transaction recording the decision. A removal is refused if it names
+  statements the vocabulary does not hold, and refused again at approval if the vocabulary has moved
+  since. See `adr/0018`. The narrower gap that remains — nothing raises a candidate carrying *both*
+  halves — is its own entry below.
+
+### Nothing produces a candidate that both adds and removes
+- **Kind:** no-production-caller
+- **What is proven:** each half on its own, end to end through the real binary. `openbiz import`
+  raises additions; `openbiz retract` raises removals; both are staged, reviewed, applied, and
+  refused where they should be. `apply_payload` handles the two halves independently, so neither
+  branch is dead — each runs on every candidate of its kind.
+- **What is not:** a candidate holding **both**, which is what a merge, a move, or a deprecation
+  actually is: "these statements go, those arrive", as one decision a reviewer takes once. The
+  record carries both counts and both graphs, and `read_record` enforces the invariants for both,
+  but no producer makes one, so the *combination* has never existed. Specifically untested: that
+  applying a candidate with both halves does both, and the removals-before-additions order that
+  `apply_payload` documents — which is only observable for a statement staged in both halves, so
+  nothing today can observe it.
+- **Why it was not built anyway:** a producer with no caller is the failure `CLAUDE.md` §4 names,
+  and the callers are real items — the bulk operations later in Phase 2. The interface shape is
+  what had to exist first, and it does.
+- **What would close it:** the first bulk operation (merge, deprecate, or move a subtree), which
+  should arrive with a test that both halves land and that a statement in both survives.
+- **Opened:** iteration 18
+
+### The addition and removal counts count parsed statements, not distinct ones
 - **Kind:** partial-coverage
-- **What is proven:** the seam carries **additions**: proposed, staged, reviewed, applied or
-  rejected, all end to end.
-- **What is not:** every operation that has to take something away — merge, split, move a subtree,
-  deprecate with a replacement, an agent correcting a wrong label — is not expressible as a
-  candidate, so none of them can be built without extending the seam first. The record shape leaves
-  room for removals and nothing has been written against them, which means the *shape* claim in
-  `CLAUDE.md` §3 ("one shape for a CSV import, a discovery match, a bulk edit, and a Phase 10
-  agent") is proven for one of those four and asserted for the rest.
-- **What would close it:** part 2 of the seam, which is an unblocked item in `BUILD-PLAN.md`.
-- **Opened:** iteration 17
+- **What is proven:** the counts a candidate reports match the number of statements in its file for
+  every fixture in the suite, and the staleness refusal's arithmetic is computed against the
+  *staged graph* rather than against the recorded count, so it is unaffected by this.
+- **What is not:** a file naming the same statement twice reports two. RDF graphs are sets, so only
+  one is staged, and "removes 2 statements" would then be a number one greater than what the
+  reviewer's diff shows. Pre-existing on the additions side since iteration 17 and inherited by
+  removals. Nothing tests it either way.
+- **Why not fixed here:** counting distinct statements means either a second full read of the
+  staging graph or holding a set of every quad in memory, and the import path is already documented
+  as holding the whole file in the write batch. Making its memory ceiling worse to fix a count that
+  is wrong only for a malformed file is the wrong trade to take silently.
+- **What would close it:** a decision on whether to count distinct or to report both numbers, plus
+  a test with a duplicated statement in the file.
+- **Opened:** iteration 18
+
+### An approved removal's staging graph is the only copy of what was taken away
+- **Kind:** partial-coverage
+- **What is proven:** the removals graph survives approval — asserted end to end, from a backup of
+  the store after the statements have left the vocabulary.
+- **What is not:** the consequence for retention. For an *addition*, deleting candidate evidence
+  loses the provenance of statements that are still in the vocabulary; for a **removal** it loses
+  the statements themselves, permanently, with no other copy anywhere in the store. That makes the
+  retention policy proposed at iteration 17 a materially bigger decision than it was, and it is
+  still undecided, so the conservative default (keep everything) is the only safe one.
+- **What would close it:** the retention policy in `PROPOSED.md`, which must now treat the two
+  halves differently or say explicitly why it does not.
+- **Opened:** iteration 18
+
+### The blank-node round trip depends on Oxigraph's choice of labels
+- **Kind:** partial-coverage
+- **What is proven:** measured rather than assumed, and pinned by a test. An N-Triples export of a
+  vocabulary retracts from that vocabulary with a blank node in it, because our serialiser writes
+  labels our parser reads back as the same node. A hand-written `_:note` is refused by the presence
+  check rather than removing something adjacent. Both directions are asserted.
+- **What is not:** anything about *why* that holds. No RDF specification requires a serialiser to
+  emit labels that a parser will map back to the same nodes — it is a property of this Oxigraph
+  version, and the test is what would catch it changing. It is also only proven for N-Triples: the
+  round-trip test over all six syntaxes uses a fixture with no blank nodes in it.
+- **What would close it:** extending the six-syntax round-trip fixture to include a blank node, and
+  a note in `adr/0018` if any syntax turns out to behave differently.
+- **Opened:** iteration 18
 
 ### An import holds the whole file in the backend's write batch, and the ceiling is unmeasured
 - **Kind:** partial-coverage
@@ -97,7 +155,12 @@ Do not delete it — the record of what took how long to close is the signal.
   "purely additive" version.
 - **What would close it:** nothing cheap. The honest mitigation is that the next migration to claim
   it writes nothing should be viewed with more suspicion than this one was.
-- **Opened:** iteration 17
+- **Opened:** iteration 17 · **Amended:** iteration 18 — `0004-allow-candidate-removals` is the
+  second migration to write nothing, and the same doubt applies to it unchanged. It was viewed with
+  the suspicion this entry asked for, which produced one thing the 2 → 3 step does not have: a
+  **one-step** end-to-end test from a hand-written version-3 backup, because a chain test passes
+  whether the last step ran or was skipped by an off-by-one — every earlier step having run is
+  enough to make the content assertions hold. Version 3's step still has no such test.
 
 ### An approval is attributed to whoever the operating system says ran the command
 - **Kind:** partial-coverage
@@ -129,7 +192,10 @@ Do not delete it — the record of what took how long to close is the signal.
 - **What would close it:** keeping a byte-exact store directory (or backup file) from each released
   version as a fixture, from the first release onwards. That is a release-process decision, so it is
   in `PROPOSED.md` rather than done here.
-- **Opened:** iteration 16
+- **Opened:** iteration 16 · **Amended:** iteration 18 — the version-3 fixture added this iteration
+  is hand-written from the specification too, so the end-to-end suite now carries three
+  authored-not-degraded older-format backups (1, 2, 3). The store's *unit* fixtures are still
+  produced by degrading a current-format store, so the substance of this entry is unchanged.
 
 ### A migration holds its whole rewrite in the backend's write batch, and no migration has rewritten content
 - **Kind:** partial-coverage

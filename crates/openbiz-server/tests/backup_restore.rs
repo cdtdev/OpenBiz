@@ -31,7 +31,7 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// graph's registration; the vocabulary's registration; and two statements of actual content.
 const BACKUP: &str = concat!(
     "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
-    "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "\"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
@@ -67,13 +67,35 @@ const BACKUP_VERSION_1: &str = concat!(
 
 /// The same store as [`BACKUP`], as a **format version 2** build wrote it.
 ///
-/// Version 2 is version 3 in every byte except the stamp — the candidate seam's change to the
-/// store was additive — so this fixture is the proof that the 2 → 3 step, which rewrites nothing,
-/// nevertheless runs, reports itself, and leaves the store stamped where this build expects.
-/// A migration that does nothing is exactly the one that could silently not happen.
+/// Versions 2, 3 and 4 are identical in every byte except the stamp for a store with no candidates
+/// in it — both later steps were additive — so this fixture is the proof that a *chain* of steps
+/// that rewrite nothing nevertheless runs, reports itself, and leaves the store stamped where this
+/// build expects. A migration that does nothing is exactly the one that could silently not happen.
 const BACKUP_VERSION_2: &str = concat!(
     "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
     "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
+    "<urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions/emea> ",
+    "<http://www.w3.org/2004/02/skos/core#prefLabel> \"Europe, Middle East and Africa\"@en ",
+    "<https://example.org/regions> .\n",
+    "<https://example.org/regions/emea> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://www.w3.org/2004/02/skos/core#Concept> <https://example.org/regions> .\n",
+);
+
+/// The same store as [`BACKUP`], as a **format version 3** build wrote it.
+///
+/// The one-step-behind fixture, kept beside the others because the step it exercises is the one
+/// this build most recently added: a version-3 store's candidates are additions-only, and version
+/// 4 is what stops a build without removals from reading a removing candidate as a harmless one.
+const BACKUP_VERSION_3: &str = concat!(
+    "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
+    "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
@@ -215,8 +237,8 @@ fn a_restored_backup_is_a_vocabulary_the_running_server_serves() {
     let file = temp.path().join("yesterday.nq");
     assert_eq!(
         openbiz_store::FORMAT_VERSION,
-        3,
-        "the fixture is a version-3 backup; bumping the format means writing the fixture for the \
+        4,
+        "the fixture is a version-4 backup; bumping the format means writing the fixture for the \
          new one and adding an older-format test beside it, not editing this number"
     );
     std::fs::write(&file, BACKUP).expect("write the backup fixture");
@@ -337,7 +359,7 @@ fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
         "restore must report what it did, got {said:?}"
     );
     assert!(
-        said.contains("migrated the store format from version 1 to 3"),
+        said.contains("migrated the store format from version 1 to 4"),
         "a migration must be reported, not silently performed: {said:?}"
     );
     assert!(
@@ -381,13 +403,14 @@ fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
     assert!(
         written.contains(
             "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
-             \"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+             \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
         ),
         "the migrated store must be stamped at the current version: {written}"
     );
     for step in [
         "urn:openbiz:migration:0002-register-system-graph",
         "urn:openbiz:migration:0003-allow-candidate-graphs",
+        "urn:openbiz:migration:0004-allow-candidate-removals",
     ] {
         assert!(
             written.contains(step),
@@ -596,12 +619,12 @@ fn a_version_two_backup_is_brought_forward_by_a_migration_that_rewrites_nothing(
 
     let said = stdout(&restore);
     assert!(
-        said.contains("migrated the store format from version 2 to 3"),
+        said.contains("migrated the store format from version 2 to 4"),
         "a migration that writes nothing must still be reported: {said:?}"
     );
     assert!(
-        said.contains("candidate graphs"),
-        "and must still say why it exists: {said:?}"
+        said.contains("candidate graphs") && said.contains("propose removals"),
+        "and every step must still say why it exists, not just the last: {said:?}"
     );
 
     let second = temp.path().join("today.nq");
@@ -618,12 +641,84 @@ fn a_version_two_backup_is_brought_forward_by_a_migration_that_rewrites_nothing(
     assert!(
         written.contains(
             "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
-             \"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+             \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+        ),
+        "the store must be stamped at the current version: {written}"
+    );
+    for step in [
+        "urn:openbiz:migration:0003-allow-candidate-graphs",
+        "urn:openbiz:migration:0004-allow-candidate-removals",
+    ] {
+        assert!(
+            written.contains(step),
+            "{step} must have left a record even though it wrote no data: {written}"
+        );
+    }
+    assert!(
+        written.contains("Europe, Middle East and Africa"),
+        "the content must have survived: {written}"
+    );
+}
+
+/// The one-step migration, which is the one an operator upgrading normally actually runs.
+///
+/// The version-1 and version-2 fixtures prove a *chain*. This proves the last link on its own,
+/// because a chain test passes whether the final step ran or was skipped by an off-by-one in the
+/// planner — every earlier step having run is enough to make the content assertions hold.
+#[test]
+fn a_version_three_backup_is_brought_forward_by_the_step_that_allows_removals() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let data_dir = temp.path().join("data");
+    std::fs::create_dir(&data_dir).expect("create the data directory");
+    let file = temp.path().join("version-3.nq");
+    std::fs::write(&file, BACKUP_VERSION_3).expect("write the backup fixture");
+
+    let restore = run(
+        &data_dir,
+        &["restore", file.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        restore.status.success(),
+        "restore failed: {}{}",
+        stdout(&restore),
+        stderr(&restore)
+    );
+
+    let said = stdout(&restore);
+    assert!(
+        said.contains("migrated the store format from version 3 to 4"),
+        "the one step that applies must be reported: {said:?}"
+    );
+    assert!(
+        said.contains("propose removals"),
+        "and must say why it exists: {said:?}"
+    );
+    assert!(
+        !said.contains("0003-allow-candidate-graphs")
+            && !said.contains("register the system graph"),
+        "a step that does not apply must not run: {said:?}"
+    );
+
+    let second = temp.path().join("today.nq");
+    let backup = run(
+        &data_dir,
+        &["backup", second.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        backup.status.success(),
+        "backup failed: {}",
+        stderr(&backup)
+    );
+    let written = std::fs::read_to_string(&second).expect("read the backup back");
+    assert!(
+        written.contains(
+            "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
+             \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
         ),
         "the store must be stamped at the current version: {written}"
     );
     assert!(
-        written.contains("urn:openbiz:migration:0003-allow-candidate-graphs"),
+        written.contains("urn:openbiz:migration:0004-allow-candidate-removals"),
         "the step must have left a record even though it wrote no data: {written}"
     );
     assert!(

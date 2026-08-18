@@ -21,8 +21,9 @@
 //!
 //! # Why import and review are commands too
 //!
-//! The same three reasons, and the second one differently. `openbiz import` proposes a change and
-//! `openbiz approve` applies one, so between them they can write to a customer's vocabulary —
+//! The same three reasons, and the second one differently. `openbiz import` and `openbiz retract`
+//! propose a change and `openbiz approve` applies one, so between them they can write to a
+//! customer's vocabulary —
 //! which is precisely why they are not endpoints yet. There is still no authentication, and an
 //! unauthenticated "apply this change to a vocabulary" is the objection that has SPARQL Update
 //! deferred. What is different from backup and restore is that these do **not** need the store to
@@ -43,8 +44,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use openbiz_store::{
-    Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, GraphId,
-    GraphIdError, Provenance, RdfSyntax, Store, StoreError, BACKUP_SYNTAX,
+    Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
+    Decision, GraphId, GraphIdError, Provenance, RdfSyntax, Store, StoreError, BACKUP_SYNTAX,
 };
 use thiserror::Error;
 
@@ -68,6 +69,13 @@ pub enum Command {
         /// The IRI of the vocabulary graph the change is proposed against.
         graph: String,
         /// The RDF file to read.
+        file: PathBuf,
+    },
+    /// Propose the statements in a file as a removal from a vocabulary. Nothing is written to it.
+    Retract {
+        /// The IRI of the vocabulary graph the removal is proposed against.
+        graph: String,
+        /// The RDF file naming the statements to remove.
         file: PathBuf,
     },
     /// List every proposed change the store holds.
@@ -100,7 +108,9 @@ Usage:
   openbiz backup <file>      write a backup of the store to <file>
   openbiz restore <file>     rebuild an empty store from a backup
   openbiz import <graph> <file>
-                             propose the file's statements as a change to <graph>
+                             propose the file's statements as additions to <graph>
+  openbiz retract <graph> <file>
+                             propose the file's statements as removals from <graph>
   openbiz candidates         list the proposed changes waiting for a decision
   openbiz candidate <id>     show one proposed change and the statements it would add
   openbiz approve <id>       apply a proposed change to its vocabulary
@@ -111,10 +121,14 @@ A backup is the whole store as N-Quads: every vocabulary and OpenBiz's own regis
 W3C-standard syntax any conforming tool can read. Restore refuses a store that is not empty, so
 restore into a fresh data directory and point the server at that.
 
-An import never writes to a vocabulary. It reads the file — the syntax is taken from the file
-extension — stages the statements where you can read them, and records who proposed what and why.
-`openbiz approve` is what applies them, and it records who approved them. Approving and rejecting
-need a name to record: OPENBIZ_ACTOR if it is set, otherwise USER or LOGNAME.
+Neither import nor retract writes to a vocabulary. Each reads the file — the syntax is taken from
+the file extension — stages the statements where you can read them, and records who proposed what
+and why. `openbiz approve` is what applies them, and it records who approved them. Approving and
+rejecting need a name to record: OPENBIZ_ACTOR if it is set, otherwise USER or LOGNAME.
+
+Retract refuses statements the vocabulary does not already hold, and approving a retraction is
+refused if the vocabulary has changed underneath it — a removal that quietly takes away less than
+was reviewed is worse than one that fails.
 
 Every command needs the store to itself; stop the server first.
 
@@ -197,6 +211,17 @@ impl Command {
                         &mut args,
                     )?,
                     file: Self::one_file("import", "read", &mut args)?,
+                },
+            ),
+            "retract" => (
+                "retract",
+                Self::Retract {
+                    graph: Self::text(
+                        "retract",
+                        "the IRI of the vocabulary to propose against",
+                        &mut args,
+                    )?,
+                    file: Self::one_file("retract", "read", &mut args)?,
                 },
             ),
             "candidates" => ("candidates", Self::Candidates),
@@ -346,6 +371,26 @@ pub const ACTOR_VARIABLE: &str = "OPENBIZ_ACTOR";
 /// reading a file as the wrong syntax produces either a syntax error two hundred lines in or, far
 /// worse, a successful import of something else.
 pub fn import(store: &Store, graph: &str, file: &Path) -> Result<String, CommandError> {
+    propose(store, graph, file, CandidatePart::Additions)
+}
+
+/// Propose the statements in `file` as a removal from the vocabulary at `graph`.
+///
+/// The mirror of [`import`], and the command that makes a correction, a merge, or a deprecation
+/// expressible at all. Nothing reaches the vocabulary here either. It refuses a file naming
+/// statements the vocabulary does not hold, because a removal that matches nothing looks
+/// successful and changes nothing — see [`Store::propose_retraction`].
+pub fn retract(store: &Store, graph: &str, file: &Path) -> Result<String, CommandError> {
+    propose(store, graph, file, CandidatePart::Removals)
+}
+
+/// Raise a candidate from a file, for whichever half of a change it carries.
+fn propose(
+    store: &Store,
+    graph: &str,
+    file: &Path,
+    part: CandidatePart,
+) -> Result<String, CommandError> {
     let target = GraphId::vocabulary(graph)?;
 
     let extension = file
@@ -369,29 +414,70 @@ pub fn import(store: &Store, graph: &str, file: &Path) -> Result<String, Command
         source,
     })?;
 
+    let command = match part {
+        CandidatePart::Additions => "import",
+        CandidatePart::Removals => "retract",
+    };
     let provenance = Provenance {
         source: CandidateSource::Import,
-        agent: format!("{} (openbiz import)", actor()?),
-        note: format!("imported from {} as {syntax}", file.display()),
-        // A file import has no confidence to state. Inventing one — 1.0, say — would put a number
-        // a reviewer could sort by next to numbers that mean something.
+        agent: format!("{} (openbiz {command})", actor()?),
+        note: format!(
+            "{} from {} as {syntax}",
+            match part {
+                CandidatePart::Additions => "imported",
+                CandidatePart::Removals => "retraction read",
+            },
+            file.display()
+        ),
+        // A file has no confidence to state. Inventing one — 1.0, say — would put a number a
+        // reviewer could sort by next to numbers that mean something.
         confidence: None,
     };
 
-    let candidate = store.propose_import(&target, syntax, BufReader::new(handle), &provenance)?;
+    let reader = BufReader::new(handle);
+    let candidate = match part {
+        CandidatePart::Additions => store.propose_import(&target, syntax, reader, &provenance)?,
+        CandidatePart::Removals => {
+            store.propose_retraction(&target, syntax, reader, &provenance)?
+        }
+    };
 
     Ok(format!(
-        "proposed candidate {} against {}: {} statements from {}, read as {syntax}\n\
+        "proposed candidate {} against {}: {} from {}, read as {syntax}\n\
          nothing has been written to the vocabulary. Review it with `openbiz candidate {}`, then \
          `openbiz approve {}` or `openbiz reject {}`.",
         candidate.id(),
         candidate.target(),
-        candidate.additions(),
+        effect(&candidate),
         file.display(),
         candidate.id(),
         candidate.id(),
         candidate.id(),
     ))
+}
+
+/// What a candidate would do to its target, in the words a list or a report uses.
+///
+/// Both halves are always named when both are present, and a half that is empty is left out
+/// rather than printed as a zero: "adds 4 statements, removes 0" invites the reader to wonder
+/// which of the two numbers is the interesting one.
+fn effect(candidate: &Candidate) -> String {
+    let statements = |count: u64| {
+        if count == 1 {
+            "1 statement".to_owned()
+        } else {
+            format!("{count} statements")
+        }
+    };
+    match (candidate.additions(), candidate.removals()) {
+        (adds, 0) => format!("adds {}", statements(adds)),
+        (0, removes) => format!("removes {}", statements(removes)),
+        (adds, removes) => format!(
+            "adds {} and removes {}",
+            statements(adds),
+            statements(removes)
+        ),
+    }
 }
 
 /// List every proposed change the store holds, oldest first.
@@ -405,10 +491,10 @@ pub fn candidates(store: &Store) -> Result<String, CommandError> {
     let mut out = String::new();
     for candidate in &candidates {
         out.push_str(&format!(
-            "{}\t{}\t{} statements\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\n",
             candidate.id(),
             candidate.state(),
-            candidate.additions(),
+            effect(candidate),
             candidate.target(),
             candidate.provenance().note,
         ));
@@ -440,7 +526,7 @@ pub fn show(store: &Store, id: &str) -> Result<String, CommandError> {
     let provenance = candidate.provenance();
 
     let mut out = format!(
-        "candidate {}\n  state:      {}\n  target:     {}\n  source:     {}\n           proposed by: {}\n  proposed at: {}\n  why:        {}\n  adds:       {} statements\n",
+        "candidate {}\n  state:      {}\n  target:     {}\n  source:     {}\n           proposed by: {}\n  proposed at: {}\n  why:        {}\n  effect:     {}\n",
         candidate.id(),
         candidate.state(),
         candidate.target(),
@@ -448,7 +534,7 @@ pub fn show(store: &Store, id: &str) -> Result<String, CommandError> {
         provenance.agent,
         candidate.proposed_at(),
         provenance.note,
-        candidate.additions(),
+        effect(&candidate),
     );
     if let Some(confidence) = provenance.confidence {
         out.push_str(&format!("  confidence: {confidence}\n"));
@@ -456,19 +542,26 @@ pub fn show(store: &Store, id: &str) -> Result<String, CommandError> {
     if let (Some(by), Some(at)) = (candidate.decided_by(), candidate.decided_at()) {
         out.push_str(&format!("  decided by: {by}\n  decided at: {at}\n"));
     }
-    out.push_str(&format!("  staged in:  {}\n\n", candidate.payload()));
+    // Removals first, which is the order they are applied in and the order somebody reading a
+    // change wants them: what goes, then what arrives.
+    for (heading, graph) in [
+        ("would remove", candidate.removal_payload()),
+        ("would add", candidate.payload()),
+    ] {
+        let Some(graph) = graph else {
+            continue;
+        };
+        out.push_str(&format!("\n{heading}, staged in {graph}:\n\n"));
 
-    let mut statements = Vec::new();
-    store.export_graph(
-        candidate.payload().iri(),
-        RdfSyntax::Turtle,
-        &mut statements,
-    )?;
-    out.push_str(&String::from_utf8(statements).map_err(|error| {
-        CommandError::Store(StoreError::Backend(format!(
-            "the staged statements are not valid UTF-8, which no serialiser of ours writes: {error}"
-        )))
-    })?);
+        let mut statements = Vec::new();
+        store.export_graph(graph.iri(), RdfSyntax::Turtle, &mut statements)?;
+        out.push_str(&String::from_utf8(statements).map_err(|error| {
+            CommandError::Store(StoreError::Backend(format!(
+                "the staged statements are not valid UTF-8, which no serialiser of ours writes: \
+                 {error}"
+            )))
+        })?);
+    }
 
     Ok(out)
 }
@@ -479,9 +572,9 @@ pub fn decide(store: &Store, id: &str, decision: Decision) -> Result<String, Com
 
     Ok(match decision {
         Decision::Approve => format!(
-            "approved candidate {}: {} statements are now in {}, recorded as approved by {}",
+            "approved candidate {}: it {} in {}, recorded as approved by {}",
             candidate.id(),
-            candidate.additions(),
+            effect(&candidate),
             candidate.target(),
             candidate.decided_by().unwrap_or_default(),
         ),
@@ -490,9 +583,19 @@ pub fn decide(store: &Store, id: &str, decision: Decision) -> Result<String, Com
              was refused is still readable",
             candidate.id(),
             candidate.target(),
-            candidate.payload(),
+            staged_in(&candidate),
         ),
     })
+}
+
+/// The staging graphs a candidate's statements are kept in, for a message that names them.
+fn staged_in(candidate: &Candidate) -> String {
+    [candidate.removal_payload(), candidate.payload()]
+        .into_iter()
+        .flatten()
+        .map(GraphId::to_string)
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 /// Who to record as responsible for a decision taken from the command line.
@@ -673,6 +776,28 @@ mod tests {
     }
 
     #[test]
+    fn retract_takes_the_vocabulary_it_proposes_against_and_then_the_file() {
+        assert_eq!(
+            parse(&["retract", "https://example.org/regions", "wrong.nt"]),
+            Ok(Command::Retract {
+                graph: "https://example.org/regions".to_owned(),
+                file: PathBuf::from("wrong.nt"),
+            })
+        );
+        let error =
+            parse(&["retract", "https://example.org/regions"]).expect_err("a file is required");
+        assert!(
+            error.to_string().contains("retract"),
+            "the message must name the command: {error}"
+        );
+        let error = parse(&["retract"]).expect_err("a graph is required");
+        assert!(
+            error.to_string().contains("retract") && error.to_string().contains("IRI"),
+            "the message must say what was missing: {error}"
+        );
+    }
+
+    #[test]
     fn the_review_commands_take_a_candidate_and_the_list_takes_nothing() {
         assert_eq!(parse(&["candidates"]), Ok(Command::Candidates));
         assert_eq!(
@@ -727,6 +852,7 @@ mod tests {
             "backup",
             "restore",
             "import",
+            "retract",
             "candidates",
             "candidate",
             "approve",

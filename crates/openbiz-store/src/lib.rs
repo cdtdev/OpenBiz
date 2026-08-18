@@ -77,8 +77,8 @@ pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;
 
 pub use graph::{
-    GraphId, GraphIdError, GraphKind, CANDIDATE_GRAPH_PREFIX, INFERRED_GRAPH_PREFIX,
-    OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
+    CandidatePart, GraphId, GraphIdError, GraphKind, CANDIDATE_GRAPH_PREFIX,
+    CANDIDATE_REMOVALS_SUFFIX, INFERRED_GRAPH_PREFIX, OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
 };
 
 /// Subdirectory of the configured data directory that holds the RDF store.
@@ -102,7 +102,7 @@ pub const STORE_SUBDIR: &str = "store";
 /// change, and the system graph may hold the records that describe them. Additive: a version-2
 /// store needed nothing done to it. The version exists so a build without the candidate seam
 /// refuses the store rather than reporting a graph kind it does not know as corrupt metadata.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Subject describing the store itself, within the system graph.
 const STORE_IRI: &str = "urn:openbiz:store";
@@ -442,6 +442,49 @@ pub enum StoreError {
     NoSuchCandidate {
         /// The identifier that was asked for.
         id: String,
+    },
+
+    /// A removal was proposed for statements the vocabulary does not hold.
+    ///
+    /// Refused rather than trimmed to the ones that do match. A proposal whose reviewed effect and
+    /// actual effect differ is worse than no proposal, and the difference would be invisible: the
+    /// diff a reviewer reads would show statements that were never going to be removed.
+    #[error(
+        "{absent} of the statements to remove are not in {target}, and a removal names statements \
+         that are there; the first missing one is {example}. The likeliest cause is that the file \
+         was made from a copy of the vocabulary that has since moved on"
+    )]
+    RetractionNotPresent {
+        /// The vocabulary the removal was proposed against.
+        target: String,
+        /// How many of the file's statements were not in it.
+        absent: u64,
+        /// One of them, so the operator has something to look up.
+        example: String,
+    },
+
+    /// A candidate's removals no longer match the vocabulary it was raised against.
+    ///
+    /// The vocabulary moved between the proposal and the approval. Applying anyway would remove
+    /// fewer statements than the reviewer agreed to and report success — the quietest way a
+    /// governance tool can be wrong — so the approval is refused and the candidate stays open.
+    /// Rejecting it is still allowed; a proposal that can no longer be applied is exactly one
+    /// somebody should be able to close.
+    #[error(
+        "candidate {id} proposes to remove {removals} statements from {target} and {missing} of \
+         them are no longer there, so approving it would remove less than was reviewed; {target} \
+         has changed since the candidate was raised, so propose the removal again against it as \
+         it is now"
+    )]
+    CandidateStale {
+        /// The candidate that could not be applied.
+        id: String,
+        /// The vocabulary it was raised against.
+        target: String,
+        /// How many of its removals are missing from that vocabulary now.
+        missing: u64,
+        /// How many it proposes to remove in total.
+        removals: u64,
     },
 
     /// The candidate has already been approved or rejected.
@@ -1374,7 +1417,11 @@ mod tests {
                 .iter()
                 .map(|step| step.id)
                 .collect::<Vec<_>>(),
-            vec!["0002-register-system-graph", "0003-allow-candidate-graphs"],
+            vec![
+                "0002-register-system-graph",
+                "0003-allow-candidate-graphs",
+                "0004-allow-candidate-removals"
+            ],
             "the report must name every step that ran, not just that something did"
         );
         assert!(

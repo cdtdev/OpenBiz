@@ -18,7 +18,7 @@ format chooser read from the server, and the export carries none of OpenBiz's ow
 **And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
 four results formats and all six RDF syntaxes, over a default dataset that is the user's
 vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-260 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+322 Rust tests and 30 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
 narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
 the published EBNF rather than against the library that wrote the bytes, which found two real
@@ -41,10 +41,19 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 1 of 16 items done after the candidate seam
-was split in three. Phase 1 is 12 of 14 and the two that remain — SPARQL Update and the Graph Store
-Protocol — are blocked on **authorisation**, not on the seam: the seam they were waiting for now
-exists, and what is left is that neither may be an unauthenticated write.
+**Current position:** Phase 2 (SKOS authoring model), 2 of 16 items done. The candidate seam is
+complete except for its HTTP and UI half, which is blocked on authentication — so **every remaining
+Phase 2 item now has the shape it needs to be built against**, which was not true two iterations
+ago. Phase 1 is 12 of 14 and the two that remain — SPARQL Update and the Graph Store Protocol — are
+blocked on **authorisation**, not on the seam: the seam they were waiting for now exists, and what
+is left is that neither may be an unauthenticated write.
+
+**Iteration 18 took the seam's removing half.** A candidate carries two staging graphs, so a merge,
+a split, a move, and a deprecation are expressible for the first time. The decision that took the
+work is the **precondition**: a removal names statements that must already exist, so it is checked
+against the vocabulary at proposal *and* again inside the transaction that applies it, and an
+approval the vocabulary has outgrown is refused rather than partly applied. Store format version 4.
+See `adr/0018`.
 
 **Iteration 17 took Phase 2's candidate seam**, which is the dependency the whole phase is ordered
 around and which three Phase 1 items had been deferred on for six iterations. A proposed change is
@@ -519,11 +528,31 @@ the interface is a core differentiator, and building it late means retrofitting 
       > that needs one (merge, split, deprecate) is reachable through the seam. The evidence is kept
       > forever, so an approved import is stored twice and there is no retention policy. Both are in
       > `docs/UNTESTED.md`.
-- [ ] **Candidate seam, part 2 — removals:** a candidate proposes statements to *remove* as well as
+- [x] **Candidate seam, part 2 — removals:** a candidate proposes statements to *remove* as well as
       to add, so a merge, a split, a move, and a deprecation are all one shape.
       > Split out of the item above at iteration 17. Every bulk operation below needs this, and none
       > of them should be built before it exists — that is the same argument the seam itself was
       > built on, one level down. The record shape already leaves room for it.
+      > **Done at iteration 18.** A candidate now has two staging graphs — additions at
+      > `urn:openbiz:graph:candidate:<id>` and removals at `…:<id>:removals` — under one prefix, so
+      > either half exports and queries through the paths that already exist. Production caller:
+      > `openbiz retract <graph> <file>`, the mirror of `openbiz import`, which is a real workflow
+      > on its own (export the vocabulary, cut it down to what should go, hand it back) and not a
+      > command that exists for the test's benefit.
+      > **The precondition is the substance of the item, not a detail.** A removal names statements
+      > that must already be there, and the vocabulary can change between the proposal and the
+      > approval. It is checked twice — at proposal, refusing a file whose statements are not in the
+      > vocabulary; and again *inside the applying transaction*, refusing an approval the vocabulary
+      > has outgrown. A stale candidate stays open so it can still be rejected. Applying what still
+      > matches was rejected as an option: it removes less than the reviewer agreed to and reports
+      > success, and nothing afterwards says the change differed from the one reviewed. This answers
+      > the doubt iteration 17 recorded when it deferred this item.
+      > **Store format version 4**, with a migration that writes nothing — because a version-3 build
+      > would read a removing candidate as removing nothing, show half a diff, and apply half a
+      > change while recording that it applied all of it. See `adr/0018`.
+      > **Scope, honestly:** nothing produces a candidate carrying *both* halves yet. The record and
+      > the apply path support one; the producers are the bulk operations below. In
+      > `docs/UNTESTED.md`.
 - [ ] **Candidate seam, part 3 — over HTTP and in the interface:** propose, list, review, approve,
       and reject from the API and the UI.
       > Split out at iteration 17 and **blocked on authentication**, which does not exist yet. The

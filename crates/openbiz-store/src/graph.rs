@@ -24,7 +24,8 @@
 //!   exactly what it would do, and only approval moves the statements into the vocabulary. It is
 //!   ours — it lives under [`OPENBIZ_NAMESPACE`], so a user cannot author into it directly — but
 //!   unlike an inferred graph it *is* written by application code, because staging a proposal is
-//!   the whole point of it.
+//!   the whole point of it. A candidate has **two** of them, one for what it would add and one
+//!   for what it would take away — see [`CandidatePart`].
 //!
 //! # The reserved namespace
 //!
@@ -52,6 +53,51 @@ pub const SYSTEM_GRAPH_IRI: &str = "urn:openbiz:graph:system";
 /// [`OPENBIZ_NAMESPACE`] because a staging graph is OpenBiz's own: a user must not be able to
 /// register a vocabulary at the IRI where a pending change is waiting to be reviewed.
 pub const CANDIDATE_GRAPH_PREFIX: &str = "urn:openbiz:graph:candidate:";
+
+/// Suffix distinguishing a candidate's removal staging graph from its addition one.
+///
+/// Both halves sit under [`CANDIDATE_GRAPH_PREFIX`] rather than under two prefixes, so the rule
+/// "anything under this prefix is a staging graph" stays a single string comparison — the one
+/// [`GraphId::classify`] applies to every quad of a restore.
+pub const CANDIDATE_REMOVALS_SUFFIX: &str = ":removals";
+
+/// Which half of a candidate's payload a staging graph holds.
+///
+/// A proposal that can only add is a proposal that cannot express a merge, a split, a move, or a
+/// deprecation — every one of those is "these statements go, those arrive". Keeping the two halves
+/// in *separate graphs* rather than in one graph with a marker on each statement means a reviewer
+/// can export either half on its own, and the applying transaction never has to work out which of
+/// two intentions a statement carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CandidatePart {
+    /// Statements the candidate proposes to add to its target.
+    Additions,
+    /// Statements the candidate proposes to remove from its target.
+    Removals,
+}
+
+impl CandidatePart {
+    /// What this half's graph IRI carries after the candidate's identifier.
+    ///
+    /// Additions have no suffix, so the IRI a store already holds for an additions-only candidate
+    /// is unchanged by removals arriving. That is not laziness about naming: rewriting the graph
+    /// IRIs of proposals a customer has already reviewed would rewrite their audit trail.
+    const fn suffix(self) -> &'static str {
+        match self {
+            Self::Additions => "",
+            Self::Removals => CANDIDATE_REMOVALS_SUFFIX,
+        }
+    }
+}
+
+impl std::fmt::Display for CandidatePart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Additions => "additions",
+            Self::Removals => "removals",
+        })
+    }
+}
 
 /// Prefix for the graph holding a vocabulary's materialised entailments.
 ///
@@ -203,12 +249,13 @@ impl GraphId {
     /// Crate-private because there is no legitimate reason for a caller outside this crate to
     /// mint one. A staging graph exists because a candidate exists, so the way to name one is to
     /// ask a [`crate::Candidate`] for it.
-    pub(crate) fn candidate(id: &crate::CandidateId) -> Self {
+    pub(crate) fn candidate(id: &crate::CandidateId, part: CandidatePart) -> Self {
         Self {
-            // The prefix is a valid `urn:` IRI and a `CandidateId` is a decimal number, so the
-            // concatenation always parses. `from_registry` re-validates it on the way back in,
-            // which is where an IRI that came off disk is judged.
-            iri: format!("{CANDIDATE_GRAPH_PREFIX}{id}"),
+            // The prefix is a valid `urn:` IRI, a `CandidateId` is a decimal number, and the
+            // suffix is a compile-time constant, so the concatenation always parses.
+            // `from_registry` re-validates it on the way back in, which is where an IRI that came
+            // off disk is judged.
+            iri: format!("{CANDIDATE_GRAPH_PREFIX}{id}{}", part.suffix()),
             kind: GraphKind::Candidate,
         }
     }
@@ -263,9 +310,13 @@ impl GraphId {
             }
             GraphKind::Candidate => {
                 validate_iri(&iri)?;
-                let Some(id) = iri.strip_prefix(CANDIDATE_GRAPH_PREFIX) else {
+                let Some(rest) = iri.strip_prefix(CANDIDATE_GRAPH_PREFIX) else {
                     return Err(GraphIdError::Reserved { iri });
                 };
+                // Both halves of a candidate's payload live under the one prefix, so the text
+                // after it is the identifier with an optional part suffix. Anything else is a
+                // graph named as if it were ours and is refused rather than adopted.
+                let id = rest.strip_suffix(CANDIDATE_REMOVALS_SUFFIX).unwrap_or(rest);
                 // The identifier is re-parsed rather than accepted as text, because it is the
                 // link back to the candidate's record in the system graph. A staging graph whose
                 // identifier names no candidate is a graph the store cannot explain, and the

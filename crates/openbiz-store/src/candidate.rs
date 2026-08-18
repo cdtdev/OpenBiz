@@ -30,12 +30,33 @@
 //! anyone who looks for it and invisible to everyone querying their vocabularies — which is
 //! exactly what "not yet approved" has to mean.
 //!
+//! # A candidate has two halves, and the removing one has a precondition
+//!
+//! A proposal that can only add cannot express a merge, a split, a move, or a deprecation, so a
+//! candidate carries two staging graphs: what it would add and what it would take away. They are
+//! separate graphs rather than one graph with a marker on each statement, so a reviewer can export
+//! either half on its own through the export path that already exists.
+//!
+//! Removals differ from additions in a way that is easy to miss and expensive to get wrong.
+//! Adding a statement that is already there is a no-op, so an addition is true whenever it is
+//! applied. **A removal names statements that must already exist**, and the vocabulary can change
+//! between the moment a proposal is raised and the moment somebody approves it. Applying a stale
+//! removal would take away fewer statements than the reviewer agreed to and report success, which
+//! is the quietest possible way for a governance tool to lie.
+//!
+//! So a removal is checked twice against the vocabulary, and refused rather than trimmed:
+//! [`Store::propose_retraction`] refuses to stage a statement the vocabulary does not hold, and
+//! [`Store::decide`] refuses to *apply* a candidate whose removals are no longer all present. The
+//! second check is the one that matters — the first only catches a producer working from a stale
+//! read, whereas the second catches the vocabulary moving underneath a pending review.
+//!
 //! # Scope of this build
 //!
-//! Candidates are **additive**: a candidate proposes statements to add. Proposing removals — which
-//! a merge, a deprecation, or a corrective agent all need — is the next slice of the seam and is
-//! recorded as such in `docs/BUILD-PLAN.md`. The record shape leaves room for it; nothing here
-//! assumes additions are all there will ever be.
+//! Every candidate today has exactly one of its two halves: `openbiz import` raises additions and
+//! `openbiz retract` raises removals. A candidate carrying *both* — which a move or a deprecation
+//! wants — is expressible in the record and in the apply path, and nothing produces one yet; the
+//! producers are the bulk operations later in `docs/BUILD-PLAN.md`. That gap is recorded in
+//! `docs/UNTESTED.md` rather than papered over.
 //!
 //! Approval applies immediately, so the terminal states are [`CandidateState::Applied`] and
 //! [`CandidateState::Rejected`] rather than an "approved but not yet applied" limbo. When Phase 6
@@ -52,7 +73,8 @@ use oxsdatatypes::DateTime;
 use thiserror::Error;
 
 use crate::{
-    named_node, GraphId, GraphKind, RdfSyntax, RegistryReader, Store, StoreError, Transaction,
+    named_node, CandidatePart, GraphId, GraphKind, RdfSyntax, RegistryReader, Store, StoreError,
+    Transaction,
 };
 
 /// The class every candidate's record is typed with, in the system graph.
@@ -64,8 +86,14 @@ const CANDIDATE_SUBJECT_PREFIX: &str = "urn:openbiz:candidate:";
 /// Predicate naming the vocabulary graph a candidate proposes to change.
 const TARGET_IRI: &str = "urn:openbiz:candidateTarget";
 
-/// Predicate naming the graph the proposed statements are staged in.
+/// Predicate naming the graph the proposed additions are staged in.
 const PAYLOAD_IRI: &str = "urn:openbiz:candidatePayload";
+
+/// Predicate naming the graph the proposed removals are staged in.
+///
+/// Absent when the candidate removes nothing — which is every candidate a build before format
+/// version 4 could write, so its absence means "removes nothing" rather than "record is broken".
+const REMOVAL_PAYLOAD_IRI: &str = "urn:openbiz:candidateRemovalPayload";
 
 /// Predicate carrying what kind of producer raised the candidate.
 const SOURCE_IRI: &str = "urn:openbiz:candidateSource";
@@ -81,6 +109,11 @@ const PROPOSED_AT_IRI: &str = "urn:openbiz:candidateProposedAt";
 
 /// Predicate carrying how many statements the candidate proposes to add.
 const ADDITIONS_IRI: &str = "urn:openbiz:candidateAdditions";
+
+/// Predicate carrying how many statements the candidate proposes to remove.
+///
+/// Absent means zero, for the same reason [`REMOVAL_PAYLOAD_IRI`] may be absent.
+const REMOVALS_IRI: &str = "urn:openbiz:candidateRemovals";
 
 /// Predicate carrying the producer's confidence, where it has one.
 const CONFIDENCE_IRI: &str = "urn:openbiz:candidateConfidence";
@@ -317,10 +350,12 @@ impl Provenance {
 pub struct Candidate {
     id: CandidateId,
     target: GraphId,
-    payload: GraphId,
+    payload: Option<GraphId>,
+    removal_payload: Option<GraphId>,
     provenance: Provenance,
     proposed_at: String,
     additions: u64,
+    removals: u64,
     state: CandidateState,
     decided_by: Option<String>,
     decided_at: Option<String>,
@@ -337,12 +372,21 @@ impl Candidate {
         &self.target
     }
 
-    /// The graph its proposed statements are staged in.
+    /// The graph its proposed *additions* are staged in, if it adds anything.
     ///
-    /// This is what a reviewer exports or queries to see what would happen. It stays after a
+    /// This is what a reviewer exports or queries to see what would arrive. It stays after a
     /// decision, applied or rejected, so "what exactly was approved" remains answerable.
-    pub fn payload(&self) -> &GraphId {
-        &self.payload
+    pub fn payload(&self) -> Option<&GraphId> {
+        self.payload.as_ref()
+    }
+
+    /// The graph its proposed *removals* are staged in, if it removes anything.
+    ///
+    /// Kept after a decision for the same reason the additions are: an approved removal is the
+    /// one change whose evidence a vocabulary no longer holds, so if the staging graph went with
+    /// it there would be nothing left anywhere saying what was taken away.
+    pub fn removal_payload(&self) -> Option<&GraphId> {
+        self.removal_payload.as_ref()
     }
 
     /// Where it came from and why.
@@ -358,6 +402,11 @@ impl Candidate {
     /// How many statements it proposes to add.
     pub fn additions(&self) -> u64 {
         self.additions
+    }
+
+    /// How many statements it proposes to remove.
+    pub fn removals(&self) -> u64 {
+        self.removals
     }
 
     /// Where it is in its lifecycle.
@@ -409,7 +458,7 @@ impl Store {
     ///   §1.7 requires to run through discovery with a recorded justification. An import is not a
     ///   way around that.
     /// - **Statements naming a graph other than the target.** A quad syntax can carry graph names,
-    ///   and an import goes to *one* vocabulary. Silently dropping the names would land somebody's
+    ///   and a proposal goes to *one* vocabulary. Silently dropping the names would land somebody's
     ///   multi-graph file in one place and tell them it worked; silently honouring them would let
     ///   one import write to vocabularies the operator never named. Statements in the default graph
     ///   and statements naming the target itself are both accepted, so an export of a vocabulary
@@ -435,6 +484,54 @@ impl Store {
         reader: impl Read,
         provenance: &Provenance,
     ) -> Result<Candidate, StoreError> {
+        self.propose(target, CandidatePart::Additions, syntax, reader, provenance)
+    }
+
+    /// Propose the statements in `reader` as a removal from the vocabulary `target`.
+    ///
+    /// The mirror of [`Store::propose_import`] and the half of the seam that makes a merge, a
+    /// split, a move, and a deprecation expressible: each of those is "these statements go".
+    /// Nothing reaches `target` here either — the statements are staged in the candidate's removal
+    /// graph, where a reviewer can export them, and [`Store::decide`] is what applies them.
+    ///
+    /// It refuses everything [`Store::propose_import`] refuses, and one thing more:
+    ///
+    /// - **A statement the vocabulary does not hold.** A removal that matches nothing is not a
+    ///   small waste; it is a proposal whose reviewed effect and actual effect differ, and the
+    ///   difference is invisible in the diff. The likeliest cause is a producer working from a
+    ///   stale copy of the vocabulary, and the second likeliest is a file in the right syntax
+    ///   describing the wrong thing. The refusal names how many were missing and shows one.
+    ///
+    /// # Blank nodes are *not* renamed here, and that is the difference from an import
+    ///
+    /// An import renames blank node labels so two files using `_:b1` do not merge into one node.
+    /// A removal has to name statements that already exist, so renaming would guarantee that none
+    /// of them matched. They are therefore taken as written — which means a blank node matches
+    /// only if it is spelled the way the store spells it, and anything else is refused by the
+    /// presence check above rather than silently removing something adjacent.
+    pub fn propose_retraction(
+        &self,
+        target: &GraphId,
+        syntax: RdfSyntax,
+        reader: impl Read,
+        provenance: &Provenance,
+    ) -> Result<Candidate, StoreError> {
+        self.propose(target, CandidatePart::Removals, syntax, reader, provenance)
+    }
+
+    /// Stage one half of a proposed change and record it.
+    ///
+    /// One body for both halves, so a rule stated for an import — the target must be a registered
+    /// vocabulary, the file may not name another graph, an empty file is refused — cannot quietly
+    /// fail to hold for a retraction.
+    fn propose(
+        &self,
+        target: &GraphId,
+        part: CandidatePart,
+        syntax: RdfSyntax,
+        reader: impl Read,
+        provenance: &Provenance,
+    ) -> Result<Candidate, StoreError> {
         provenance.validate()?;
 
         if target.kind() != GraphKind::Vocabulary {
@@ -445,15 +542,18 @@ impl Store {
         }
 
         let parser = RdfParser::from_format(syntax.backend())
-            .rename_blank_nodes()
             .with_base_iri(target.iri())
             .map_err(|error| {
                 // Unreachable in practice: `GraphId` validated this IRI through the same parser.
                 StoreError::Backend(format!(
                     "the target graph's IRI is not usable as a base IRI: {error}"
                 ))
-            })?
-            .for_reader(reader);
+            })?;
+        let parser = match part {
+            CandidatePart::Additions => parser.rename_blank_nodes(),
+            CandidatePart::Removals => parser,
+        };
+        let parser = parser.for_reader(reader);
 
         self.transaction(|txn| {
             if !txn.contains_graph(target.iri())? {
@@ -463,11 +563,14 @@ impl Store {
             }
 
             let id = next_candidate_id(txn)?;
-            let payload = GraphId::candidate(&id);
+            let payload = GraphId::candidate(&id, part);
             let payload_name: GraphName = NamedNode::new_unchecked(payload.iri()).into();
+            let target_name: GraphName = NamedNode::new_unchecked(target.iri()).into();
 
             let mut batch: Vec<Quad> = Vec::with_capacity(STAGE_BATCH);
-            let mut additions: u64 = 0;
+            let mut staged: u64 = 0;
+            let mut absent: u64 = 0;
+            let mut example: Option<String> = None;
 
             for quad in parser {
                 let quad = quad.map_err(|error| import_failure(syntax, error))?;
@@ -483,13 +586,27 @@ impl Store {
                     }
                 }
 
+                if part == CandidatePart::Removals {
+                    let in_target = Quad::new(
+                        quad.subject.clone(),
+                        quad.predicate.clone(),
+                        quad.object.clone(),
+                        target_name.clone(),
+                    );
+                    if !txn.contains_quad(&in_target)? {
+                        absent += 1;
+                        example.get_or_insert_with(|| in_target.to_string());
+                        continue;
+                    }
+                }
+
                 batch.push(Quad::new(
                     quad.subject,
                     quad.predicate,
                     quad.object,
                     payload_name.clone(),
                 ));
-                additions += 1;
+                staged += 1;
 
                 if batch.len() == STAGE_BATCH {
                     txn.extend_graph(&payload, &batch)?;
@@ -498,19 +615,39 @@ impl Store {
             }
             txn.extend_graph(&payload, &batch)?;
 
-            if additions == 0 {
+            if absent > 0 {
+                return Err(StoreError::RetractionNotPresent {
+                    target: target.iri().to_owned(),
+                    absent,
+                    // Always `Some` when `absent` is non-zero; the default keeps the refusal on
+                    // its feet rather than making the message's shape an invariant to uphold.
+                    example: example.unwrap_or_default(),
+                });
+            }
+            if staged == 0 {
                 return Err(StoreError::ImportEmpty { syntax });
             }
 
             txn.register(&payload)?;
 
+            let (additions, removals) = match part {
+                CandidatePart::Additions => (staged, 0),
+                CandidatePart::Removals => (0, staged),
+            };
+            let (payload, removal_payload) = match part {
+                CandidatePart::Additions => (Some(payload), None),
+                CandidatePart::Removals => (None, Some(payload)),
+            };
+
             let candidate = Candidate {
                 id,
                 target: target.clone(),
                 payload,
+                removal_payload,
                 provenance: provenance.clone(),
                 proposed_at: DateTime::now().to_string(),
                 additions,
+                removals,
                 state: CandidateState::Proposed,
                 decided_by: None,
                 decided_at: None,
@@ -548,12 +685,18 @@ impl Store {
     /// statements are not there, or statements in a vocabulary with no record of who let them in.
     /// That pairing is the whole value of the seam to an auditor.
     ///
-    /// The payload graph is kept either way. Deleting the evidence of what was approved is not a
+    /// The payload graphs are kept either way. Deleting the evidence of what was approved is not a
     /// default a governance product may take; what it costs is recorded in `docs/UNTESTED.md`.
     ///
     /// Refuses a candidate that has already been decided, naming the state it is in — deciding one
     /// twice would either duplicate its statements or silently do nothing, and both are worse than
     /// being told.
+    ///
+    /// **Also refuses a candidate whose removals have gone stale**: if the vocabulary no longer
+    /// holds every statement the candidate proposes to remove, approving it would take away less
+    /// than the reviewer agreed to and say it had succeeded. The refusal names how many are
+    /// missing. Rejecting such a candidate is always allowed — a proposal that can no longer be
+    /// applied is exactly one somebody should be able to close.
     pub fn decide(
         &self,
         id: CandidateId,
@@ -588,12 +731,15 @@ impl Store {
             }
 
             let decided_at = DateTime::now().to_string();
-            txn.retract(&[Quad::new(
-                candidate.id.subject(),
-                named_node(STATE_IRI).into_owned(),
-                Literal::new_simple_literal(candidate.state.as_str()),
-                NamedNode::new_unchecked(GraphId::system().iri()),
-            )])?;
+            txn.remove_graph_quads(
+                &GraphId::system(),
+                &[Quad::new(
+                    candidate.id.subject(),
+                    named_node(STATE_IRI).into_owned(),
+                    Literal::new_simple_literal(candidate.state.as_str()),
+                    NamedNode::new_unchecked(GraphId::system().iri()),
+                )],
+            )?;
 
             candidate.state = decision.outcome();
             candidate.decided_by = Some(decided_by.to_owned());
@@ -630,21 +776,57 @@ impl Store {
     }
 }
 
-/// Copy a candidate's staged statements into its target vocabulary.
+/// Apply a candidate's staged halves to its target vocabulary.
 ///
-/// Reads the payload out in full before writing any of it: the backend's iterator borrows the
+/// **Removals first, then additions.** The order is only observable for a statement staged in both
+/// halves, which no producer can raise today, and it is fixed now rather than left to whichever
+/// half happens to be written first: removing then adding means such a statement survives, which
+/// is what "replace this with itself" has to mean. The opposite order would delete it, which is
+/// the answer nobody asks for.
+///
+/// Each half is read out in full before any of it is written: the backend's iterator borrows the
 /// transaction, and a copy that streamed would be reading a graph while writing another through
 /// the same handle.
+///
+/// The removal half is checked against the vocabulary *as it is now* before anything is written.
+/// See [`Store::decide`] for why a stale removal is refused rather than trimmed.
 fn apply_payload(txn: &mut Transaction<'_>, candidate: &Candidate) -> Result<(), StoreError> {
     let target: GraphName = NamedNode::new_unchecked(candidate.target.iri()).into();
 
-    let staged: Vec<Quad> = txn
-        .graph_quads(&candidate.payload)?
-        .into_iter()
-        .map(|quad| Quad::new(quad.subject, quad.predicate, quad.object, target.clone()))
-        .collect();
+    let restage = |quads: Vec<Quad>| -> Vec<Quad> {
+        quads
+            .into_iter()
+            .map(|quad| Quad::new(quad.subject, quad.predicate, quad.object, target.clone()))
+            .collect()
+    };
 
-    txn.extend_graph(&candidate.target, &staged)
+    if let Some(payload) = &candidate.removal_payload {
+        let staged = restage(txn.graph_quads(payload)?);
+
+        let mut missing = 0;
+        for quad in &staged {
+            if !txn.contains_quad(quad)? {
+                missing += 1;
+            }
+        }
+        if missing > 0 {
+            return Err(StoreError::CandidateStale {
+                id: candidate.id.to_string(),
+                target: candidate.target.iri().to_owned(),
+                missing,
+                removals: staged.len() as u64,
+            });
+        }
+
+        txn.remove_graph_quads(&candidate.target, &staged)?;
+    }
+
+    if let Some(payload) = &candidate.payload {
+        let staged = restage(txn.graph_quads(payload)?);
+        txn.extend_graph(&candidate.target, &staged)?;
+    }
+
+    Ok(())
 }
 
 /// The next identifier to mint, one past the highest the store holds.
@@ -712,11 +894,6 @@ fn write_record(txn: &mut Transaction<'_>, candidate: &Candidate) -> Result<(), 
         ),
         (
             subject.clone(),
-            named_node(PAYLOAD_IRI).into_owned(),
-            NamedNode::new_unchecked(candidate.payload.iri()).into(),
-        ),
-        (
-            subject.clone(),
             named_node(SOURCE_IRI).into_owned(),
             literal(candidate.provenance.source.as_str()),
         ),
@@ -742,10 +919,31 @@ fn write_record(txn: &mut Transaction<'_>, candidate: &Candidate) -> Result<(), 
         ),
         (
             subject.clone(),
+            named_node(REMOVALS_IRI).into_owned(),
+            Literal::new_typed_literal(candidate.removals.to_string(), xsd::INTEGER).into(),
+        ),
+        (
+            subject.clone(),
             named_node(STATE_IRI).into_owned(),
             literal(candidate.state.as_str()),
         ),
     ];
+
+    // A half with nothing in it names no graph, because there is no graph: an empty staging graph
+    // is indistinguishable from one whose statements were lost, and a registry entry for a graph
+    // holding nothing is a thing an operator has to explain to themselves.
+    for (predicate, graph) in [
+        (PAYLOAD_IRI, candidate.payload.as_ref()),
+        (REMOVAL_PAYLOAD_IRI, candidate.removal_payload.as_ref()),
+    ] {
+        if let Some(graph) = graph {
+            triples.push((
+                subject.clone(),
+                named_node(predicate).into_owned(),
+                NamedNode::new_unchecked(graph.iri()).into(),
+            ));
+        }
+    }
 
     if let Some(confidence) = candidate.provenance.confidence {
         triples.push((
@@ -825,18 +1023,37 @@ fn read_record(
             "candidate {id} names a target we cannot describe: {error}"
         ))
     })?;
-    let payload = GraphId::classify(&iri(PAYLOAD_IRI)?).map_err(|error| {
-        corrupt(format!(
-            "candidate {id} names a payload we cannot describe: {error}"
-        ))
-    })?;
+    // Either half may be absent — a candidate that only adds has no removal graph, and one that
+    // only removes has no addition graph — but a half whose graph is named must name *its own*
+    // graph. The IRI is derived from the identifier rather than chosen, so a record pointing
+    // anywhere else came from a doctored store and is refused rather than followed.
+    let optional_payload =
+        |predicate: &str, part: CandidatePart| -> Result<Option<GraphId>, StoreError> {
+            let Some(term) = one(predicate)? else {
+                return Ok(None);
+            };
+            let Term::NamedNode(node) = term else {
+                return Err(corrupt(format!(
+                    "candidate {id} has {term} for <{predicate}>, which is not an IRI"
+                )));
+            };
+            let named = node.into_string();
+            let payload = GraphId::classify(&named).map_err(|error| {
+                corrupt(format!(
+                    "candidate {id} names a payload we cannot describe: {error}"
+                ))
+            })?;
+            if payload != GraphId::candidate(&id, part) {
+                return Err(corrupt(format!(
+                "candidate {id} names {payload} as its {part} payload, and a candidate's payload \
+                 graphs are derived from its identifier rather than chosen"
+            )));
+            }
+            Ok(Some(payload))
+        };
 
-    if payload != GraphId::candidate(&id) {
-        return Err(corrupt(format!(
-            "candidate {id} names {payload} as its payload, and a candidate's payload graph is \
-             derived from its identifier rather than chosen"
-        )));
-    }
+    let payload = optional_payload(PAYLOAD_IRI, CandidatePart::Additions)?;
+    let removal_payload = optional_payload(REMOVAL_PAYLOAD_IRI, CandidatePart::Removals)?;
 
     let source_token = text(SOURCE_IRI)?;
     let Some(candidate_source) = CandidateSource::parse(&source_token) else {
@@ -855,6 +1072,37 @@ fn read_record(
     let additions = text(ADDITIONS_IRI)?
         .parse::<u64>()
         .map_err(|_| corrupt(format!("candidate {id} has a non-numeric addition count")))?;
+
+    // Absent means zero rather than broken: every candidate a build before format version 4 wrote
+    // was additions-only, and those records are still in stores this build opens.
+    let removals = match one(REMOVALS_IRI)? {
+        None => 0,
+        Some(_) => text(REMOVALS_IRI)?
+            .parse::<u64>()
+            .map_err(|_| corrupt(format!("candidate {id} has a non-numeric removal count")))?,
+    };
+
+    // The counts and the graphs are one fact written twice, so they are checked against each
+    // other. A record claiming removals with no graph to hold them would present a reviewer with
+    // a change whose statements nobody can read, which is the one thing the seam exists to stop.
+    for (count, graph, what) in [
+        (additions, payload.as_ref(), "add"),
+        (removals, removal_payload.as_ref(), "remove"),
+    ] {
+        if (count == 0) != graph.is_none() {
+            return Err(corrupt(format!(
+                "candidate {id} says it would {what} {count} statements and {} a graph staging \
+                 them",
+                if graph.is_none() { "names no" } else { "names" }
+            )));
+        }
+    }
+    if additions == 0 && removals == 0 {
+        return Err(corrupt(format!(
+            "candidate {id} would neither add nor remove anything, and a proposal to do nothing \
+             is not a decision anyone can take"
+        )));
+    }
 
     let confidence = match one(CONFIDENCE_IRI)? {
         None => None,
@@ -897,6 +1145,7 @@ fn read_record(
         id,
         target,
         payload,
+        removal_payload,
         provenance: Provenance {
             source: candidate_source,
             agent: text(AGENT_IRI)?,
@@ -905,6 +1154,7 @@ fn read_record(
         },
         proposed_at: text(PROPOSED_AT_IRI)?,
         additions,
+        removals,
         state,
         decided_by,
         decided_at,
@@ -935,26 +1185,55 @@ impl Transaction<'_> {
             .collect()
     }
 
-    /// Remove quads. Only ever OpenBiz's own bookkeeping, which is why it is not public.
+    /// Whether the store holds this exact quad, read inside this transaction.
     ///
-    /// A vocabulary's statements are never removed this way: a removal of authored content is a
-    /// change to a vocabulary, and `CLAUDE.md` §3 says a change to a vocabulary arrives as a
-    /// candidate. The one caller here retracts a candidate's own `state` triple so the replacement
-    /// can be written, which is a change to a record about a change rather than to anybody's
-    /// content.
-    pub(crate) fn retract(&mut self, quads: &[Quad]) -> Result<(), StoreError> {
+    /// Exact: same subject, predicate, object *and* graph. A removal is only safe to apply if the
+    /// statement it names is there, and "there" has to mean there in the vocabulary being changed
+    /// rather than somewhere in the store.
+    pub(crate) fn contains_quad(&self, quad: &Quad) -> Result<bool, StoreError> {
+        self.inner
+            .contains(quad.as_ref())
+            .map_err(|error| StoreError::Backend(error.to_string()))
+    }
+
+    /// Remove quads from one graph. The mirror of [`Transaction::extend_graph`], and the only way
+    /// anything leaves the store.
+    ///
+    /// It enforces the same rules for the same reasons: the graph must be directly writable,
+    /// nothing is removed from the default graph, and every quad must already name the graph it is
+    /// being removed from — a caller handing over a quad naming somewhere else would delete
+    /// statements from a graph it did not think it was touching.
+    ///
+    /// **A vocabulary's statements only ever reach this through an approved candidate.** There is
+    /// no direct-delete path above it, and there is not going to be one: `CLAUDE.md` §3 says a
+    /// change to a vocabulary arrives as a proposal a human approves, and a removal is the change
+    /// where that matters most, because what it destroys is not recoverable from the vocabulary
+    /// afterwards.
+    pub(crate) fn remove_graph_quads(
+        &mut self,
+        graph: &GraphId,
+        quads: &[Quad],
+    ) -> Result<(), StoreError> {
+        if !graph.is_directly_writable() {
+            return Err(StoreError::NotWritable(graph.iri().to_owned()));
+        }
+
         for quad in quads {
-            let GraphName::NamedNode(graph) = &quad.graph_name else {
+            let GraphName::NamedNode(name) = &quad.graph_name else {
                 return Err(StoreError::Backend(
                     "a retraction named no graph, and every quad in an OpenBiz store is in one"
                         .to_owned(),
                 ));
             };
-            if graph.as_str() != GraphId::system().iri() {
-                return Err(StoreError::NotWritable(graph.as_str().to_owned()));
+            if name.as_str() != graph.iri() {
+                return Err(StoreError::NotWritable(name.as_str().to_owned()));
             }
+        }
+
+        for quad in quads {
             self.inner.remove(quad.as_ref());
         }
+
         Ok(())
     }
 }
@@ -962,10 +1241,20 @@ impl Transaction<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GraphKind;
+    use crate::{GraphKind, CANDIDATE_GRAPH_PREFIX, CANDIDATE_REMOVALS_SUFFIX};
 
     fn temp_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("a temporary directory")
+    }
+
+    /// The graph a candidate's additions are staged in, for a test that knows it has some.
+    fn additions_graph(candidate: &Candidate) -> &GraphId {
+        candidate.payload().expect("an additions payload")
+    }
+
+    /// The graph a candidate's removals are staged in, for a test that knows it has some.
+    fn removals_graph(candidate: &Candidate) -> &GraphId {
+        candidate.removal_payload().expect("a removals payload")
     }
 
     fn vocabulary(iri: &str) -> GraphId {
@@ -1013,6 +1302,633 @@ mod tests {
         found
     }
 
+    // ----------------------------------------------------------------------------------------
+    // Removals: the half of the seam a merge, a split, a move, and a deprecation all need.
+    // ----------------------------------------------------------------------------------------
+
+    /// A store whose vocabulary already holds the cat, so there is something to propose removing.
+    fn store_with_content(dir: &tempfile::TempDir) -> (Store, GraphId) {
+        let (store, graph) = store_with_vocabulary(dir);
+        let candidate = store
+            .propose_import(
+                &graph,
+                RdfSyntax::Turtle,
+                CAT_TURTLE.as_bytes(),
+                &import_provenance(),
+            )
+            .expect("proposed");
+        store
+            .decide(candidate.id(), Decision::Approve, "a reviewer")
+            .expect("approved");
+        (store, graph)
+    }
+
+    fn retraction_provenance() -> Provenance {
+        Provenance {
+            source: CandidateSource::Import,
+            agent: "openbiz retract".to_owned(),
+            note: "the French label was added to the wrong concept".to_owned(),
+            confidence: None,
+        }
+    }
+
+    const FRENCH_LABEL: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        <https://example.org/animals/cat> skos:prefLabel "Chat"@fr .
+    "#;
+
+    /// The mirror of the import test, and the claim the whole half rests on: proposing a removal
+    /// removes nothing.
+    #[test]
+    fn a_retraction_proposes_rather_than_removes() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+        let before = statements(&store, &graph);
+
+        let candidate = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("proposed");
+
+        assert_eq!(
+            statements(&store, &graph),
+            before,
+            "proposing a removal must not remove anything"
+        );
+        assert_eq!(candidate.removals(), 1);
+        assert_eq!(candidate.additions(), 0);
+        assert!(
+            candidate.payload().is_none(),
+            "a removal-only candidate has no additions graph to register"
+        );
+        assert_eq!(
+            statements(&store, removals_graph(&candidate)).len(),
+            1,
+            "the statement to remove is staged where a reviewer can read it"
+        );
+        assert_eq!(candidate.state(), CandidateState::Proposed);
+    }
+
+    /// Approval is what removes, and the evidence outlives the statement.
+    #[test]
+    fn approving_a_retraction_removes_the_statements_and_keeps_the_evidence() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+        let before = statements(&store, &graph);
+
+        let candidate = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("proposed");
+        let decided = store
+            .decide(candidate.id(), Decision::Approve, "a reviewer")
+            .expect("approved");
+
+        let after = statements(&store, &graph);
+        assert_eq!(
+            after.len(),
+            before.len() - 1,
+            "exactly the proposed statement is gone: {before:?} -> {after:?}"
+        );
+        assert!(
+            !after.iter().any(|line| line.contains("Chat")),
+            "the French label must be gone: {after:?}"
+        );
+        assert!(
+            after.iter().any(|line| line.contains("Cat")),
+            "and nothing else may be: {after:?}"
+        );
+
+        assert_eq!(decided.state(), CandidateState::Applied);
+        assert_eq!(decided.decided_by(), Some("a reviewer"));
+        assert_eq!(
+            statements(&store, removals_graph(&decided)).len(),
+            1,
+            "an approved removal is the one change the vocabulary no longer records, so the \
+             staged evidence must survive it"
+        );
+    }
+
+    /// A removal that matches nothing is refused at the point of proposal, with the count and an
+    /// example, rather than staged as a change that would silently do less than it says.
+    #[test]
+    fn a_retraction_of_statements_the_vocabulary_does_not_hold_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+        let before = statements(&store, &graph);
+
+        let refused = store.propose_retraction(
+            &graph,
+            RdfSyntax::Turtle,
+            r#"
+                @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+                <https://example.org/animals/cat> skos:prefLabel "Katze"@de .
+                <https://example.org/animals/dog> skos:prefLabel "Hund"@de .
+            "#
+            .as_bytes(),
+            &retraction_provenance(),
+        );
+
+        let Err(StoreError::RetractionNotPresent {
+            absent, example, ..
+        }) = refused
+        else {
+            panic!("a removal of statements that are not there must be refused: {refused:?}");
+        };
+        assert_eq!(absent, 2);
+        assert!(
+            example.contains("Katze") || example.contains("Hund"),
+            "the refusal must show one of the missing statements, got {example:?}"
+        );
+        assert_eq!(
+            statements(&store, &graph),
+            before,
+            "a refused proposal changes nothing"
+        );
+        assert_eq!(
+            store.candidates().expect("listed").len(),
+            1,
+            "and leaves no candidate behind — only the import that put the content there"
+        );
+    }
+
+    /// A file that is *partly* right is refused whole. Staging the matching half would produce a
+    /// candidate whose diff is a subset of what the operator asked for and does not say so.
+    #[test]
+    fn a_retraction_is_refused_whole_when_only_some_of_it_matches() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let refused = store.propose_retraction(
+            &graph,
+            RdfSyntax::Turtle,
+            r#"
+                @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+                <https://example.org/animals/cat> skos:prefLabel "Chat"@fr .
+                <https://example.org/animals/cat> skos:prefLabel "Katze"@de .
+            "#
+            .as_bytes(),
+            &retraction_provenance(),
+        );
+
+        assert!(
+            matches!(
+                refused,
+                Err(StoreError::RetractionNotPresent { absent: 1, .. })
+            ),
+            "one missing statement is enough to refuse the file: {refused:?}"
+        );
+    }
+
+    /// The question iteration 17 could not answer: a candidate raised on Monday against a
+    /// vocabulary edited on Tuesday.
+    #[test]
+    fn a_retraction_that_has_gone_stale_is_refused_at_approval() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        // Two people propose removing the same statement.
+        let first = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("first proposed");
+        let second = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("second proposed");
+
+        store
+            .decide(first.id(), Decision::Approve, "a reviewer")
+            .expect("the first is applied");
+        let before = statements(&store, &graph);
+
+        let refused = store.decide(second.id(), Decision::Approve, "another reviewer");
+        let Err(StoreError::CandidateStale {
+            missing, removals, ..
+        }) = refused
+        else {
+            panic!("approving a stale removal must be refused: {refused:?}");
+        };
+        assert_eq!((missing, removals), (1, 1));
+        assert_eq!(
+            statements(&store, &graph),
+            before,
+            "a refused approval leaves the vocabulary exactly as it was"
+        );
+        assert_eq!(
+            store
+                .candidate(second.id())
+                .expect("still readable")
+                .state(),
+            CandidateState::Proposed,
+            "and leaves the candidate open rather than half-decided"
+        );
+    }
+
+    /// A proposal that can no longer be applied is exactly the one somebody wants to close.
+    #[test]
+    fn a_stale_retraction_can_still_be_rejected() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let first = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("first proposed");
+        let second = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("second proposed");
+        store
+            .decide(first.id(), Decision::Approve, "a reviewer")
+            .expect("the first is applied");
+
+        let rejected = store
+            .decide(second.id(), Decision::Reject, "another reviewer")
+            .expect("a stale candidate can be closed");
+        assert_eq!(rejected.state(), CandidateState::Rejected);
+    }
+
+    /// Both halves are staged in graphs whose IRIs are derived from the candidate, and both are
+    /// registered as candidate graphs so they stay out of everybody's vocabulary list.
+    #[test]
+    fn the_two_halves_are_staged_in_two_registered_candidate_graphs() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let added = store
+            .propose_import(
+                &graph,
+                RdfSyntax::Turtle,
+                r#"<https://example.org/animals/dog> a
+                   <http://www.w3.org/2004/02/skos/core#Concept> ."#
+                    .as_bytes(),
+                &import_provenance(),
+            )
+            .expect("proposed");
+        let removed = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("proposed");
+
+        assert_eq!(
+            additions_graph(&added).iri(),
+            format!("{CANDIDATE_GRAPH_PREFIX}{}", added.id())
+        );
+        assert_eq!(
+            removals_graph(&removed).iri(),
+            format!(
+                "{CANDIDATE_GRAPH_PREFIX}{}{CANDIDATE_REMOVALS_SUFFIX}",
+                removed.id()
+            )
+        );
+
+        let registered = store.graphs().expect("the registry");
+        for staged in [additions_graph(&added), removals_graph(&removed)] {
+            let entry = registered
+                .iter()
+                .find(|entry| entry.iri() == staged.iri())
+                .unwrap_or_else(|| panic!("{staged} must be registered"));
+            assert_eq!(
+                entry.kind(),
+                GraphKind::Candidate,
+                "a staging graph is never a vocabulary"
+            );
+        }
+    }
+
+    /// The migrated-store case: a record written before format version 4 carries no removal count,
+    /// and that means "removes nothing" rather than "this record is broken".
+    #[test]
+    fn a_record_with_no_removal_count_reads_as_a_candidate_that_removes_nothing() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_vocabulary(&dir);
+        let candidate = store
+            .propose_import(
+                &graph,
+                RdfSyntax::Turtle,
+                CAT_TURTLE.as_bytes(),
+                &import_provenance(),
+            )
+            .expect("proposed");
+
+        // Take the record back to the shape a version-3 build would have written.
+        store
+            .transaction(|txn| {
+                let system = GraphId::system();
+                txn.remove_graph_quads(
+                    &system,
+                    &[Quad::new(
+                        candidate.id().subject(),
+                        named_node(REMOVALS_IRI).into_owned(),
+                        Literal::new_typed_literal("0", xsd::INTEGER),
+                        NamedNode::new_unchecked(system.iri()),
+                    )],
+                )
+            })
+            .expect("age the record");
+
+        let read = store.candidate(candidate.id()).expect("still readable");
+        assert_eq!(read.removals(), 0);
+        assert!(read.removal_payload().is_none());
+        assert_eq!(read, candidate, "and is otherwise the candidate we raised");
+    }
+
+    /// The counts and the graphs are the same fact written twice, so a record where they disagree
+    /// is a store that has been edited underneath us and is refused rather than acted on.
+    #[test]
+    fn a_record_claiming_removals_with_no_graph_to_hold_them_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_vocabulary(&dir);
+        let candidate = store
+            .propose_import(
+                &graph,
+                RdfSyntax::Turtle,
+                CAT_TURTLE.as_bytes(),
+                &import_provenance(),
+            )
+            .expect("proposed");
+
+        store
+            .transaction(|txn| {
+                let system = GraphId::system();
+                txn.remove_graph_quads(
+                    &system,
+                    &[Quad::new(
+                        candidate.id().subject(),
+                        named_node(REMOVALS_IRI).into_owned(),
+                        Literal::new_typed_literal("0", xsd::INTEGER),
+                        NamedNode::new_unchecked(system.iri()),
+                    )],
+                )?;
+                txn.insert(
+                    &system,
+                    vec![(
+                        candidate.id().subject(),
+                        named_node(REMOVALS_IRI).into_owned(),
+                        Literal::new_typed_literal("3", xsd::INTEGER).into(),
+                    )],
+                )
+            })
+            .expect("forge the record");
+
+        let read = store.candidate(candidate.id());
+        assert!(
+            matches!(read, Err(StoreError::Corrupt { .. })),
+            "a candidate that claims removals it cannot show must be refused: {read:?}"
+        );
+    }
+
+    /// A payload graph is derived from the identifier, so a record aiming one half at another
+    /// candidate's graph — or at a vocabulary — is refused.
+    #[test]
+    fn a_record_naming_someone_elses_removal_graph_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+        let candidate = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::Turtle,
+                FRENCH_LABEL.as_bytes(),
+                &retraction_provenance(),
+            )
+            .expect("proposed");
+
+        store
+            .transaction(|txn| {
+                let system = GraphId::system();
+                txn.remove_graph_quads(
+                    &system,
+                    &[Quad::new(
+                        candidate.id().subject(),
+                        named_node(REMOVAL_PAYLOAD_IRI).into_owned(),
+                        NamedNode::new_unchecked(removals_graph(&candidate).iri()),
+                        NamedNode::new_unchecked(system.iri()),
+                    )],
+                )?;
+                txn.insert(
+                    &system,
+                    vec![(
+                        candidate.id().subject(),
+                        named_node(REMOVAL_PAYLOAD_IRI).into_owned(),
+                        NamedNode::new_unchecked(format!(
+                            "{CANDIDATE_GRAPH_PREFIX}999{CANDIDATE_REMOVALS_SUFFIX}"
+                        ))
+                        .into(),
+                    )],
+                )
+            })
+            .expect("forge the record");
+
+        let read = store.candidate(candidate.id());
+        assert!(
+            matches!(read, Err(StoreError::Corrupt { .. })),
+            "a payload graph is derived, not chosen: {read:?}"
+        );
+    }
+
+    /// An empty file is refused for a retraction exactly as it is for an import.
+    #[test]
+    fn an_empty_retraction_file_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let refused = store.propose_retraction(
+            &graph,
+            RdfSyntax::Turtle,
+            "".as_bytes(),
+            &retraction_provenance(),
+        );
+        assert!(
+            matches!(refused, Err(StoreError::ImportEmpty { .. })),
+            "proposing nothing is not a decision anyone can take: {refused:?}"
+        );
+    }
+
+    /// The rule that a proposal goes to one vocabulary holds for both halves.
+    #[test]
+    fn a_retraction_naming_another_graph_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let refused = store.propose_retraction(
+            &graph,
+            RdfSyntax::NQuads,
+            "<https://example.org/animals/cat> \
+             <http://www.w3.org/2004/02/skos/core#prefLabel> \"Chat\"@fr \
+             <https://example.org/elsewhere> .\n"
+                .as_bytes(),
+            &retraction_provenance(),
+        );
+        assert!(
+            matches!(refused, Err(StoreError::ImportGraphMismatch { .. })),
+            "a removal aimed at another vocabulary must be refused: {refused:?}"
+        );
+    }
+
+    /// A retraction may not be aimed at OpenBiz's own graphs, for the same reason an import may
+    /// not: the registry is not a vocabulary and is not authored.
+    #[test]
+    fn a_retraction_against_a_system_graph_is_refused() {
+        let dir = temp_dir();
+        let (store, _) = store_with_content(&dir);
+
+        let refused = store.propose_retraction(
+            &GraphId::system(),
+            RdfSyntax::Turtle,
+            FRENCH_LABEL.as_bytes(),
+            &retraction_provenance(),
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(StoreError::CandidateTargetNotVocabulary {
+                    kind: GraphKind::System,
+                    ..
+                })
+            ),
+            "OpenBiz's own graphs are not authored: {refused:?}"
+        );
+    }
+
+    /// What an operator will actually do: export the vocabulary, cut it down to the statements
+    /// they want gone, and hand that back. It has to round-trip, or the workflow does not exist.
+    #[test]
+    fn a_retraction_reads_the_syntax_the_export_writes() {
+        for syntax in RdfSyntax::ALL {
+            let dir = temp_dir();
+            let (store, graph) = store_with_content(&dir);
+
+            let mut exported = Vec::new();
+            store
+                .export_graph(graph.iri(), syntax, &mut exported)
+                .expect("export the vocabulary");
+
+            let candidate = store
+                .propose_retraction(
+                    &graph,
+                    syntax,
+                    exported.as_slice(),
+                    &retraction_provenance(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("an export of a vocabulary must retract from it as {syntax}: {error}")
+                });
+            assert_eq!(candidate.removals(), 4, "as {syntax}");
+
+            store
+                .decide(candidate.id(), Decision::Approve, "a reviewer")
+                .expect("approved");
+            assert!(
+                statements(&store, &graph).is_empty(),
+                "retracting a whole export must empty the vocabulary, as {syntax}"
+            );
+        }
+    }
+
+    /// A blank node survives export-edit-retract, and a *hand-written* one does not. Both halves
+    /// are measured rather than assumed.
+    ///
+    /// An import renames blank node labels so two files using `_:b1` do not merge; a retraction
+    /// cannot, because a renamed label would match nothing. That leaves the workflow's fate resting
+    /// on whether our serialiser writes labels our parser reads back as the same node — which no
+    /// RDF specification promises, so it is pinned here. It holds: an export of a vocabulary
+    /// retracts the vocabulary, blank nodes included.
+    ///
+    /// What does *not* hold, and must not silently half-work, is a file somebody typed. `_:note`
+    /// in a hand-written file is a different node from the one in the store no matter how it is
+    /// spelled, so it is refused by the presence check rather than removing something adjacent.
+    #[test]
+    fn a_blank_node_retracts_from_our_own_export_and_never_from_a_hand_written_label() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_vocabulary(&dir);
+        let imported = store
+            .propose_import(
+                &graph,
+                RdfSyntax::Turtle,
+                r#"
+                    @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+                    <https://example.org/animals/cat> skos:note [
+                        skos:prefLabel "an unnamed note"@en
+                    ] .
+                "#
+                .as_bytes(),
+                &import_provenance(),
+            )
+            .expect("proposed");
+        store
+            .decide(imported.id(), Decision::Approve, "a reviewer")
+            .expect("approved");
+        assert_eq!(statements(&store, &graph).len(), 2);
+
+        // A label nobody in the store uses: refused, and the vocabulary is untouched.
+        let typed_by_hand = store.propose_retraction(
+            &graph,
+            RdfSyntax::NTriples,
+            "_:note <http://www.w3.org/2004/02/skos/core#prefLabel> \"an unnamed note\"@en .\n"
+                .as_bytes(),
+            &retraction_provenance(),
+        );
+        assert!(
+            matches!(
+                typed_by_hand,
+                Err(StoreError::RetractionNotPresent { absent: 1, .. })
+            ),
+            "a blank node label somebody invented names no statement in the store: \
+             {typed_by_hand:?}"
+        );
+        assert_eq!(statements(&store, &graph).len(), 2);
+
+        // Our own export of the same statements: accepted, and it removes all of them.
+        let mut exported = Vec::new();
+        store
+            .export_graph(graph.iri(), RdfSyntax::NTriples, &mut exported)
+            .expect("export the vocabulary");
+        let candidate = store
+            .propose_retraction(
+                &graph,
+                RdfSyntax::NTriples,
+                exported.as_slice(),
+                &retraction_provenance(),
+            )
+            .expect("an export of a vocabulary must retract from it, blank nodes included");
+        store
+            .decide(candidate.id(), Decision::Approve, "a reviewer")
+            .expect("approved");
+        assert!(
+            statements(&store, &graph).is_empty(),
+            "a blank node that round-trips must round-trip completely"
+        );
+    }
+
     /// The whole point of the seam: an import proposes, and the vocabulary does not change.
     #[test]
     fn an_import_proposes_rather_than_writes() {
@@ -1039,7 +1955,7 @@ mod tests {
             "an unapproved candidate must not have reached the vocabulary"
         );
         assert_eq!(
-            statements(&store, candidate.payload()).len(),
+            statements(&store, additions_graph(&candidate)).len(),
             4,
             "the proposed statements must be staged where a reviewer can read them"
         );
@@ -1062,7 +1978,7 @@ mod tests {
         let registry = store.graphs().expect("read the registry");
         let staged = registry
             .iter()
-            .find(|entry| entry.iri() == candidate.payload().iri())
+            .find(|entry| entry.iri() == additions_graph(&candidate).iri())
             .expect("the staging graph is in the registry, because the store holds its statements");
         assert_eq!(staged.kind(), GraphKind::Candidate);
         assert_eq!(
@@ -1099,7 +2015,7 @@ mod tests {
 
         assert_eq!(
             statements(&store, &graph),
-            statements(&store, candidate.payload()),
+            statements(&store, additions_graph(&candidate)),
             "approval must land exactly the statements that were staged"
         );
 
@@ -1135,7 +2051,7 @@ mod tests {
             "a rejected candidate must not have reached the vocabulary"
         );
         assert_eq!(
-            statements(&store, candidate.payload()).len(),
+            statements(&store, additions_graph(&candidate)).len(),
             4,
             "what was refused must stay readable; deleting the evidence is not a default"
         );
@@ -1203,7 +2119,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("re-import {syntax}: {error}"));
 
             assert_eq!(
-                statements(&store, candidate.payload()),
+                statements(&store, additions_graph(&candidate)),
                 statements(&store, &graph),
                 "a {syntax} export did not propose back the statements it was written from"
             );
@@ -1425,8 +2341,8 @@ mod tests {
 
         assert_ne!(first.id(), second.id());
         assert_ne!(
-            first.payload().iri(),
-            second.payload().iri(),
+            additions_graph(&first).iri(),
+            additions_graph(&second).iri(),
             "two proposals must not share a staging graph"
         );
         assert_eq!(
@@ -1531,12 +2447,15 @@ mod tests {
         store
             .transaction(|txn| {
                 let system = GraphId::system();
-                txn.retract(&[Quad::new(
-                    candidate.id().subject(),
-                    named_node(STATE_IRI).into_owned(),
-                    Literal::new_simple_literal(CandidateState::Proposed.as_str()),
-                    NamedNode::new_unchecked(system.iri()),
-                )])?;
+                txn.remove_graph_quads(
+                    &system,
+                    &[Quad::new(
+                        candidate.id().subject(),
+                        named_node(STATE_IRI).into_owned(),
+                        Literal::new_simple_literal(CandidateState::Proposed.as_str()),
+                        NamedNode::new_unchecked(system.iri()),
+                    )],
+                )?;
                 txn.insert(
                     &system,
                     vec![(
@@ -1585,7 +2504,7 @@ mod tests {
             .expect("the record came back");
         assert_eq!(read_back, candidate);
         assert_eq!(
-            statements(&restored, read_back.payload()).len(),
+            statements(&restored, additions_graph(&read_back)).len(),
             4,
             "the proposed statements came back with the record"
         );

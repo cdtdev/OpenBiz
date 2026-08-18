@@ -1310,3 +1310,85 @@ look competent disables the one signal that catches a stuck loop.
   and my apply path has no concept of a precondition. That is not a gap in the removals item; it is
   a question about whether the seam's *apply* step is right, and I would rather find out now than
   after three producers depend on it.
+
+## Iteration 18 — 2026-08-18
+- **Took Phase 2's candidate seam, part 2 — removals**, which iteration 17 split out and
+  deliberately did not take, and which is the item every bulk operation in the phase waits on.
+  `main` was green and clean, both human inboxes were empty, and there were no open PRs.
+- **This closed the doubt iteration 17 ended on, which is the reason the item was worth taking
+  next.** That entry said a removal "has to name statements that *already exist* in the target",
+  that the vocabulary can move between the proposal and the approval, and that "my apply path has
+  no concept of a precondition". It now has two. A removal is checked against the vocabulary at
+  proposal — the whole file refused if any statement is missing, with the count and one example —
+  and checked **again inside the transaction that applies it**, refusing an approval the vocabulary
+  has outgrown. The second is the one that matters: the first only catches a producer working from
+  a stale copy, whereas the second catches the vocabulary moving underneath a review that is
+  measured in days.
+- **The option I spent longest rejecting was "apply what still matches".** It is the obvious
+  behaviour, it is what a naive `DELETE DATA` does, and it is a silent lie: the reviewer approved
+  twelve statements, ten leave, the command reports success, and there is no artefact anywhere
+  afterwards saying the change differed from the one that was reviewed. In a product whose pitch is
+  that an auditor can reconstruct why a statement changed, that is not a rough edge — it is the
+  failure the whole seam exists to prevent, arriving through the seam. A stale candidate stays in
+  `proposed` so it can still be rejected, because a proposal that can no longer be applied is
+  exactly the one somebody wants to close.
+- **Two staging graphs under one prefix, not two prefixes.** `urn:openbiz:graph:candidate:7` and
+  `urn:openbiz:graph:candidate:7:removals`. I nearly used `candidate-removals:` and stopped when I
+  worked out what `GraphId::classify` would do with it: the prefix test is a single `starts_with`,
+  so that IRI would have classified as a **vocabulary**, silently, on the restore path. The reserved
+  namespace exists to stop exactly that, and a second prefix would have been a second place for the
+  rule to be incomplete. The additions graph keeps the IRI it already had — rewriting the staging
+  IRIs of proposals a customer has already reviewed to make our naming tidier is rewriting their
+  audit trail.
+- **Format version 4, migration writes nothing, and the argument is stronger than version 3's.** A
+  version-3 build does not *fail* on a version-4 store: `read_record` looks up the predicates it
+  knows and ignores the rest, so it would read a candidate that removes twelve statements as one
+  that removes nothing, show a reviewer half the diff, and on approval apply only the additions
+  **while recording that the whole candidate was applied**. Every step of that succeeds. The stamp
+  is the only place it can be caught. I also gave the step a **one-step** end-to-end test from a
+  hand-written version-3 backup, beside the version-1 and version-2 ones, because a chain test
+  passes whether the last link ran or was skipped by an off-by-one — every earlier step having run
+  is enough to make the content assertions hold. Version 3's own step still has no such test and I
+  said so in `UNTESTED.md` rather than backfilling it as a drive-by.
+- **The fixture's failure message did its job for the second release running.** It says bumping the
+  format means writing the fixture for the new version and adding an older-format test beside it,
+  not editing the number. I did both. That message is now the single most useful line of test code
+  in the repo.
+- **Blank nodes were the one thing I could not reason my way to and had to measure.** An import
+  renames blank node labels; a retraction cannot, because a renamed label matches nothing. That
+  left the export-edit-retract workflow resting on whether our serialiser writes labels our parser
+  reads back as the same node, which no RDF specification promises. It holds — an N-Triples export
+  of a vocabulary retracts from it, blank nodes included — and a hand-written `_:note` is refused
+  by the presence check rather than removing something adjacent. Both directions are now pinned,
+  because both could change under an Oxigraph upgrade. I wrote the test as a two-branch
+  characterisation first, ran it to find out which branch fired, and only then turned it into an
+  assertion; writing the assertion first would have been a guess with a green tick on it.
+- **Tests: 322 Rust (from 302) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny`, and the
+  UI build and suite clean. The suite was proven to **discriminate** before it was trusted: three
+  mutations each turned it red — the stale check at approval disabled (2 tests), the presence check
+  at proposal disabled (1), and approval staging the removals but never applying them (2).
+- **Recorded:** `adr/0018`; one `UNTESTED.md` entry closed and four opened, two amended. The four
+  new ones are the honest edges of this item: nothing yet produces a candidate carrying *both*
+  halves; the counts count parsed statements rather than distinct ones; an approved removal's
+  staging graph is now the *only* copy of what was taken away, which makes the undecided retention
+  policy a bigger decision than it was; and the blank-node round trip is a property of this
+  Oxigraph, not of the specification.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` and GitHub's `Date` header both said
+  2026-08-18T18:55Z. Checked before writing this header, per iterations 16 and 17.
+- **Still uncertain:** whether refusing a stale removal is a precondition or a *deadlock*. Today the
+  only writer is an approved candidate, so a vocabulary changes only when somebody approves
+  something, and the stale case needs two candidates touching the same statements. When Phase 2's
+  authoring lands — a person editing a concept in the interface — the vocabulary will move
+  continuously, and every long-lived removal candidate becomes a candidate that *might* be
+  unapplicable by the time it is reviewed. I do not know whether that is rare (removals mostly name
+  statements nobody else is touching) or the normal case (removals mostly name the contentious
+  statements, which are exactly the ones being edited), and the difference decides whether "propose
+  it again" is an acceptable answer or a treadmill. I cannot find out from this build, because there
+  is nothing else that writes. The narrower thing I do not know: whether the refusal should be
+  *scoped to the conflict*. Today one missing statement out of two hundred refuses the whole
+  candidate, which is right if the removals are one intention and wrong if they are two hundred
+  independent ones — and my model has no way to tell those apart, because a candidate carries one
+  note for the whole change. That is the same gap iteration 17 named from the other side (an agent
+  wanting to explain its reasoning per statement), which makes it the second time a per-statement
+  rationale would have answered the question. If it comes up a third time it is a design change,
+  not a nuisance.

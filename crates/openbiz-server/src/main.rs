@@ -115,6 +115,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Import { graph, file } => {
             one_shot(store, |store| openbiz_server::import(store, &graph, &file))
         }
+        Command::Retract { graph, file } => {
+            one_shot(store, |store| openbiz_server::retract(store, &graph, &file))
+        }
         Command::Candidates => one_shot(store, openbiz_server::candidates),
         Command::Show { id } => one_shot(store, |store| openbiz_server::show(store, &id)),
         Command::Approve { id } => one_shot(store, |store| {

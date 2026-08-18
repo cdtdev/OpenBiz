@@ -815,7 +815,11 @@ mod tests {
                 .iter()
                 .map(|step| step.id)
                 .collect::<Vec<_>>(),
-            vec!["0002-register-system-graph", "0003-allow-candidate-graphs"],
+            vec![
+                "0002-register-system-graph",
+                "0003-allow-candidate-graphs",
+                "0004-allow-candidate-removals"
+            ],
             "a version-1 backup runs the whole chain up to this build's format version"
         );
 
