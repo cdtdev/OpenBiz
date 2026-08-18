@@ -168,6 +168,26 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   loop's own recurring unease is exactly the scope creep that brake exists to stop.
 - **Opened:** iteration 7
 
+### Build a SPARQL query console in the interface
+- **Status:** proposed.
+- **Gap:** `/api/sparql` is live, tested, and answers in all four results formats and all six RDF
+  syntaxes — and nothing in the interface calls it. A taxonomist cannot run a query in OpenBiz; they
+  need `curl` or an external SPARQL client. `CLAUDE.md` §4.4 requires anything user-facing to be
+  reachable in the UI and keyboard-navigable, and a query console is plainly user-facing. The
+  endpoint item was scoped to the endpoint, so this is recorded rather than folded into it.
+- **Why load-bearing:** it is the first screen in the product where a user *does* something rather
+  than reads a list, and it is the only way to see vocabulary content at all until Phase 2's
+  authoring path exists. It also exercises three server behaviours that currently have no human
+  reader: the format list, the refusals (a 406, a 413, a 503 with its reason), and the
+  `preserves_term_detail` warning that says CSV silently drops language tags — which is exactly the
+  warning that is worthless in an API and valuable at the point of choosing a download format.
+  Without it the endpoint's careful error messages are read only by tests.
+- **Cost & impact:** one iteration. Depends on nothing not already built — the endpoint, the format
+  list, and the graph registry are all served. Should reuse the export item's format chooser rather
+  than growing a second one.
+- **Suggested phase:** Phase 1 (alongside the endpoint) or early Phase 3 (the interface phase), and
+  the loop has no view on which — that is the judgement being asked for.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
@@ -293,3 +313,24 @@ intervening change set summarised for a conflicted author, and this wants a chan
 for an external recipient. Three seats, one capability — Phase 10 should build "explain a set of RDF
 changes to a human in the vocabulary's own terms" once and route three questions to it, rather than
 discovering that convergence after building three agents._
+
+_Iteration 9 (SPARQL query endpoint): one found, and it is a different shape from the previous
+three. **Not in the evaluator** — SPARQL evaluation is specified, deterministic, and the last place
+a probabilistic component belongs; and not in query *generation* either, at least not as the
+headline, because "natural language to SPARQL" is the demo every vendor in this market gives and
+none of them will say what happens when the generated query is subtly wrong. The opportunity is the
+one this iteration's own design kept running into: **the endpoint refuses well, and a refusal is
+only as good as the reader's ability to act on it.** A 413 says "more than 100 000 results, add a
+LIMIT or narrow the query" and a 503 says "ran longer than 30 seconds" — correct, honest, and
+useless to a subject-matter expert who did not write the query by hand and has no idea which of its
+five triple patterns is the expensive one. The manual path is reading a query plan, which is a skill
+the charter's target user explicitly does not have. **The candidate:** an agent that reads a refused
+query together with the shape of the vocabulary it ran against and proposes a narrowed rewrite —
+"this pattern is unconstrained on all three positions; adding `?s a skos:Concept` reduces it to the
+12 000 concepts in Finance" — emitted as a **proposal the user reads, edits, and runs themselves**,
+never auto-executed. It writes nothing to any vocabulary, so it needs no candidate seam; with
+`NullProvider` the user gets exactly today's behaviour, which is the refusal text. Worth noting
+what this shares with the other three: it is again "explain something to a human in the
+vocabulary's own terms", but the input is a *query* rather than a change set, so it is a genuinely
+fourth capability rather than the fourth seat on the same one — and if Phase 10 builds the
+change-explanation agent first, this one should be checked against it before being built separately._

@@ -24,6 +24,7 @@ axum.workspace = true
 mime_guess.workspace = true
 rust-embed.workspace = true
 serde.workspace = true
+serde_urlencoded.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true

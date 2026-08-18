@@ -36,6 +36,12 @@ oxigraph = { version = "0.5", default-features = false, features = ["rocksdb"] }
 rust-embed = { version = "8", features = ["debug-embed", "include-exclude"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `application/x-www-form-urlencoded`, for the SPARQL protocol's POST form. Already in the
+# tree — axum's `Query` and `Form` extractors are built on it — so depending on it directly
+# adds a manifest line and no supply-chain surface. Using the *same* decoder for the URL
+# query string and for a form body is the point: SPARQL 1.1 Protocol defines both, and two
+# decoders would eventually disagree about a `+`, a `%`, or a repeated key.
+serde_urlencoded = "0.7"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }

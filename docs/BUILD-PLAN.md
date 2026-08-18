@@ -5,7 +5,7 @@ The backlog and the burn-down. One `- [ ]` per item; check it off only when it m
 
 **Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
 memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is five items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
+Phase 1 is seven items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
 the binary; it has a **named-graph model with a real enforcement point** — one graph per
 vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
 authoring, and a single write choke point that every write passes through — and **that model is now
@@ -15,22 +15,32 @@ than hidden. **Writes are transactional and serialised**, which closed a real co
 the creation path. **A graph can be got back out**: `GET /api/export` serialises any registered
 graph to any of the six syntaxes §2 commits to, the interface offers it per vocabulary with a
 format chooser read from the server, and the export carries none of OpenBiz's own bookkeeping.
-143 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+**And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
+four results formats and all six RDF syntaxes, over a default dataset that is the user's
+vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
+212 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 6 of 12 items done (the serialisation item
-was split in two — see the split note below). Serialisation
-landed this iteration: `RdfSyntax` is our own enum over the six syntaxes §2 names, `Store::export_graph`
-streams one graph into any of them, and `GET /api/export` serves it with content negotiation, a
-404 for a graph that is not registered, and headers that say what the file is. **Next: parse those
-same six syntaxes** — deliberately deferred behind the candidate seam or backup/restore, because a
-parser's caller is an import and an import mutates a vocabulary (see the split note). Vocabulary
-*creation* over HTTP remains deliberately absent — §1.7 requires discovery to run before creation and
-`DiscoveryProvider` does not exist until Phase 2 — so `POST /api/graphs` answers 405 rather than
-being quietly added.
+**Current position:** Phase 1 (RDF core & store), 7 of 12 items done (the serialisation item
+was split in two — see the split note below). The **SPARQL 1.1 Query endpoint** landed this
+iteration: three protocol request forms, four results formats, six RDF serialisations, content
+negotiation across both families from one `Accept` header, and two bounds that refuse rather than
+truncate. The decision with the most product in it is the **default dataset** — a query naming no
+dataset sees the registered vocabulary graphs and nothing else, so a taxonomist's first query
+returns their vocabulary rather than the union of everything including our bookkeeping, and a
+query's own `FROM` is still honoured verbatim. See `adr/0011`.
+
+**Next: SPARQL 1.1 Update, guarded by authorisation.** Note that authorisation does not exist yet
+(`UNTESTED.md`: "The JSON API has no authentication"), so that item is likely to need a split or a
+blocker — the guard is the harder half and it is not obviously Phase 1 work. Parsing the six
+syntaxes remains deliberately deferred behind the candidate seam or backup/restore (see the split
+note). Vocabulary *creation* over HTTP remains deliberately absent — §1.7 requires discovery to run
+before creation and `DiscoveryProvider` does not exist until Phase 2 — so `POST /api/graphs`
+answers 405 rather than being quietly added. **There is no SPARQL console in the interface**; the
+endpoint's caller is HTTP, and the console is an open §4.4 gap in `UNTESTED.md` and a proposal.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -217,7 +227,39 @@ the interface is a core differentiator, and building it late means retrofitting 
       > which is the exact failure §3 warns about. It lands with whichever comes first: backup and
       > restore below, which parses N-Quads and touches no vocabulary, or Phase 2's candidate seam.
       > Serialisation has no such dependency — an export is a read.
-- [ ] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)
+- [x] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)
+      > **Better, not parity.** Every tool in this market has a SPARQL endpoint, so the question is
+      > not whether but what it answers with by default, what stops it, and what it refuses to
+      > guess. Three things they do badly are what this item is about. (1) **The default dataset is
+      > a trap.** Point a taxonomist at PoolParty's or GraphDB's endpoint and
+      > `SELECT * WHERE { ?s ?p ?o }` returns the union of everything, tool bookkeeping interleaved
+      > with their vocabulary and unlabelled. Here the default dataset is the registered
+      > *vocabulary* graphs and nothing else — `adr/0007`'s named-graph model paying for itself a
+      > second time — the rule is written down, the graphs it covers are exactly what
+      > `GET /api/graphs` already reports as `kind: "vocabulary"`, and a query naming its own `FROM`
+      > is honoured verbatim so an operator can still ask "what is actually in my store?". The
+      > default is *chosen*, not imposed. (2) **A runaway query is the caller's problem to notice.**
+      > Endpoints either run until something falls over or truncate at a row cap and hand back the
+      > truncation as if it were the answer. Here both bounds **refuse**: a governance team cannot
+      > sign off rows they were never told were missing. (3) **`Accept` is advisory.** Ask a typical
+      > endpoint for `text/turtle`, send it a `SELECT`, and you get JSON labelled JSON with no
+      > acknowledgement that negotiation failed — here that is a 406 naming what the query actually
+      > produced. Also: an update is refused *as an update*, recognised by parsing it rather than by
+      > sniffing for a keyword, and a `SERVICE` clause is a 501 stating that this build has no HTTP
+      > client so nothing was sent to the named endpoint. `GET /api/sparql/formats` advertises the
+      > four results formats and **which of them loses term detail** — CSV writes bare text, so a
+      > language tag is simply gone, which for a multilingual thesaurus is the difference between a
+      > label and which language it is in. That constant is read from the same place the serialiser
+      > branches on, and serving it is what gives it a production reader instead of leaving it a
+      > fact only its own test consults.
+      > **Scope, honestly.** This is SPARQL 1.1 **Query** over the protocol's three query forms, not
+      > "SPARQL 1.1 Protocol": `default-graph-uri` and `named-graph-uri` are a named 400 rather than
+      > an implementation, because how a protocol-supplied dataset composes with the
+      > vocabulary-graph default *and* with a query's own `FROM` is a three-way decision worth
+      > taking deliberately. Update and Graph Store Protocol are the two items below. And **there is
+      > no query console in the interface** — the item is scoped to the endpoint and its production
+      > caller is HTTP, so the console is recorded as an open §4.4 gap in `UNTESTED.md` and proposed
+      > rather than quietly folded in here. See `adr/0011`.
 - [ ] SPARQL 1.1 Update endpoint, guarded by authorisation
 - [ ] SPARQL Graph Store Protocol
 - [ ] **Spike:** benchmark Oxigraph query evaluation at 10k / 100k / 1M concepts. Record real

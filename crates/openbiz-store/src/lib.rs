@@ -40,8 +40,12 @@ use oxigraph::store::Store as Backend;
 use thiserror::Error;
 
 mod graph;
+mod query;
+mod results;
 mod syntax;
 
+pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
+pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;
 
 pub use graph::{
@@ -165,6 +169,61 @@ pub enum StoreError {
         iri: String,
         /// The syntax it was being written in.
         syntax: RdfSyntax,
+        /// The underlying cause — usually the caller's writer failing, not the store.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The text offered as a query is not valid SPARQL 1.1.
+    ///
+    /// Carries the parser's own words, which is safe here in a way it is not elsewhere: the detail
+    /// is about the *caller's own query text*, not about the customer's data or their deployment.
+    /// A caller who cannot see where their query is wrong will guess.
+    #[error("that is not a valid SPARQL 1.1 query: {detail}")]
+    QuerySyntax {
+        /// The parser's complaint, verbatim.
+        detail: String,
+    },
+    /// The text offered as a query parses as a SPARQL Update.
+    ///
+    /// Distinct from [`StoreError::QuerySyntax`] because the caller's mistake is different and so
+    /// is the fix. An update refused as a syntax error sends someone hunting for a typo in text
+    /// that has none.
+    #[error("that is a SPARQL Update, not a query, and querying never writes")]
+    QueryIsUpdate,
+    /// A query answered with more than it was allowed to.
+    ///
+    /// A refusal rather than a truncation, on purpose. Handing back the first `limit` rows of a
+    /// larger answer produces a document that is complete-looking, valid, and wrong — and in a
+    /// governance tool it is wrong in the direction of "the row you were looking for is not here".
+    #[error("the query answered with more than {limit} results")]
+    QueryTooLarge {
+        /// The cap that was exceeded.
+        limit: u64,
+    },
+    /// A query ran past its deadline and was cancelled.
+    #[error("the query ran for longer than it is allowed to and was cancelled")]
+    QueryTimedOut,
+    /// A query needs SPARQL 1.1 Federated Query, which this build does not have.
+    ///
+    /// Not a failure and not a fault: it is a capability this binary was deliberately built
+    /// without. Oxigraph is linked with its `http-client` feature off (`docs/adr/0006`) so that
+    /// nothing in the product can open an outbound connection, which is what makes `CLAUDE.md`
+    /// §1.1's air-gapped operation a property of the binary rather than a promise. A caller told
+    /// only "the query failed" would reasonably retry it.
+    #[error(
+        "the query uses SERVICE, and this build has no federated query: it is compiled without an \
+         HTTP client so that it can run air-gapped"
+    )]
+    QueryNeedsFederation,
+    /// A query could not be evaluated.
+    #[error("the query could not be evaluated: {detail}")]
+    QueryFailed {
+        /// The evaluator's complaint.
+        detail: String,
+    },
+    /// An answer could not be written out.
+    #[error("the query's answer could not be written: {source}")]
+    AnswerWrite {
         /// The underlying cause — usually the caller's writer failing, not the store.
         #[source]
         source: std::io::Error,

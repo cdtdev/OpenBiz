@@ -107,6 +107,46 @@ pub struct ExportFormats {
     pub formats: Vec<ExportFormat>,
 }
 
+/// One SPARQL query-results serialisation the SPARQL endpoint can write.
+///
+/// The sibling of [`ExportFormat`], and served for the same reason: the interface must not be able
+/// to offer a format the server cannot write, and must not describe one wrongly.
+///
+/// `preserves_term_detail` is the field that earns *this* endpoint, and it is a sharper warning
+/// than its export counterpart. Three of the four results formats record what kind of RDF term
+/// each binding is — JSON and XML name it outright, TSV writes it in SPARQL's own syntax. **CSV
+/// does not.** Every value is bare text, so `"1"` the string and `1` the integer are identical, an
+/// IRI is indistinguishable from a literal that looks like one, and a **language tag is simply
+/// gone**. For a multilingual thesaurus that is not a technicality — it is the difference between
+/// a label and which language the label is in, and the shape of the mistake is a governance team
+/// exporting a review spreadsheet as CSV, editing it, and re-importing a vocabulary whose language
+/// tags have all quietly become the default. The specification says so; no tool in this market
+/// says so at the point of choosing, which is the only point where saying it helps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultsFormat {
+    /// The value to pass as `?format=`.
+    pub token: String,
+    /// The name to show a human.
+    pub label: String,
+    /// The IANA media type, also accepted in `Accept`.
+    pub media_type: String,
+    /// The conventional file extension, without a dot.
+    pub file_extension: String,
+    /// Whether the syntax records what *kind* of RDF term each binding is, including its language
+    /// tag and datatype. False for CSV, which loses both silently.
+    pub preserves_term_detail: bool,
+}
+
+/// Every query-results serialisation this build can write, in the order to offer them.
+///
+/// The first entry is the default a caller gets when they express no preference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResultsFormats {
+    /// The formats, least lossy first.
+    pub formats: Vec<ResultsFormat>,
+}
+
 /// The body of any failed API response.
 ///
 /// One shape for every error so a client has exactly one thing to parse. `message` is written for
