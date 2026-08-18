@@ -45,19 +45,36 @@ Do not delete it — the record of what took how long to close is the signal.
   test that a built asset was reachable from the binary.
 - **Opened:** Phase 0 hand-build (pre-iteration-1) · **Closed:** iteration 1
 
-### The UI has no test suite at all
-- **Kind:** no-production-caller
-- **What is proven:** `ui/` typechecks under `tsc --noEmit` and builds. The `App` component's
-  `fetch("/healthz")` is now reachable from the binary — `tests/serves_embedded_ui.rs` proves the
-  same origin answers `/healthz` with `{"status":"ok"}`, so the request the component makes will
-  succeed.
-- **What is not:** **no test runner is installed** (`ui/package.json` has no `test` script), so no
-  assertion exists that `App` renders the health report, renders the `role="alert"` error branch on
-  a failed fetch, or aborts cleanly on unmount. The three `Probe` states are written and never
-  exercised. The iteration driver's `npm test` step is currently a no-op that silently passes.
-- **What would close it:** Vitest plus Testing Library, and a test per `Probe` state. This wants
-  doing before Phase 3 adds real components, not after.
-- **Opened:** iteration 1
+### ~~The UI has no test suite at all~~ — CLOSED, iteration 4
+- **What is now proven:** Vitest + Testing Library run 10 assertions over `App` in CI (`npm test` in
+  the `UI` job). All three `Probe` states are exercised: the loading text and the single `/healthz`
+  call on mount; the success line naming status and version; the `role="alert"` branch for an HTTP
+  refusal, a transport rejection, and a non-`Error` rejection; the unmount abort; the `AbortError`
+  swallow; and a StrictMode double-mount that must not paint a spurious alert. Each was shown to
+  fail against a deliberately broken `App.tsx` before being trusted — see the plan item for the
+  seven mutants.
+- **Correction to the original entry:** it said the driver's `npm test` "silently passes". It did
+  not — there was no `test` script, so it exited 1 with `Missing script: "test"`, and the `UI` CI
+  job never called it. Zero UI assertions had ever run either way.
+- **Opened:** iteration 1 · **Closed:** iteration 4
+
+### The UI suite asserts on jsdom, and covers one component
+- **Kind:** narrowly-proven
+- **What is proven:** `App`'s render output and probe lifecycle, under jsdom, via accessible
+  queries (`getByRole`) rather than test IDs — so the assertions are about what a user or a screen
+  reader perceives, not about markup shape.
+- **What is not:** three things. (1) **jsdom is not a browser** — no layout, no real paint, no CSS,
+  no focus semantics beyond jsdom's approximation. The Phase 3 Playwright item is what closes that;
+  see "Nothing renders the UI in a browser". (2) **`main.tsx` is untested** — the "root element
+  missing" throw and the `createRoot` call have no assertion; only `App` is mounted, by the test's
+  own `render`. (3) **`CLAUDE.md` §4.4's keyboard-navigability clause is still unenforced.** Nothing
+  in `App` is interactive yet, so there is nothing to tab to and no test would be meaningful — but
+  the moment Phase 3 adds a control, a keyboard test has to arrive with it, and no mechanism
+  currently forces that.
+- **What would close it:** for (1) the Playwright item; for (2) a test that mounts `main.tsx`
+  against a document with and without `#root`; for (3) a Phase 3 convention, ideally a lint or a
+  shared test helper, that makes an interactive component without a keyboard test fail.
+- **Opened:** iteration 4
 
 ### Nothing renders the UI in a browser
 - **Kind:** environment-limited
@@ -230,10 +247,39 @@ Do not delete it — the record of what took how long to close is the signal.
   installs `clang` and `libclang-dev` explicitly rather than relying on the runner image.
 - **What is not:** this machine has no `clang`, no `libclang`, and no passwordless `sudo`, so
   `cargo test --workspace` fails at `bindgen` on a clean checkout. The loop works around it by
-  extracting `libclang1-20` from a downloaded `.deb` into `~/.local/libclang` and exporting
-  `LIBCLANG_PATH`. **That workaround is not in the repo and does not survive a machine reset** — a
-  future iteration that starts with an unexplained `Unable to find libclang` panic should read this
-  entry rather than conclude the store is broken.
+  extracting `libclang1-20` and `libclang-common-20-dev` from downloaded `.deb`s into
+  `~/.local/libclang`. **That workaround is not in the repo and does not survive a machine reset** —
+  a future iteration that starts with an unexplained `bindgen` panic should read this entry rather
+  than conclude the store is broken.
+- **The full incantation, because `LIBCLANG_PATH` alone is not enough** (iteration 4 lost time to
+  this): with only `LIBCLANG_PATH` set, libclang loads but fails to locate its own builtin headers
+  and `bindgen` dies on `rocksdb/c.h:65:10: fatal error: 'stdbool.h' file not found` — a *different*
+  message from the `Unable to find libclang` this entry originally described, and easy to misread as
+  a real build break. Both variables are needed:
+  ```
+  export LIBCLANG_PATH="$HOME/.local/libclang/usr/lib/llvm-20/lib"
+  export BINDGEN_EXTRA_CLANG_ARGS="-resource-dir=$HOME/.local/libclang/usr/lib/llvm-20/lib/clang/20"
+  ```
 - **What would close it:** a human running `sudo apt install clang libclang-dev` on the loop
   machine. Out of loop scope (`CLAUDE.md` §8 — needs root).
-- **Opened:** iteration 3
+- **Opened:** iteration 3 · **Amended:** iteration 4
+
+### The UI dependency tree is outside the §5 licence gate
+- **Kind:** unenforced-policy
+- **What is proven:** `cargo deny check licenses` enforces `CLAUDE.md` §5 over the whole Rust tree
+  in CI, and it is green. The four packages added this iteration were checked by hand before being
+  committed: `vitest` (MIT), `jsdom` (MIT), `@testing-library/react` (MIT), `@testing-library/dom`
+  (MIT). A sweep of all 153 installed npm packages found 134 MIT, 8 ISC, 5 Apache-2.0, 2 BSD-2,
+  2 BSD-3, 1 MIT-0 — all permitted — and exactly one unlisted licence.
+- **What is not:** **nothing enforces this.** §5 says "every new dependency gets a licence check",
+  and for `ui/` that check is a human remembering to run one. The sweep above was ad hoc and is not
+  in the repo, so the next npm install is unchecked by default. The one unlisted licence is
+  `caniuse-lite` under **CC-BY-4.0** — pre-existing, pulled in transitively by Vite via
+  `browserslist`, build-time only, and a *data* package rather than code, so none of it reaches the
+  shipped binary. CC-BY-4.0 is attribution-only and not copyleft, so this is the "unlisted but
+  permissive in substance" case of §5 rather than the forbidden one — but §5 requires an ADR for
+  that judgement and there is no ADR, because there is no allow list for it to widen.
+- **What would close it:** the `Audit the UI dependency tree for licences` proposal in
+  `PROPOSED.md`. Deliberately not done here: adding an unrequested CI gate is scope creep, and the
+  CC-BY-4.0 call deserves its own ADR rather than a footnote in a test-runner commit.
+- **Opened:** iteration 4
