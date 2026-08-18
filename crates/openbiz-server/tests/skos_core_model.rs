@@ -423,6 +423,94 @@ fn inspect_finds_a_duplicate_preferred_label_that_exists_only_by_dumbing_down() 
     assert!(output.status.success(), "{}", stderr(&output));
 }
 
+/// Appendix B.4 through the binary: a link between two labels, and the converse we supplied.
+///
+/// This is the shape ISO 25964's label relationships take in SKOS-XL — "LATAM" stands in a
+/// recorded relationship to "Latin America", and the relationship hangs off the *labels* rather
+/// than off the concept, which is precisely what plain SKOS cannot express. The link is stated in
+/// one direction only, as an author would state it, and S62 supplies the other.
+#[test]
+fn inspect_reports_links_between_labels_and_the_converse_it_inferred() {
+    let dir = authored();
+    import_and_approve(dir.path(), "xl.ttl", XL_CONCEPTS);
+
+    import_and_approve(
+        dir.path(),
+        "acronym.ttl",
+        "@prefix skosxl: <http://www.w3.org/2008/05/skos-xl#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:label-latam-short skosxl:labelRelation ex:label-latam .\n",
+    );
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = stdout(&output);
+
+    // One link, not two. The graph carries one statement and S62 makes it hold both ways; a
+    // report saying "2 links" would be counting our own inference as the author's work.
+    assert!(
+        report.contains("1 link(s) between labels, 1 converse(s) inferred under S62"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "<https://example.org/regions/label-latam> skosxl:labelRelation \
+             <https://example.org/regions/label-latam-short>"
+        ),
+        "the inferred converse must be shown with its direction, not merely counted: {report}"
+    );
+    assert!(
+        report.contains("skosxl:labelRelation is an instance of owl:SymmetricProperty."),
+        "the derivation must quote the statement that licensed it: {report}"
+    );
+
+    // The vocabulary is unchanged in every other respect: a link entails no label, no class it
+    // did not already have, and no finding.
+    assert!(report.contains("findings: 0"), "{report}");
+    assert!(
+        report.contains("2 skosxl:Label resource(s), 2 with exactly one literal form"),
+        "{report}"
+    );
+    assert!(
+        report.contains("no SKOS integrity condition is violated"),
+        "{report}"
+    );
+}
+
+/// A `skosxl:labelRelation` pointing at a concept is caught, and the report says which statement
+/// caught it — the case that makes S60 worth applying rather than merely quoting.
+#[test]
+fn inspect_refuses_a_label_relation_that_points_at_a_concept() {
+    let dir = authored();
+    import_and_approve(dir.path(), "xl.ttl", XL_CONCEPTS);
+
+    import_and_approve(
+        dir.path(),
+        "mislinked.ttl",
+        "@prefix skosxl: <http://www.w3.org/2008/05/skos-xl#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:label-latam skosxl:labelRelation ex:latam .\n",
+    );
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+
+    assert!(
+        report.contains("The rdfs:range of skosxl:labelRelation is the class skosxl:Label."),
+        "the range rule is what makes the concept a label: {report}"
+    );
+    assert!(
+        report.contains(
+            "skosxl:Label is disjoint with each of skos:Concept, skos:ConceptScheme and \
+             skos:Collection."
+        ),
+        "and S48 is what makes that a contradiction: {report}"
+    );
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "{report}"
+    );
+}
+
 /// A plain-SKOS vocabulary gains no SKOS-XL section, because "0 labels" on every report is noise
 /// and the section's presence is itself the answer to "does this thesaurus use SKOS-XL?".
 #[test]

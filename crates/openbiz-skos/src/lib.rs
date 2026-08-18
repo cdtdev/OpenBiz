@@ -20,8 +20,8 @@ pub use model::{
     SKOS_TOP_CONCEPT_OF,
 };
 pub use xl::{
-    LabelOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL, SKOSXL_LITERAL_FORM,
-    SKOSXL_PREF_LABEL,
+    LabelOrigin, RelationOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL,
+    SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM, SKOSXL_PREF_LABEL,
 };
 
 /// Namespace IRIs used throughout the SKOS model.

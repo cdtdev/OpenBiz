@@ -395,7 +395,42 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   B.3.4.1 exists to provide is a thing only OpenBiz performs. It is no longer plausible to call
   this a tidy-up, and it should be decided before the concept tree rather than at the latest
   before Phase 4.
+- **Amended at iteration 23 — a third instance, and no new argument.** S62's symmetric closure
+  produces label links that are in our answers and not in our exports, exactly as S11's and
+  S55–S57's entailments are. Recorded so the count is honest; the case above is unchanged and the
+  urgency is not raised again, because raising it a second time would be padding rather than
+  evidence.
 - **Suggested phase:** Phase 2, **before** the concept tree.
+
+### Read `rdfs:subPropertyOf`, so a refinement of `skosxl:labelRelation` is not invisible
+- **Status:** proposed.
+- **Gap:** Appendix B.4.1 says `skosxl:labelRelation` "is not intended to be used directly, but
+  rather as an extension point which can be refined for more specific labeling scenarios", and
+  Example 89 refines it to `ex:acronym`. That is how ISO 25964's label relationships actually
+  reach SKOS-XL — an acronym, a spelling variant, a translation pairing — so **the ordinary use of
+  B.4 is the one we cannot read**. Iteration 23 applied S59–S62 to the property itself; a
+  vocabulary that uses a refinement instead gets no links at all, and `openbiz inspect` omits the
+  link line rather than saying "there are links here in a vocabulary I do not read".
+- **Why load-bearing:** it is the "reports zero where a real vocabulary has thousands" failure
+  again, and this time it is aimed at exactly the customer the product is for. A thesaurus
+  migrated from ISO 25964 will express its label relationships through refinements, and our report
+  will say the labels are unlinked. That is indistinguishable from a correct answer, which is what
+  makes it worse than an error.
+- **What is *not* being asked for:** closing the refinement itself. B.4.4.1 is explicit that "a
+  sub-property of a symmetric property is not necessarily symmetric" — "FAO" is an acronym for
+  "Food and Agriculture Organization" and the converse is false — and a test already asserts we do
+  not. The sound step is only that a refinement's statement entails the *super*-property's, which
+  S62 may then close.
+- **Why the loop is not deciding it:** because the honest implementation is not a special case for
+  one property in `openbiz-skos`. RDFS sub-property reasoning is either the reasoner's job
+  (`openbiz-owl`, Phase 5) or a SHACL rule pack's (Phase 4), and choosing between them is the same
+  standing question as "where do entailments live" above — which is a human's to settle, not a
+  fifth iteration's to guess at. Building it into the SKOS crate to close the gap quickly would
+  put an inference path somewhere it will have to be moved from.
+- **Cost & impact:** small if it lands in the reasoner alongside other RDFS entailments; wrong at
+  any price if it lands as a hard-coded arm in the SKOS builder. No new dependency either way.
+- **Suggested phase:** Phase 4 or Phase 5, decided together with the entailment-location proposal
+  above rather than separately.
 
 ### Decide what to do about the store dropping derived integer datatypes
 - **Status:** proposed.

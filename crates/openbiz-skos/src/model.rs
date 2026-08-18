@@ -66,7 +66,7 @@ use std::fmt;
 
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::ns;
-use crate::xl::{LabelOrigin, SKOSXL_LITERAL_FORM};
+use crate::xl::{LabelOrigin, RelationOrigin, SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM};
 
 /// `rdf:type`.
 pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -216,6 +216,10 @@ pub enum SkosRule {
     S56,
     S57,
     S58,
+    S59,
+    S60,
+    S61,
+    S62,
 }
 
 impl SkosRule {
@@ -249,6 +253,10 @@ impl SkosRule {
             SkosRule::S56 => "S56",
             SkosRule::S57 => "S57",
             SkosRule::S58 => "S58",
+            SkosRule::S59 => "S59",
+            SkosRule::S60 => "S60",
+            SkosRule::S61 => "S61",
+            SkosRule::S62 => "S62",
         }
     }
 
@@ -330,6 +338,10 @@ impl SkosRule {
                 "skosxl:prefLabel, skosxl:altLabel and skosxl:hiddenLabel are pairwise disjoint \
                  properties."
             }
+            SkosRule::S59 => "skosxl:labelRelation is an instance of owl:ObjectProperty.",
+            SkosRule::S60 => "The rdfs:domain of skosxl:labelRelation is the class skosxl:Label.",
+            SkosRule::S61 => "The rdfs:range of skosxl:labelRelation is the class skosxl:Label.",
+            SkosRule::S62 => "skosxl:labelRelation is an instance of owl:SymmetricProperty.",
         }
     }
 }
@@ -957,6 +969,7 @@ pub struct Resource {
     labels: BTreeMap<LexicalLabel, BTreeMap<LabelKind, LabelOrigin>>,
     literal_forms: BTreeSet<Literal>,
     xl_labels: BTreeMap<Node, BTreeSet<LabelKind>>,
+    label_relations: BTreeMap<Node, RelationOrigin>,
 }
 
 impl Resource {
@@ -1044,6 +1057,21 @@ impl Resource {
             .iter()
             .filter(move |(_, kinds)| kinds.contains(&kind))
             .map(|(label, _)| label)
+    }
+
+    /// The labels this one is linked to by `skosxl:labelRelation`, and how each link arrived.
+    ///
+    /// **Closed under S62**, which makes the property symmetric: a graph that states the link one
+    /// way has it both ways here, and the direction it did not state carries
+    /// [`RelationOrigin::Entailed`]. Non-empty only on a `skosxl:Label`, because S60 and S61 make
+    /// both ends of a link one — asserting a link from a `skos:Concept` does not put the link
+    /// somewhere else, it makes that concept a label as well and so violates S48.
+    ///
+    /// A *refinement* of `skosxl:labelRelation` — Example 89's `ex:acronym` — is **not** in here.
+    /// See the [`xl`](crate::LabelOrigin) module: we read no `rdfs:subPropertyOf`, and closing a
+    /// refinement would be wrong even if we did.
+    pub fn label_relations(&self) -> &BTreeMap<Node, RelationOrigin> {
+        &self.label_relations
     }
 
     /// Its preferred label in `language`, if it has one.
@@ -1203,6 +1231,7 @@ pub struct CoreModelBuilder {
     labels: BTreeMap<Node, BTreeMap<LexicalLabel, BTreeSet<LabelKind>>>,
     literal_form: BTreeMap<Node, BTreeSet<Literal>>,
     xl_labels: BTreeMap<Node, BTreeMap<Node, BTreeSet<LabelKind>>>,
+    label_relations: BTreeSet<(Node, Node)>,
     findings: Vec<Finding>,
     statements_read: usize,
 }
@@ -1270,6 +1299,11 @@ impl CoreModelBuilder {
                         .insert(literal);
                 }
             },
+            SKOSXL_LABEL_RELATION => {
+                self.object_property(subject, &predicate, object, SkosRule::S59, |b, s, o| {
+                    b.label_relations.insert((s, o));
+                })
+            }
             _ if LabelKind::from_xl_iri(&predicate).is_some() => {
                 // Unreachable `None`, as below: the guard has already matched the IRI.
                 if let Some(kind) = LabelKind::from_xl_iri(&predicate) {
@@ -1375,12 +1409,17 @@ impl CoreModelBuilder {
         self.resolve_member_lists(&mut model);
         self.attach_labels(&mut model);
         // The SKOS-XL passes run in the order the specification's dependencies do: the classes
-        // first (S50, S54), then the forms those classes constrain (S51, S52), then the chains
-        // that need a form to dumb down (S55–S57, S58). Disjointness runs after all of it because
-        // S48 has to see a `skosxl:Label` established by S50 or S54, not only by `rdf:type`; the
+        // first (S50, S54, S60, S61), then the symmetric closure of the links those classes came
+        // from (S62), then the forms the classes constrain (S51, S52), then the chains that need a
+        // form to dumb down (S55–S57, S58). S52's "no literal form" is why the class rules must
+        // precede it: a label established only by a link is still a label with no form, and the
+        // report should say so. Disjointness runs after all of it because
+        // S48 has to see a `skosxl:Label` established by S50, S54, S60 or S61, not only by
+        // `rdf:type`; the
         // label conditions run last because S13 and S14 are what the chains feed, and B.3.4.2
         // says Examples 84–87 are inconsistent *because of* them.
         self.apply_xl_class_rules(&mut model);
+        self.close_label_relations(&mut model);
         self.resolve_literal_forms(&mut model);
         self.entail_dumbed_down_labels(&mut model);
         Self::check_disjointness(&mut model);
@@ -1389,11 +1428,19 @@ impl CoreModelBuilder {
         model
     }
 
-    /// S50 and S54 — the two rules that make something a `skosxl:Label` without an `rdf:type`.
+    /// S50, S54, S60 and S61 — the four rules that make something a `skosxl:Label` without an
+    /// `rdf:type`.
     ///
     /// S50 is the domain of `skosxl:literalForm`; S54 is the range of the three XL labelling
     /// properties. Between them, Example 84 needs no `rdf:type` statement at all and still has
-    /// two labels — which is why it is written without one.
+    /// two labels — which is why it is written without one. S60 and S61 are the domain and range
+    /// of `skosxl:labelRelation`, so both ends of a link are labels too.
+    ///
+    /// The links are read as the graph **stated** them, before S62's closure, so that each end is
+    /// classified by the statement that is actually in the file: the subject under S60, the object
+    /// under S61. Running after the closure would give half the labels a citation resting on a
+    /// statement we inferred, when a one-step citation resting on the graph's own was available —
+    /// the same choice `apply_scheme_rules` records for S5 against S8-then-S7-then-S4.
     fn apply_xl_class_rules(&mut self, model: &mut CoreModel) {
         for (label, forms) in &self.literal_form {
             let Some(form) = forms.iter().next() else {
@@ -1421,6 +1468,52 @@ impl CoreModelBuilder {
                     &format!("{resource} skosxl:{} {label}", kind.local_name()),
                 );
             }
+        }
+
+        for (from, to) in &self.label_relations {
+            let premise = format!("{from} skosxl:labelRelation {to}");
+            entail_class(model, from, SkosClass::Label, SkosRule::S60, &premise);
+            entail_class(model, to, SkosClass::Label, SkosRule::S61, &premise);
+        }
+    }
+
+    /// S62 — `skosxl:labelRelation` is symmetric, so a link entails its converse.
+    ///
+    /// The converse goes into the same map as the asserted direction, carrying a
+    /// [`RelationOrigin`] that says which it is, for the reason every origin in this crate exists:
+    /// a caller that cannot tell the graph's statement from ours has an answer and not an audit
+    /// trail. A graph that states both directions gets two asserted links and no derivation — it
+    /// said so, and claiming to have deduced it would be a derivation nobody needed.
+    ///
+    /// A link from a label to **itself** is its own converse. `owl:SymmetricProperty` says nothing
+    /// against it and neither do we: it is inserted once, entails nothing, and is not a finding.
+    /// Inventing an integrity condition Appendix B does not state is the failure `docs/COMPETITIVE.md`
+    /// records against tools that are stricter than the standard.
+    fn close_label_relations(&mut self, model: &mut CoreModel) {
+        for (from, to) in &self.label_relations {
+            model
+                .resources
+                .entry(from.clone())
+                .or_default()
+                .label_relations
+                .insert(to.clone(), RelationOrigin::Asserted);
+        }
+
+        for (from, to) in &self.label_relations {
+            if self.label_relations.contains(&(to.clone(), from.clone())) {
+                continue;
+            }
+            model
+                .resources
+                .entry(to.clone())
+                .or_default()
+                .label_relations
+                .insert(from.clone(), RelationOrigin::Entailed(SkosRule::S62));
+            model.derivations.push(Derivation {
+                conclusion: format!("{to} skosxl:labelRelation {from}"),
+                premise: format!("{from} skosxl:labelRelation {to}"),
+                rule: SkosRule::S62,
+            });
         }
     }
 
@@ -3814,5 +3907,342 @@ mod tests {
         assert_eq!(forwards.resources, backwards.resources);
         assert_eq!(forwards.findings, backwards.findings);
         assert_eq!(plain_labels(&forwards, &love).len(), 2);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // SKOS-XL B.4 — links between labels. S59–S62.
+    // ---------------------------------------------------------------------------------------
+
+    /// `<from> skosxl:labelRelation <to>`.
+    fn label_relation(from: &Node, to: &Node) -> Statement {
+        Statement::new(from.clone(), SKOSXL_LABEL_RELATION, to.clone())
+    }
+
+    /// A resource's label relations, rendered with where each one came from.
+    fn relations(model: &CoreModel, node: &Node) -> Vec<String> {
+        let Some(resource) = model.resource(node) else {
+            return Vec::new();
+        };
+        resource
+            .label_relations()
+            .iter()
+            .map(|(to, origin)| format!("{to} ({origin})"))
+            .collect()
+    }
+
+    /// Example 88 — a link between two labels. Consistent, and it entails its converse under S62.
+    #[test]
+    fn example_88_a_link_between_two_labels_is_consistent_and_closes_under_s62() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            literal_form(&a, plain("love")),
+            typed(&b, SkosClass::Label),
+            literal_form(&b, plain("adoration")),
+            label_relation(&a, &b),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        assert_eq!(
+            relations(&model, &a),
+            ["<http://example.com/ns/B> (asserted)"]
+        );
+        // The direction the graph did not state, and it says so.
+        assert_eq!(
+            relations(&model, &b),
+            ["<http://example.com/ns/A> (inferred, S62)"]
+        );
+        assert_eq!(
+            model
+                .derivations()
+                .iter()
+                .filter(|d| d.rule == SkosRule::S62)
+                .map(|d| format!("{} because {}", d.conclusion, d.premise))
+                .collect::<Vec<_>>(),
+            ["<http://example.com/ns/B> skosxl:labelRelation <http://example.com/ns/A> because <http://example.com/ns/A> skosxl:labelRelation <http://example.com/ns/B>"]
+        );
+    }
+
+    /// A graph that states both directions has two asserted links and nothing inferred.
+    ///
+    /// The same rule every origin in this crate follows: the graph said it, so claiming to have
+    /// deduced it would be a derivation nobody needed.
+    #[test]
+    fn a_link_stated_both_ways_is_asserted_at_both_ends_and_entails_nothing() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            literal_form(&a, plain("love")),
+            typed(&b, SkosClass::Label),
+            literal_form(&b, plain("adoration")),
+            label_relation(&a, &b),
+            label_relation(&b, &a),
+        ]);
+
+        assert_eq!(
+            relations(&model, &a),
+            ["<http://example.com/ns/B> (asserted)"]
+        );
+        assert_eq!(
+            relations(&model, &b),
+            ["<http://example.com/ns/A> (asserted)"]
+        );
+        assert!(
+            !model.derivations().iter().any(|d| d.rule == SkosRule::S62),
+            "{:?}",
+            model.derivations()
+        );
+    }
+
+    /// S60 and S61 — a link is enough to make both ends a label, with no `rdf:type` anywhere.
+    ///
+    /// And the consequence, which is the point of running the class rules before S52's count: two
+    /// labels with no literal form, each reported as ill-formed, and the graph still consistent.
+    #[test]
+    fn s60_and_s61_make_both_ends_of_a_link_a_label_without_any_rdf_type() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![label_relation(&a, &b)]);
+
+        for (node, rule) in [(&a, SkosRule::S60), (&b, SkosRule::S61)] {
+            let resource = model.resource(node).expect("a label");
+            assert_eq!(
+                resource.classes().get(&SkosClass::Label),
+                Some(&ClassOrigin::Entailed(rule)),
+                "{node}"
+            );
+        }
+        assert_eq!(model.count_of(SkosClass::Label), 2);
+        assert_eq!(
+            model
+                .findings()
+                .iter()
+                .filter(|finding| matches!(finding, Finding::NoLiteralForm { .. }))
+                .count(),
+            2,
+            "{:?}",
+            model.findings()
+        );
+        // Ill-formed, not inconsistent: S52 entails that a form exists, it does not require the
+        // graph to state one.
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// An `rdf:type` already in the graph is not restated as an inference by S60 or S61.
+    #[test]
+    fn a_link_does_not_re_derive_a_label_class_the_graph_asserted() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            typed(&b, SkosClass::Label),
+            literal_form(&a, plain("love")),
+            literal_form(&b, plain("adoration")),
+            label_relation(&a, &b),
+        ]);
+
+        for node in [&a, &b] {
+            assert_eq!(
+                model
+                    .resource(node)
+                    .and_then(|resource| resource.classes().get(&SkosClass::Label)),
+                Some(&ClassOrigin::Asserted),
+                "{node}"
+            );
+        }
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|d| matches!(d.rule, SkosRule::S60 | SkosRule::S61)),
+            "{:?}",
+            model.derivations()
+        );
+    }
+
+    /// S59 — the property is an `owl:ObjectProperty`, so a literal is a contradiction.
+    #[test]
+    fn s59_a_literal_label_relation_is_inconsistent() {
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            literal_form(&a, plain("love")),
+            Statement::new(a.clone(), SKOSXL_LABEL_RELATION, plain("adoration")),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        assert!(
+            model.findings().iter().any(|finding| matches!(
+                finding,
+                Finding::LiteralOnObjectProperty {
+                    property,
+                    rule: SkosRule::S59,
+                    ..
+                } if property == "skosxl:labelRelation"
+            )),
+            "{:?}",
+            model.findings()
+        );
+        // The value is dropped rather than kept as a link to a literal.
+        assert!(relations(&model, &a).is_empty());
+    }
+
+    /// S60 and S48 together — linking to a concept by mistake is caught, and says why.
+    ///
+    /// This is the case that makes S60 and S61 worth applying rather than merely quoting: nothing
+    /// in the graph types `<Love>` as a label, so without the domain rule the mistake is invisible.
+    #[test]
+    fn linking_a_concept_by_mistake_violates_s48_through_s60() {
+        let (love, a) = (ex("Love"), ex("A"));
+        let model = CoreModel::from_statements(vec![
+            typed(&love, SkosClass::Concept),
+            typed(&a, SkosClass::Label),
+            literal_form(&a, plain("love")),
+            label_relation(&love, &a),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        assert!(
+            model.findings().iter().any(|finding| matches!(
+                finding,
+                Finding::DisjointClasses {
+                    first: (SkosClass::Label, ClassOrigin::Entailed(SkosRule::S60)),
+                    second: (SkosClass::Concept, ClassOrigin::Asserted),
+                    rule: SkosRule::S48,
+                    ..
+                }
+            )),
+            "{:?}",
+            model.findings()
+        );
+        // And the cascade is honest about itself: `<Love>` is now a label, so S52 reports that it
+        // has no literal form as well. Two findings for one mistake, each true and each citing a
+        // different statement, is the right answer — suppressing the second would mean deciding
+        // which of two applicable rules the author meant to break.
+        assert!(
+            model.findings().iter().any(
+                |finding| matches!(finding, Finding::NoLiteralForm { label } if *label == love)
+            ),
+            "{:?}",
+            model.findings()
+        );
+    }
+
+    /// A label linked to itself. Symmetric says nothing against it, so neither do we.
+    #[test]
+    fn a_label_linked_to_itself_is_its_own_converse_and_is_not_a_finding() {
+        let a = ex("A");
+        let model = CoreModel::from_statements(vec![
+            typed(&a, SkosClass::Label),
+            literal_form(&a, plain("love")),
+            label_relation(&a, &a),
+        ]);
+
+        assert_eq!(
+            relations(&model, &a),
+            ["<http://example.com/ns/A> (asserted)"]
+        );
+        assert!(
+            !model.derivations().iter().any(|d| d.rule == SkosRule::S62),
+            "{:?}",
+            model.derivations()
+        );
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+    }
+
+    /// Example 89 — and B.4.4.1's warning, which is the trap in this section.
+    ///
+    /// "Note that a sub-property of a symmetric property is not necessarily symmetric." "FAO" is
+    /// an acronym for "Food and Agriculture Organization" and the converse is false, so closing
+    /// `ex:acronym` would be wrong. We read no `rdfs:subPropertyOf`, so the refinement is
+    /// invisible rather than mis-inferred — and this asserts both halves of that: no `ex:acronym`
+    /// is invented in either direction, and the refinement does **not** reach
+    /// `skosxl:labelRelation` either, which is the sound inference we are not yet making.
+    #[test]
+    fn example_89_a_refinement_of_a_symmetric_property_is_not_closed() {
+        let acronym = format!("{EX}acronym");
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements(vec![
+            Statement::new(
+                Node::iri(acronym.clone()),
+                format!("{}subPropertyOf", ns::RDFS),
+                Node::iri(SKOSXL_LABEL_RELATION),
+            ),
+            typed(&a, SkosClass::Label),
+            literal_form(&a, tagged("FAO", "en")),
+            typed(&b, SkosClass::Label),
+            literal_form(&b, tagged("Food and Agriculture Organization", "en")),
+            Statement::new(b.clone(), acronym.clone(), a.clone()),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        // Not closed, and not translated into the property it refines.
+        assert!(
+            relations(&model, &a).is_empty(),
+            "{:?}",
+            relations(&model, &a)
+        );
+        assert!(
+            relations(&model, &b).is_empty(),
+            "{:?}",
+            relations(&model, &b)
+        );
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|d| d.conclusion.contains("acronym") || d.rule == SkosRule::S62),
+            "{:?}",
+            model.derivations()
+        );
+    }
+
+    /// The order statements arrive in does not change the answer for B.4 either.
+    #[test]
+    fn label_relations_read_the_same_in_either_direction() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let statements = vec![
+            literal_form(&a, tagged("love", "en")),
+            label_relation(&a, &b),
+            label_relation(&c, &a),
+            literal_form(&b, tagged("adoration", "en")),
+            typed(&c, SkosClass::Label),
+        ];
+
+        let forwards = CoreModel::from_statements(statements.clone());
+        let backwards = CoreModel::from_statements(statements.into_iter().rev());
+
+        assert_eq!(forwards.resources, backwards.resources);
+        assert_eq!(forwards.findings, backwards.findings);
+        assert_eq!(
+            relations(&forwards, &a),
+            [
+                "<http://example.com/ns/B> (asserted)",
+                "<http://example.com/ns/C> (inferred, S62)"
+            ]
+        );
+    }
+
+    /// Every statement this crate relies on carries the specification's own wording, and B.4's
+    /// four are the ones a reader is most likely to have to check: the appendix states no
+    /// integrity conditions, so the citation is all the authority a finding here has.
+    #[test]
+    fn the_b4_statements_are_quoted_from_the_specification() {
+        assert_eq!(
+            SkosRule::S59.statement(),
+            "skosxl:labelRelation is an instance of owl:ObjectProperty."
+        );
+        assert_eq!(
+            SkosRule::S60.statement(),
+            "The rdfs:domain of skosxl:labelRelation is the class skosxl:Label."
+        );
+        assert_eq!(
+            SkosRule::S61.statement(),
+            "The rdfs:range of skosxl:labelRelation is the class skosxl:Label."
+        );
+        assert_eq!(
+            SkosRule::S62.statement(),
+            "skosxl:labelRelation is an instance of owl:SymmetricProperty."
+        );
     }
 }

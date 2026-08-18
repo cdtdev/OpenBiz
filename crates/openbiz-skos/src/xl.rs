@@ -16,9 +16,33 @@
 //! - **B.3** the three labelling properties, their range ([`S54`](crate::SkosRule::S54)), the
 //!   **dumbing-down** chains ([`S55`](crate::SkosRule::S55)–[`S57`](crate::SkosRule::S57)), and
 //!   their pairwise disjointness ([`S58`](crate::SkosRule::S58)).
-//! - **B.4** `skosxl:labelRelation`, S59–S62 — a separate build-plan item, and deliberately not
-//!   here. It is an extension point with no built-in refinements, so nothing in the authoring path
-//!   depends on it; the dumbing-down does, and that is what this module is for.
+//! - **B.4** `skosxl:labelRelation` — [`S59`](crate::SkosRule::S59)–[`S62`](crate::SkosRule::S62),
+//!   the link between two labels and the extension point ISO 25964's label relationships refine.
+//!
+//! # A link between labels, and the one thing B.4 warns you not to do with it
+//!
+//! B.4.1 says the property "is not intended to be used directly, but rather as an extension point
+//! which can be refined for more specific labeling scenarios", and Example 89 refines it to
+//! `ex:acronym` so that "FAO" can stand in a recorded relationship to "Food and Agriculture
+//! Organization". That is exactly the shape ISO 25964's label relationships need, which is why
+//! B.4 is part of the SKOS-XL commitment in `CLAUDE.md` §2 and not an optional extra.
+//!
+//! Four statements, and all four are applied. [`S59`](crate::SkosRule::S59) makes it an object
+//! property, so a literal there is the same contradiction a literal under `skos:member` is.
+//! [`S60`](crate::SkosRule::S60) and [`S61`](crate::SkosRule::S61) make both ends `skosxl:Label`,
+//! so a link is enough to establish a label with no `rdf:type` — and enough to put a
+//! `skos:Concept` in two disjoint classes under S48 if somebody links to one by mistake.
+//! [`S62`](crate::SkosRule::S62) makes it **symmetric**, so a link entails its converse and the
+//! converse is recorded as an inference rather than smuggled in beside the asserted one.
+//!
+//! **The trap is the last note in the appendix**: "a sub-property of a symmetric property is not
+//! necessarily symmetric." So Example 89's `ex:acronym` must never be closed — "FAO" is an acronym
+//! for "Food and Agriculture Organization" and the converse is false. We read no
+//! `rdfs:subPropertyOf` at all, so a refinement is invisible to us rather than mis-inferred; a
+//! test asserts that a refined property produces no `ex:acronym` in either direction, so the day
+//! sub-property reasoning arrives it arrives against an assertion that already says what it must
+//! not do. What we do **not** yet do is the sound half of that reasoning — a refinement's
+//! statement does not reach `skosxl:labelRelation` either. In `docs/UNTESTED.md`.
 //!
 //! # Dumbing down is the whole point
 //!
@@ -96,6 +120,8 @@ pub const SKOSXL_PREF_LABEL: &str = "http://www.w3.org/2008/05/skos-xl#prefLabel
 pub const SKOSXL_ALT_LABEL: &str = "http://www.w3.org/2008/05/skos-xl#altLabel";
 /// `skosxl:hiddenLabel`. B.3.
 pub const SKOSXL_HIDDEN_LABEL: &str = "http://www.w3.org/2008/05/skos-xl#hiddenLabel";
+/// `skosxl:labelRelation` — a link between two labels, and the ISO 25964 extension point. B.4.
+pub const SKOSXL_LABEL_RELATION: &str = "http://www.w3.org/2008/05/skos-xl#labelRelation";
 
 /// Where a lexical label came from.
 ///
@@ -109,6 +135,34 @@ pub enum LabelOrigin {
     Asserted,
     /// It follows from an XL label's literal form, under one of the S55–S57 chains.
     DumbedDown(SkosRule),
+}
+
+/// How a resource came to be linked to another by `skosxl:labelRelation`.
+///
+/// The third of these — after [`ClassOrigin`](crate::ClassOrigin) and [`LabelOrigin`] — and for
+/// the third time the same reason: a report that cannot distinguish what the graph said from what
+/// we concluded is not an audit trail. A link stated in both directions is
+/// [`Asserted`](RelationOrigin::Asserted) at both ends; only the direction the graph left out is
+/// an inference, and only that one is counted as one.
+///
+/// [`S62`](crate::SkosRule::S62) is the only rule that produces the entailed case today, and the
+/// rule is carried rather than assumed so that a refinement of `skosxl:labelRelation` reaching
+/// here later cannot arrive without saying which statement licensed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RelationOrigin {
+    /// The graph carries the `skosxl:labelRelation` statement in this direction.
+    Asserted,
+    /// We concluded it, under this rule — S62, because the property is symmetric.
+    Entailed(SkosRule),
+}
+
+impl std::fmt::Display for RelationOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RelationOrigin::Asserted => write!(f, "asserted"),
+            RelationOrigin::Entailed(rule) => write!(f, "inferred, {}", rule.number()),
+        }
+    }
 }
 
 impl std::fmt::Display for LabelOrigin {
@@ -134,6 +188,7 @@ mod tests {
             (SKOSXL_PREF_LABEL, "prefLabel"),
             (SKOSXL_ALT_LABEL, "altLabel"),
             (SKOSXL_HIDDEN_LABEL, "hiddenLabel"),
+            (SKOSXL_LABEL_RELATION, "labelRelation"),
         ] {
             assert_eq!(iri, format!("{}{local}", ns::SKOSXL));
         }
@@ -168,6 +223,23 @@ mod tests {
         assert_eq!(LabelKind::Preferred.dumbing_down_rule(), SkosRule::S55);
         assert_eq!(LabelKind::Alternative.dumbing_down_rule(), SkosRule::S56);
         assert_eq!(LabelKind::Hidden.dumbing_down_rule(), SkosRule::S57);
+    }
+
+    /// `skosxl:labelRelation` is not one of the three labelling properties and must not be read
+    /// as one — the local name is different, but a `starts_with` on the namespace would take it.
+    #[test]
+    fn the_label_relation_property_is_not_a_labelling_property() {
+        assert_eq!(LabelKind::from_xl_iri(SKOSXL_LABEL_RELATION), None);
+        assert_eq!(LabelKind::from_iri(SKOSXL_LABEL_RELATION), None);
+    }
+
+    #[test]
+    fn a_relation_origin_says_whether_the_graph_stated_the_direction() {
+        assert_eq!(RelationOrigin::Asserted.to_string(), "asserted");
+        assert_eq!(
+            RelationOrigin::Entailed(SkosRule::S62).to_string(),
+            "inferred, S62"
+        );
     }
 
     #[test]

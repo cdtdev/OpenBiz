@@ -41,16 +41,20 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 5 of 17 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 6 of 17 items done. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
 thesaurus is actually in and how far behind each one is — see `adr/0020`, which also records what
-"RDF plain literal" has to mean now that RDF 1.1 has abolished the term. **SKOS-XL's labelling
-half is in** (Appendix B.2 and B.3): a label is a resource with an IRI you can date, attribute and
+"RDF plain literal" has to mean now that RDF 1.1 has abolished the term. **SKOS-XL is in, both
+halves** (Appendix B.2, B.3 and B.4): a label is a resource with an IRI you can date, attribute and
 version, and the S55–S57 chains dumb it down to a plain SKOS label so the same two integrity
 conditions catch Appendix B's own Examples 84–87 — see `adr/0021`, which records why Appendix B
 having no "Integrity Conditions" heading made every severity in it a decision to write down.
+**And labels can be linked to each other**, which is where ISO 25964 puts an acronym relationship
+and what plain SKOS cannot express: S59–S62 are applied, a link entails its converse because the
+property is symmetric, and a refinement of it is deliberately *not* closed, because B.4.4.1 warns
+that a sub-property of a symmetric property is not necessarily symmetric — see `adr/0022`.
 
 `openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
 schemes, and collections — including the ones no statement typed, because SKOS itself entails
@@ -652,22 +656,35 @@ the interface is a core differentiator, and building it late means retrofitting 
       > entirely for a vocabulary that does not use SKOS-XL so that its presence answers "is this
       > thesaurus using SKOS-XL?". Proven end to end against the real binary with a fixture that
       > states **no plain label anywhere**.
-      > **Scope, honestly:** S59–S62 are not read at all, so a `skosxl:labelRelation` is silently
-      > ignored — in `docs/UNTESTED.md`, along with the memory cost (an XL thesaurus holds each
+      > **Scope, honestly:** S59–S62 were not read at all, so a `skosxl:labelRelation` was
+      > silently ignored — **closed by the item below at iteration 23**. Still open: the memory cost (an XL thesaurus holds each
       > label roughly twice) and the export gap, which SKOS-XL makes materially worse: our export
       > of an XL-authored thesaurus carries no plain labels at all.
-- [ ] `skosxl:labelRelation` — links between labels, and the ISO 25964 extension point (B.4,
+- [x] `skosxl:labelRelation` — links between labels, and the ISO 25964 extension point (B.4,
       S59–S62)
-      > Split out of the item above at iteration 22. B.4 says the property "is not intended to be
-      > used directly, but rather as an extension point which can be refined" — Example 89 refines
-      > it to `ex:acronym` — which is exactly how ISO 25964's label relationships map onto SKOS-XL.
-      > Four statements to apply: S59 (object property), S60 and S61 (domain and range are
-      > `skosxl:Label`), and S62, which makes it **symmetric** — so a link entails its converse,
-      > and B.4.4.1 warns that a *sub-property* of a symmetric property is not necessarily
-      > symmetric, which is the trap to test for.
-      > It was split rather than built because nothing in the authoring path depends on it, while
-      > everything depends on the dumbing-down, and doing both in one item would have been the
-      > "much bigger than it reads" case the loop is told to split.
+      > Split out of the item above at iteration 22 and **done at iteration 23**. All four
+      > statements are applied. S59 makes it an object property, so a literal there reuses the
+      > finding S3 and S30 already raise. S60 and S61 make both ends a `skosxl:Label` — which
+      > reports nothing by itself and is what makes a mistake visible: a link pointing at a
+      > `skos:Concept` is caught by **S48**, and without the domain and range rules the same graph
+      > reads as clean. S62 makes it symmetric, so a link entails its converse, and the converse
+      > goes into the same map as the asserted direction carrying a `RelationOrigin` — the third
+      > origin type in this crate, for the third time the same reason. A graph that states both
+      > directions gets two asserted links and no derivation.
+      > **The trap is B.4.4.1's last sentence** — "a sub-property of a symmetric property is not
+      > necessarily symmetric" — so Example 89's `ex:acronym` must never be closed, because "FAO"
+      > is an acronym for "Food and Agriculture Organization" and the converse is false. We read
+      > no `rdfs:subPropertyOf` at all, so a refinement is invisible rather than mis-inferred, and
+      > a test asserts that. See `adr/0022`, which also records why a label linked to **itself** is
+      > deliberately not a finding: Appendix B does not forbid it, and inventing an integrity
+      > condition the specification does not state is the incumbents' failure.
+      > **Production caller:** `openbiz inspect` gained one line in the existing `skos-xl labels:`
+      > section, counting **links** and not statements — S62 closes every link into a pair — and
+      > printed only when there are any. Proven end to end against the real binary.
+      > **Scope, honestly:** the *sound* half of sub-property reasoning is also not done — a
+      > refinement's statement does not reach `skosxl:labelRelation` either, so a thesaurus whose
+      > ISO 25964 label relationships are expressed through refinements, which is the ordinary way
+      > B.4 is used, reads to us as having none. In `docs/UNTESTED.md`.
 - [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy
 - [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
