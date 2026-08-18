@@ -31,6 +31,132 @@ Do not delete it — the record of what took how long to close is the signal.
 
 ---
 
+### The service-defined default dataset is believed spec-permitted, not verified against the text
+- **Kind:** partial-standard
+- **What is proven:** the behaviour itself is thoroughly tested — a query naming no dataset sees the
+  vocabulary graphs and nothing else, a query naming its own `FROM` reaches ours verbatim, and a
+  store with no vocabularies answers nothing rather than everything.
+- **What is not:** that this is *conformant*. `adr/0011` chooses a default dataset that is not "the
+  store's default graph", and the justification rests on SPARQL 1.1 permitting a service to define
+  its own default dataset when a query specifies none. That reading was **not checked against the
+  specification's own words** this iteration — it is recalled, not cited, and `CLAUDE.md` §4.5 says
+  a standards claim needs the spec behind it. If the reading is wrong, this is a documented
+  deviation rather than a conformant choice, and the honest word for it in user-facing text changes.
+- **A second, narrower gap even if the reading is right:** query *portability*. The same query text
+  returns different answers here and against a standards-configured endpoint over the same data.
+  That is a property of every service-defined default dataset, and nothing warns a user copying a
+  query in or out. A SPARQL Service Description at the endpoint would be the standard way to make
+  the dataset self-describing rather than documented-elsewhere; we do not serve one.
+- **What would close it:** read SPARQL 1.1 Query §13 and SPARQL 1.1 Protocol §2.1.4, cite the
+  clause in `adr/0011` or correct the ADR, and consider a Service Description.
+- **Opened:** iteration 9
+
+### SPARQL 1.1 Protocol is implemented for query only, and two of its parameters are refused
+- **Kind:** partial-standard
+- **What is proven:** all three of the protocol's request forms for a *query* — `GET ?query=`,
+  `POST application/sparql-query`, and `POST` form-encoded — are tested end to end against the
+  router, and all four result formats are tested for both `SELECT` and `ASK`.
+- **What is not:** the protocol's `default-graph-uri` and `named-graph-uri` parameters are a named
+  400, not an implementation. There is no Update endpoint (its own plan item) and no Graph Store
+  Protocol (likewise). So the honest claim this build supports is **SPARQL 1.1 Query over the
+  protocol's three query forms**, not "SPARQL 1.1 Protocol". Do not write the latter anywhere
+  user-facing.
+- **What would close it:** deciding how a protocol-supplied dataset composes with the
+  vocabulary-graph default of `adr/0011` *and* with a query's own `FROM` — the three-way
+  interaction is the reason it was deferred rather than guessed — then implementing it with the
+  spec's own examples as tests.
+- **Opened:** iteration 9
+
+### The SPARQL endpoint has no query console in the interface
+- **Kind:** no-production-caller
+- **What is proven:** the endpoint's production caller is HTTP: routed at `/api/sparql`, tested
+  through the real router, and usable from `curl` or any SPARQL client.
+- **What is not:** nothing in the UI calls it. `CLAUDE.md` §4.4 requires anything user-facing to be
+  reachable in the interface and keyboard-navigable, and a query console is plainly user-facing.
+  The plan item is scoped to the endpoint, so this is recorded as an open gap rather than folded
+  into that item and quietly called done — but a taxonomist cannot run a query in OpenBiz today.
+- **What would close it:** a console in the interface — an editor, a format chooser reading the
+  server's own list, a results table, and the refusals rendered as text rather than as a status
+  code. It is a UI item and it is not in the plan; recorded in `PROPOSED.md`.
+- **Note, same iteration:** `GET /api/sparql/formats` was added so the list a console needs is
+  already served, and so that `preserves_term_detail` has a production reader rather than being a
+  constant only its own test consults. It has an HTTP caller and **no UI caller** — the warning
+  that CSV silently drops language tags is now *available* to an interface and still not *shown* to
+  a user, which is the half of this gap that closing the endpoint did not close.
+- **Opened:** iteration 9
+
+### The endpoint buffers a whole answer in memory, twice
+- **Kind:** partial-coverage
+- **What is proven:** the buffer is *deliberate* and load-bearing. `Store::query` may leave a
+  partial document in its writer when it refuses, and a truncated results document is syntactically
+  valid and semantically wrong, so the HTTP layer buffers into a `Vec` and only builds a response
+  on `Ok`. Tests assert a refused query's body carries the refusal and none of the partial answer.
+- **What is not:** the cost. A `SELECT` answering at the 100 000-row cap holds the serialised
+  document in a `Vec` and then again in the response body, and no test measures either. The same
+  gap as the export endpoint's, one layer up, and with a larger worst case because the cap is
+  bigger than any vocabulary we have.
+- **What would close it:** a real measurement at the cap, then either a bounded streaming body that
+  can still discard a partial document, or a documented maximum response size.
+- **Opened:** iteration 9
+
+### The query limits are hard-coded, and the defaults are chosen rather than measured
+- **Kind:** inspected-only
+- **What is proven:** both bounds work and both refuse rather than truncate — the row cap is tested
+  for solutions and for constructed triples, and the deadline is tested to cancel a runaway join.
+  `QueryLimits` is a parameter type, so wiring it to configuration touches no caller.
+- **What is not:** nothing reads configuration into it; every production call uses
+  `QueryLimits::default()`. And the numbers themselves — 100 000 answers, 30 seconds — are
+  reasoned, not measured. Neither has been checked against how long an unoptimised evaluator
+  actually takes over a real vocabulary, so 30 s may refuse legitimate work or 100 000 rows may be
+  far more memory than the §1.5 commitment tolerates.
+- **What would close it:** the Phase 1 benchmark spike, then config keys with the provenance
+  `adr/0005` requires.
+- **Opened:** iteration 9
+
+### The timeout answers 503, which is the least-wrong code rather than a right one
+- **Kind:** inspected-only
+- **What is proven:** the mapping is deliberate and argued in `adr/0011`. RFC 9110 has no code for
+  "the server cancelled a valid request against its own resource policy"; 408, 504, and 500 each
+  claim something untrue.
+- **What is not:** the consequence. A load balancer or a service mesh reading 503 may take the
+  instance out of rotation over one expensive query, which would turn a bounded refusal into an
+  availability incident. No deployment has met this and nothing tests it.
+- **What would close it:** running behind a real proxy with health checking and watching what one
+  timed-out query does to rotation. Environment-limited in part — a realistic answer needs a
+  deployment topology this machine does not have.
+- **Opened:** iteration 9
+
+### The query tests put statements in a vocabulary through the backend, not through an authoring path
+- **Kind:** partial-coverage
+- **What is proven:** the fixture is honest about itself and could not be otherwise today — no
+  public API can put a statement into a vocabulary graph, because the store creates the container
+  and Phase 2's candidate seam is what fills it.
+- **What is not:** that a query sees what the *real* authoring path will actually write. The
+  fixture inserts through `store.backend` directly, so it bypasses the write choke point, the
+  transaction, and whatever shape the candidate seam settles on. If authoring later writes a
+  different shape — reified statements, provenance quads alongside content — these tests keep
+  passing against a shape production never produces.
+- **What would close it:** rewriting the fixture onto the real authoring API the moment one exists.
+  This is a deliberate debt with a named trigger, not an oversight.
+- **Opened:** iteration 9
+
+### Two query tests are timing-sensitive and could flake on a loaded machine
+- **Kind:** partial-coverage
+- **What is proven:** they pass repeatedly on this machine, and both are testing something real —
+  that the deadline actually cancels, and that a watchdog never cancels a query that already
+  finished (run 40 times over, because a watchdog cancelling a *later* query would otherwise show
+  up as an intermittent failure and nothing else).
+- **What is not:** their behaviour under contention. `a_quick_query_is_never_cancelled_by_its_own_watchdog`
+  gives a one-statement query a 30 ms deadline; on a heavily loaded CI runner that query could
+  genuinely exceed 30 ms and the test would fail for a reason that is not the bug it hunts. The
+  tight deadline is *why* the test discriminates, so widening it to remove the flake would also
+  remove most of its power — that trade is recorded rather than taken.
+- **What would close it:** an injectable clock, or a deterministic cancellation hook, so the race
+  is exercised without depending on wall-clock timing at all.
+- **Opened:** iteration 9
+
+---
+
 ### The round trip is proven against our own reader, not against the specs' test suites
 - **Kind:** partial-standard
 - **What is proven:** every one of the six syntaxes survives serialise → parse → compare, over
@@ -67,6 +193,10 @@ Do not delete it — the record of what took how long to close is the signal.
   streaming body (`Body::from_stream` over a channel fed by the blocking task), which is a change to
   this handler and to nothing above it.
 - **Opened:** iteration 8
+- **Amended iteration 9:** the SPARQL endpoint has the same shape and a larger worst case, so the
+  spike now owes a **sixth** number — query wall-clock and peak RSS at the 100 000-answer cap. The
+  two handlers should be fixed together or not at all; a streaming export beside a buffering query
+  endpoint is the inconsistency a reviewer would have to re-derive.
 
 ### The interface's download path has never run against a real store with content
 - **Kind:** partial-coverage

@@ -31,6 +31,7 @@ use openbiz_api::{ExportFormat, ExportFormats};
 use openbiz_store::{RdfSyntax, Store, StoreError};
 use serde::Deserialize;
 
+use crate::accept;
 use crate::graphs::{AppState, Failure};
 
 /// Names the graph an export is of, for the syntaxes that cannot say so themselves.
@@ -167,53 +168,24 @@ fn rendered(iri: String, syntax: RdfSyntax, body: Vec<u8>) -> Response {
 
 /// Choose a syntax from `Accept`.
 ///
-/// Handles exactly what is worth handling: comma-separated media types, `q=` weights, and `*/*`.
-/// Subtype wildcards (`text/*`) are not matched — they are vanishingly rare from real clients and
-/// guessing which of two `text/…` syntaxes was meant is exactly the silent substitution this
-/// endpoint refuses elsewhere.
+/// Ranking lives in [`crate::accept`], shared with the SPARQL endpoint so the two cannot come to
+/// different conclusions about the same header.
 ///
 /// No `Accept` at all, or one that expresses no usable preference, is the default. An `Accept` that
 /// *does* express a preference we cannot meet is a 406 rather than a quiet fallback: a client that
 /// asked for JSON-LD and got Turtle will not notice until its parser does.
 fn negotiate(headers: &HeaderMap) -> Result<RdfSyntax, Failure> {
-    let Some(accept) = headers.get(header::ACCEPT).and_then(|it| it.to_str().ok()) else {
+    let Some(accept) = accept::header(headers) else {
         return Ok(RdfSyntax::DEFAULT);
     };
 
-    let mut ranked: Vec<(usize, f32, &str)> = accept
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .enumerate()
-        .map(|(order, entry)| {
-            let mut parts = entry.split(';').map(str::trim);
-            let range = parts.next().unwrap_or(entry);
-            let weight = parts
-                .find_map(|parameter| parameter.strip_prefix("q="))
-                .and_then(|value| value.trim().parse::<f32>().ok())
-                .unwrap_or(1.0);
-            (order, weight, range)
-        })
-        // `q=0` is the client saying "not this", so honouring it is the whole point of the weight.
-        .filter(|(_, weight, _)| *weight > 0.0)
-        .collect();
-
+    let ranked = accept::preferences(accept);
     if ranked.is_empty() {
         return Ok(RdfSyntax::DEFAULT);
     }
 
-    // Descending by weight, and by the order written where weights tie — which is what a client
-    // listing `text/turtle, application/ld+json` means by writing Turtle first.
-    ranked.sort_by(|left, right| {
-        right
-            .1
-            .partial_cmp(&left.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(left.0.cmp(&right.0))
-    });
-
-    for (_, _, range) in &ranked {
-        if *range == "*/*" {
+    for range in ranked {
+        if range == accept::ANYTHING {
             return Ok(RdfSyntax::DEFAULT);
         }
         if let Some(syntax) = RdfSyntax::parse(range) {
