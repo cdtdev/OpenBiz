@@ -841,3 +841,84 @@ look competent disables the one signal that catches a stuck loop.
 [N-Quads §4]: https://www.w3.org/TR/n-quads/#sec-grammar
 [Canonical N-Triples §4]: https://www.w3.org/TR/n-triples/#canonical-ntriples
 [N-Triples Example 3]: https://www.w3.org/TR/n-triples/#sec-literals
+
+
+## Iterations 11 and 12 — 2026-08-19
+- **One entry for two iterations, because iteration 11 never wrote one.** Iteration 11 took the
+  Phase 1 Oxigraph benchmark spike, did the measuring, wrote the ADR and the ledgers — and was
+  **killed by the wall clock before it committed anything**. Iteration 12 found the branch
+  `item/phase1-oxigraph-scale-spike` dirty with 959 uncommitted lines, verified the work rather
+  than trusting it, and landed it. The measurements below are iteration 11's; the verification and
+  the landing are iteration 12's, and this entry says which is which because a log that quietly
+  merged them would hide the failure that caused it.
+- **Drained the inboxes first, and the feedback explained the mess.** The product owner had written
+  the thing the loop most needed to know and had never been told: **every iteration runs under a
+  hard 60-minute timeout and is killed with no warning**, which has now cost three iterations
+  (7, 10, and one earlier). `feedback.md` was copied into `FEEDBACK-LOG.md` and truncated to zero
+  **before** any work started, per the driver's ordering rule. The promote queue was empty. The
+  four standing instructions — budget ~45 minutes to *landed*, split by cost and not only by scope,
+  checkpoint long-running work as it completes, and record a genuine misfit in `BLOCKED.md` rather
+  than restarting it forever — are now the loop's, and iteration 12 acted on the third one directly:
+  it committed the recovered work *before* the verification gate had finished, precisely so a second
+  kill could not destroy it twice.
+- **Verified rather than trusted, and that was not a formality.** An ADR full of specific
+  performance numbers, produced by an iteration that died, is exactly the artefact that should not
+  be believed on sight. The release build first failed outright — `libclang` is not on this
+  machine's default path — which for a few minutes looked like evidence that the benchmark could
+  never have run here at all. It is not: `UNTESTED.md` has recorded since iteration 4 that this
+  machine needs `LIBCLANG_PATH` **and** `BINDGEN_EXTRA_CLANG_ARGS`, there is a complete RocksDB
+  release build on disk timestamped inside iteration 11's window, and with the incantation restored
+  **the 10k leg reproduces**: load 2.0 s against the ADR's 1.9 s, 50 MB on disk in both, and all ten
+  probe answer counts identical (1, 10, 10, 10, 7, 1, 50, 588, 3, 1110). The numbers are real
+  measurements.
+- **What was measured** (`adr/0013`): a synthetic SKOS vocabulary at 10k / 100k / 1M concepts,
+  loaded through `Store::transaction` — the real write choke point, not the backend's bulk loader —
+  and ten probes timed through `Store::query`, the same call `/api/sparql` makes, so the figure
+  includes parsing, evaluation, and serialising the answer. Each probe is one *interaction* rather
+  than a line of BSBM. **Every probe's answer count is asserted against the generator's own
+  arithmetic before its timing is believed**, which is the only reason any row here means anything:
+  a benchmark whose queries match nothing measures an empty loop very fast.
+- **The risk the charter names is real, and it is not where the charter pointed.** Every bound-term
+  lookup — expand a node, open a concept, resolve a label, walk a breadcrumb — is **0.2–0.6 ms flat
+  from 10k to 1M**. Two orders of magnitude of data for a factor of 1.5 in time, and `skos:broader+`
+  is not the monster everyone assumes. What falls over is the **first query the interface issues**:
+  top concepts by `FILTER NOT EXISTS { ?c skos:broader ?p }` costs 89 ms, 1.16 s, and **21.6 s**.
+  The sharp part is that it is **served, not refused** — 21.6 s fits inside the 30 s deadline, so
+  the user gets the right ten rows long after concluding the product is broken. Stating
+  `skos:hasTopConcept` answers the identical question in **0.6 ms, flat** — ~36 000× — which makes
+  the fix a **Phase 2 modelling** decision rather than a Phase 3 tuning knob, and that is why the
+  timing mattered before the tree was written rather than after.
+- **Three more, each with a home.** `LIMIT 50` bounds what is returned and not what is read, so
+  type-ahead is linear in the *graph* (k = 0.94) — half a second per keystroke at 1M, needing a text
+  index SPARQL does not standardise. Our **own** 100 000-row cap refuses a legitimate "everything
+  under this branch" at 1M (111 110 rows, 1.6 s) — the refusal is `adr/0011` working as designed and
+  still a capability the customer does not have. And the 30 s deadline is a runaway guard, not an
+  interactivity guard; nothing else came within a factor of ten of it. Load runs 23.5k–36.7k quads/s
+  through the transactional path and a million concepts occupies ~6 GB uncompacted — migration and
+  procurement numbers measured on the path an import will actually take.
+- **Two items were refused, not skipped.** SPARQL 1.1 Update and the Graph Store Protocol both sit
+  above the candidate seam (§3) and the RDF parser, neither of which exists; an *applying* Update
+  endpoint would additionally be an unauthenticated arbitrary-write path and a creation path that
+  skips discovery (§1.7). Both carry a deferral note naming what they wait on. Neither is checked
+  off and neither is claimed.
+- **Recorded:** `adr/0013`; the "limits are chosen rather than measured" entry in `UNTESTED.md` is
+  **half closed** — the numbers are measured now, and both were wrong in ways reasoning would not
+  have found — with the config-wiring half left open and stated. A new `UNTESTED.md` entry names the
+  four things the spike did **not** measure: concurrency, memory, a cold cache, and a realistically
+  lumpy vocabulary (the fixture is a balanced ten-way tree, and a regular shape flatters an index).
+  Four proposals, none self-promoted.
+- **Still uncertain:** whether a benchmark nothing enforces decays into decoration. `adr/0013`
+  explicitly declines to assert timing thresholds in CI, and the reasoning is sound — a runner's
+  timings are noise, so the assertion is either too loose to catch anything or fails randomly, and a
+  randomly-failing performance test gets loosened until it means nothing. So what CI actually
+  guards is the harness's *correctness*, not its *numbers*. That means the 21.6 s cliff is now
+  written down in a document, and nothing in the build will notice if Phase 3 ships a concept tree
+  that issues exactly that query. I half-mitigated this by having `refused_by_shipped_defaults`
+  compare each timing against the shipped `QueryLimits` rather than against a hand-picked
+  threshold — a bound that moves with the product instead of with the machine — but it only fires
+  at the sizes that are `#[ignore]`d, so no ordinary run evaluates it. The narrower thing I do not
+  know: whether the right guard is a test at all, or a **modelling** constraint in Phase 2 that
+  makes the slow query unnecessary by maintaining `skos:hasTopConcept` as an invariant. If the
+  invariant holds, the cliff is unreachable and no test is needed; if it does not, no test saves us
+  because imported vocabularies will violate it on arrival. That is a proposal a human has to rule
+  on, and I notice I would rather write the test than wait for the ruling.
