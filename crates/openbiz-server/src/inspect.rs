@@ -23,7 +23,9 @@
 //! there was" — the one thing a report about inference must never imply. An operator with a large
 //! vocabulary redirects to a file; an operator with a truncated report has no way to know.
 
-use openbiz_skos::{ClassOrigin, CoreModel, Literal, Node, SkosClass, Statement, Term};
+use openbiz_skos::{
+    ClassOrigin, CoreModel, LabelKind, Literal, Node, Resource, SkosClass, Statement, Term,
+};
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
 use crate::cli::CommandError;
@@ -88,11 +90,20 @@ fn term(value: StatementTerm<'_>) -> Term {
 
 /// Render the model as the report an operator reads.
 ///
-/// Four sections, in the order somebody asking "what is this vocabulary?" wants them: what is in
-/// it, how it is organised, what was inferred rather than stated, and what is wrong with it. A
-/// section with nothing to say is left out rather than printed empty, except the last — "no
-/// findings" is the answer to a question that was asked, and its absence would be indistinguishable
-/// from a report that does not check.
+/// Five sections, in the order somebody asking "what is this vocabulary?" wants them: what is in
+/// it, what languages it is in, how it is organised, what was inferred rather than stated, and
+/// what is wrong with it. A section with nothing to say is left out rather than printed empty,
+/// except the last — "no findings" is the answer to a question that was asked, and its absence
+/// would be indistinguishable from a report that does not check.
+///
+/// # Why the languages section is counts and not labels
+///
+/// Every other section is bounded by the *structure* of the vocabulary — its schemes, its
+/// collections, its inferences. The labels are bounded by its size, and a hundred-thousand-concept
+/// thesaurus would drown every other answer in this report. So the labels appear as coverage per
+/// language plus the one number a governance team asks for first: how many concepts have no
+/// preferred label at all. Listing the labels themselves is the concept tree's job, and that is
+/// its own item.
 fn report(graph: &str, model: &CoreModel) -> String {
     let mut out = format!(
         "<{graph}>\n  {} statement(s) read\n\n",
@@ -117,12 +128,38 @@ fn report(graph: &str, model: &CoreModel) -> String {
         out.push('\n');
     }
 
+    let coverage = model.label_coverage();
+    let concepts = model.count_of(SkosClass::Concept);
+    if !coverage.is_empty() || concepts > 0 {
+        out.push_str("\nlanguages:\n");
+        if coverage.is_empty() {
+            // The section is printed empty rather than skipped, because the case that reaches
+            // here is a vocabulary whose labels were *all* refused under S12 — the one time the
+            // count below matters most, and the one time a missing section would read as "there
+            // was nothing to say about labels".
+            out.push_str("  none — nothing in this vocabulary carries a SKOS lexical label\n");
+        }
+        for language in &coverage {
+            out.push_str(&format!("  {language}\n"));
+        }
+        let unlabelled = model
+            .instances_of(SkosClass::Concept)
+            .filter(|(_, resource)| resource.labels_of(LabelKind::Preferred).next().is_none())
+            .count();
+        // Consistent with SKOS — §5.6.4 says so outright — and still the first thing anybody
+        // responsible for the vocabulary wants to know, so it is a count and not a finding.
+        out.push_str(&format!(
+            "  {unlabelled} concept(s) have no skos:prefLabel in any language\n"
+        ));
+    }
+
     let schemes: Vec<_> = model.instances_of(SkosClass::ConceptScheme).collect();
     if !schemes.is_empty() {
         out.push_str("\nconcept schemes:\n");
         for (node, resource) in schemes {
             out.push_str(&format!(
-                "  {node}  {} top concept(s)\n",
+                "  {node}{}  {} top concept(s)\n",
+                named(resource),
                 resource.has_top_concept().len()
             ));
         }
@@ -134,7 +171,11 @@ fn report(graph: &str, model: &CoreModel) -> String {
     if !collections.is_empty() {
         out.push_str("\ncollections:\n");
         for (node, resource) in collections {
-            out.push_str(&format!("  {node}  {} member(s)", resource.members().len()));
+            out.push_str(&format!(
+                "  {node}{}  {} member(s)",
+                named(resource),
+                resource.members().len()
+            ));
             if resource.is_a(SkosClass::OrderedCollection) {
                 let ordered = resource
                     .member_lists()
@@ -171,6 +212,18 @@ fn report(graph: &str, model: &CoreModel) -> String {
     });
 
     out
+}
+
+/// A resource's label in parentheses, or nothing if it has none.
+///
+/// The language tag is printed with it. [`Resource::display_label`] picks deterministically but
+/// arbitrarily across languages, so showing the tag is what keeps the report honest: a reader can
+/// see they were given the German one rather than assuming the vocabulary has no English.
+fn named(resource: &Resource) -> String {
+    match resource.display_label() {
+        Some(label) => format!("  ({label})"),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -326,6 +379,136 @@ mod tests {
         assert!(
             matches!(error, CommandError::Store(_)),
             "expected the store's refusal, got {error}"
+        );
+    }
+
+    /// The labels are what a person recognises a vocabulary by, so the report leads with them.
+    #[test]
+    fn the_report_names_a_scheme_and_a_collection_by_their_labels() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             ex:scheme a skos:ConceptScheme ;
+                 skos:prefLabel \"Regions\"@en ;
+                 skos:hasTopConcept ex:emea .
+             ex:emea a skos:Concept ; skos:prefLabel \"Europe\"@en .
+             ex:group a skos:Collection ;
+                 skos:prefLabel \"Reporting groups\"@en ;
+                 skos:member ex:emea .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(report.contains("(\"Regions\"@en)"), "{report}");
+        assert!(report.contains("(\"Reporting groups\"@en)"), "{report}");
+    }
+
+    /// The multilingual gap, which is the number a translation programme is actually managing.
+    #[test]
+    fn the_report_shows_coverage_per_language_and_what_is_unlabelled() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             ex:cat a skos:Concept ; skos:prefLabel \"cat\"@en ; skos:prefLabel \"chat\"@fr .
+             ex:dog a skos:Concept ; skos:prefLabel \"dog\"@en ; skos:altLabel \"hound\"@en .
+             ex:fish a skos:Concept .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(report.contains("languages:"), "{report}");
+        assert!(
+            report.contains("@en  2 preferred on 2 resource(s), 1 alternative, 0 hidden"),
+            "{report}"
+        );
+        assert!(
+            report.contains("@fr  1 preferred on 1 resource(s), 0 alternative, 0 hidden"),
+            "{report}"
+        );
+        assert!(
+            report.contains("1 concept(s) have no skos:prefLabel in any language"),
+            "{report}"
+        );
+        // Unlabelled is a fact about the vocabulary, not a violation of SKOS — §5.6.4.
+        assert!(
+            report.contains("no SKOS integrity condition is violated"),
+            "{report}"
+        );
+    }
+
+    /// S14 through the real store: the commonest defect in a thesaurus merged from two sources.
+    #[test]
+    fn two_preferred_labels_in_one_language_make_the_vocabulary_inconsistent() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             ex:cat a skos:Concept ; skos:prefLabel \"cat\"@en ; skos:prefLabel \"feline\"@en .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(report.contains("[inconsistent]"), "{report}");
+        assert!(report.contains("S14"), "{report}");
+        assert!(
+            report.contains("violates a SKOS integrity condition"),
+            "{report}"
+        );
+    }
+
+    /// S13, and the tag comparison that decides whether it fires.
+    #[test]
+    fn one_label_under_two_properties_is_inconsistent_but_two_tags_are_not() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             ex:cat a skos:Concept ; skos:prefLabel \"cat\"@en ; skos:altLabel \"cat\"@en .
+            "
+        ));
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+        assert!(report.contains("S13"), "{report}");
+        assert!(report.contains("[inconsistent]"), "{report}");
+
+        // Example 19 of the SKOS Reference: the same text in two tags is consistent.
+        let (_other_directory, other) = store_with(&format!(
+            "{PREFIXES}
+             ex:cat a skos:Concept ; skos:prefLabel \"cat\"@en ; skos:altLabel \"cat\"@en-GB .
+            "
+        ));
+        let report = inspect(&other, VOCABULARY).expect("a readable vocabulary");
+        assert!(
+            report.contains("no SKOS integrity condition is violated"),
+            "{report}"
+        );
+    }
+
+    /// S12 is a usage convention, so a typed label is reported and the vocabulary still stands.
+    #[test]
+    fn a_label_that_is_not_a_plain_literal_is_ill_formed_rather_than_inconsistent() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+             ex:cat a skos:Concept ; skos:prefLabel \"4\"^^xsd:integer .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(report.contains("[ill-formed]"), "{report}");
+        assert!(report.contains("S12"), "{report}");
+        assert!(
+            report.contains("no SKOS integrity condition is violated"),
+            "{report}"
+        );
+        // The refused label left the concept unlabelled, and the report says so. This is the
+        // case that made the languages section print when it has nothing to list: skipping it
+        // would hide the count exactly when every label in the vocabulary had been refused.
+        assert!(report.contains("languages:"), "{report}");
+        assert!(
+            report.contains("nothing in this vocabulary carries a SKOS lexical label"),
+            "{report}"
+        );
+        assert!(
+            report.contains("1 concept(s) have no skos:prefLabel in any language"),
+            "{report}"
         );
     }
 }

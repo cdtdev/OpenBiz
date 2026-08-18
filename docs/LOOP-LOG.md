@@ -1470,3 +1470,85 @@ look competent disables the one signal that catches a stuck loop.
   vocabulary does not hold — would refuse it. That is either a correct refusal with a bad message
   or the first real case where the model's answers and the store's contents have to be reconciled,
   and I cannot tell which without building the editing path.
+
+## Iteration 21 — 2026-08-18
+- **Took the labels item out of order, and the reason is the point.** The plan listed SKOS-XL
+  first. SKOS-XL depends on this: S55–S57 make the property chain (`skosxl:prefLabel`,
+  `skosxl:literalForm`) a sub-property of `skos:prefLabel`, and Appendix B.3.4.2 says the SKOS+XL
+  inconsistencies of Examples 84–87 are inconsistencies *because of* S13 and S14 — the two
+  conditions this item implements. Building XL first would have been building the derived thing
+  before what it derives to. I read the specification before deciding rather than after, which is
+  the only reason I noticed; the list order looked like a dependency and was not.
+- **I fetched the specification instead of trusting my memory of it, and that was not wasted.**
+  I could not recall whether the one-preferred-label-per-language condition was S13, S14 or S15,
+  and the numbering matters because a citation is the whole product of the explainability
+  requirement. It is **S14**; S13 is pairwise disjointness; §5.4 lists **exactly those two** as
+  integrity conditions, and Appendix B.3.4.2 independently confirms there is no third. A guess
+  with a green tick on it would have shipped a wrong citation into every report.
+- **The decision that took the work is what "RDF plain literal" means in 2026.** S12 gives the
+  range of the three labelling properties as "the class of RDF plain literals" — a class RDF 1.1
+  **abolished**. The phrase does not occur anywhere in RDF 1.1 Concepts; I checked by grepping the
+  document rather than by recalling it. §3.3 defines the two things it split into, a
+  language-tagged string (`rdf:langString`) and a simple literal (`xsd:string`), and that pair is
+  what we accept. A `"4"^^xsd:integer` under `skos:prefLabel` is refused, reported, and
+  **discarded** — not filed in some other bucket, because S13 asks whether two properties carry
+  the same label and S14 asks how many a language has, and a term that is neither string nor
+  tagged answers neither. A test pins the consequence: the same typed literal under two properties
+  is two S12 findings and no clash.
+- **S12 is not an integrity condition, and getting that backwards is how a tool refuses valid
+  data.** §5.6.2 says an application "may reject such data but is not required to". So it is
+  ill-formed, the vocabulary still stands, and the report says whose judgement it is. Same shape
+  as iteration 20's `skos:memberList` decision, which is now twice this distinction has been the
+  substance of an item rather than a detail of one.
+- **One test failure was worth more than the four that passed first time.** The languages section
+  was written to print only when there were languages — so a vocabulary whose labels had *all*
+  been refused under S12 lost the "N concepts have no preferred label" line exactly when it
+  mattered most. The section now prints when it has nothing to list, and says so. I would not
+  have found that by reading the code; the assertion found it.
+- **The report is bounded on purpose.** Every other section of `openbiz inspect` is bounded by the
+  vocabulary's *structure*; labels are bounded by its *size*. So labels appear as coverage per
+  language plus one number — how many concepts have no preferred label in any language — and never
+  as a list. On the smoke fixture: `@en 4 preferred on 4 resource(s), 1 alternative`, `@fr 1
+  preferred on 1 resource(s)`, `1 concept(s) have no skos:prefLabel in any language`. That is the
+  translation gap a multilingual programme manages, in three lines, from a shell.
+- **I withdrew a claim `adr/0019` made one iteration ago.** It said the model keeps what is
+  proportional to the structure rather than the size, because labels were counted and dropped.
+  They are kept now — S13 and S14 are per-resource and no statement order tells you a resource is
+  finished — so peak memory is proportional to the label count. `adr/0020` says so plainly and
+  `UNTESTED.md`'s scale entry is amended rather than left reading as it did.
+- **Tests: 402 Rust (from 370) and 30 UI**, with `fmt`, `clippy -D warnings`, `cargo deny`, and the
+  UI untouched. Ten of the new tests are the SKOS Reference's own numbered examples (10–19)
+  asserted to be what the specification says they are, which is `CLAUDE.md` §4.5 done properly
+  rather than claimed. The suite was proven to **discriminate** before it was trusted: four
+  mutations each turned it red — S13's check disabled (3 tests), S14's disabled (3), the language
+  tag left un-lower-cased (3), and every literal accepted as a label (5).
+- **Also cleaned up and also recorded:** `LabelKind` and a `Label` struct had sat in
+  `openbiz-skos/src/lib.rs` since Phase 0 with no caller — the exact §4.1 failure the ledgers
+  exist for, and it had never been written down. `LabelKind` is now real; the struct is deleted.
+  And `BLOCKED.md`'s Open section said "None" while a Phase 2 item had been blocked on
+  authentication since iteration 17: the reasoning lived on the plan item, so it was visible to a
+  reader and invisible to the loop's own "already blocked?" check. Now entered, four iterations
+  late.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T21:54Z. Checked
+  before writing this header, per iterations 16, 17, 18 and 20.
+- **Still uncertain:** whether refusing to entail S11 is a correct omission or a deferred interop
+  break, and I cannot tell from inside this build. S11 makes all three labelling properties
+  sub-properties of `rdfs:label`, so every SKOS label entails an `rdfs:label`. Nothing here reads
+  `rdfs:label`, and entailing it would add one derivation *per label* to a report that prints
+  every derivation — a report the size of the vocabulary, for a fact no caller consumes. That
+  reasoning is sound and it is also exactly the reasoning that would justify never doing it. The
+  thing I do not know is whether a **consumer of our export** expects it: a generic RDF browser, a
+  DCAT catalogue, or a SPARQL query written against `rdfs:label` by somebody who has never heard
+  of SKOS would all find nothing, and would find nothing *silently*. That is the "reports zero
+  where a real vocabulary has thousands" failure mode iteration 20 built the whole inference path
+  to avoid, aimed the other way — at a reader outside our process rather than inside it. I cannot
+  resolve it by reasoning because it depends on what tools our customers point at an export, and
+  the narrower question underneath it is one I now think is the real one: **entailments we decline
+  to materialise are invisible to every consumer that is not us.** That applies to S11 today and
+  to S7, S8, S29 and S36 already — `openbiz export` hands out the asserted graph, so a scheme we
+  *found* by inference is not in the file we give you. Iteration 20 recorded the opposite worry
+  (materialising would put statements the user never wrote into their vocabulary) and I still
+  think that is right. But the two together mean our answers and our exports disagree, and nothing
+  in the build says so to the person downloading the file. That is the third time in four
+  iterations that where an entailment lives has been the open question, which by iteration 18's
+  own rule makes it a design decision to take rather than a doubt to keep recording.

@@ -1167,6 +1167,14 @@ Do not delete it — the record of what took how long to close is the signal.
   rather than the graph, but the model over a million concepts is an unmeasured number and
   `openbiz inspect` on such a store is an unmeasured wall-clock. `adr/0013` found one 21-second
   cliff by measuring rather than reasoning, which is the reason not to assume this one is fine.
+  **Amended at iteration 21, and the number got worse.** The model used to count labels and drop
+  them; it now *keeps* them, because S13 and S14 are per-resource conditions and no statement
+  order tells you a resource is finished. Labels are most of a thesaurus's statements, so peak
+  memory has gone from "proportional to the structure" to "proportional to the size" — the exact
+  claim `adr/0019` made and `adr/0020` withdraws. What is held is minimal (one entry per distinct
+  label per resource, shared across the three properties) and the *report* is still bounded by
+  the language count rather than the label count, but the model is not, and the measurement is
+  now more overdue than it was.
 - **What would close it:** run `inspect` against the generated stores from `adr/0013`'s harness and
   record the memory and the time, as that ADR did for the tree and the label search.
 - **Opened:** iteration 20
@@ -1211,3 +1219,51 @@ Do not delete it — the record of what took how long to close is the signal.
 - **What would close it:** make `StatementRef::subject` a type that cannot hold a literal, as
   Oxigraph's does. Worth doing when a second producer of `StatementRef` exists; premature now.
 - **Opened:** iteration 20
+
+### `Resource::preferred_label_in` does no BCP 47 language fallback
+- **Kind:** partial-standard
+- **What is proven:** a preferred label is found by exact language tag, lower-cased, and Example 18
+  is asserted: a request for `en` is not answered with `en-GB`, because §5.6.5 makes them different
+  tags. `Resource::display_label` falls back from preferred to alternative and is deterministic
+  whichever order the statements arrive in.
+- **What is not:** §5.6.5 *suggests* an application implement BCP 47's "lookup" algorithm so that a
+  request for `en-GB` can be answered by `en`, and we do not. A vocabulary labelled only in `en`
+  therefore looks entirely unlabelled to a caller asking for `en-GB`. `display_label` picks the
+  first label in language-tag order, which is deterministic but arbitrary across languages —
+  every caller in this build prints the tag beside it so the arbitrariness is visible, which is a
+  mitigation and not a fix.
+- **What would close it:** a configured display-language preference order, with lookup fallback
+  applied against it, and a test per §5.6.5. It needs a place to configure it, so it belongs with
+  the interface rather than ahead of it.
+- **Opened:** iteration 21
+
+### S11 is not entailed — `rdfs:label` is not derived from a SKOS label
+- **Kind:** partial-standard
+- **What is proven:** S12, S13 and S14 are implemented and tested against the specification's own
+  Examples 10–19. S10 and S11 are quoted in `labels.rs` and deliberately not applied, with the
+  reason recorded in `adr/0020`.
+- **What is not:** S11 says the three properties are sub-properties of `rdfs:label`, so every SKOS
+  label entails an `rdfs:label`. We do not derive it. Nothing in this build reads `rdfs:label`, and
+  entailing it would add one derivation per label to a report that prints every derivation — the
+  cost is a report the size of the vocabulary for a fact no caller consumes. **A tool that
+  round-trips our export and expects `rdfs:label` will not find one**, which is a real interop
+  gap even though it is a sound omission.
+- **What would close it:** derive it when something reads it — most likely the interface's display
+  layer or a DCAT export — and suppress it from the derivation listing, which is a change to how
+  derivations are reported and not just to the rule set.
+- **Opened:** iteration 21
+
+### An S12-refused label removes the resource from the model when it is the only thing said about it
+- **Kind:** partial-coverage
+- **What is proven:** a label that is not an RDF plain literal raises S12's finding, is discarded,
+  and takes no part in S13 or S14 — tested both ways, including that the same typed literal under
+  two properties is two findings and no clash. A resource that is *also* typed keeps everything
+  else it has, which is asserted.
+- **What is not:** a resource whose only SKOS statements are refused labels does not appear in
+  `CoreModel::resources()` at all. The findings name it, so nothing is silently lost, but a caller
+  iterating `resources()` to build a concept list will not see it. That is the documented meaning
+  of `resources()` and it is asserted — but it is a sharper edge than it looks, and the first
+  caller that treats `resources()` as "everything the graph mentions" will be wrong.
+- **What would close it:** decide whether `resources()` means "mentioned" or "understood" once,
+  when a second caller exists. Today `openbiz inspect` is the only one and it reads findings too.
+- **Opened:** iteration 21

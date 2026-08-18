@@ -18,7 +18,7 @@ format chooser read from the server, and the export carries none of OpenBiz's ow
 **And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
 four results formats and all six RDF syntaxes, over a default dataset that is the user's
 vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-370 Rust tests and 30 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+402 Rust tests and 30 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
 narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
 the published EBNF rather than against the library that wrote the bytes, which found two real
@@ -41,8 +41,14 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 3 of 16 items done. **The build now knows
-what a concept is.** `openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
+**Current position:** Phase 2 (SKOS authoring model), 4 of 16 items done. **The build now knows
+what a concept is, and what it is called.** A vocabulary's lexical labels are modelled per
+language, both of the integrity conditions SKOS states on them are enforced (S13, S14), and
+`openbiz inspect` reports which languages a thesaurus is actually in and how far behind each one
+is — see `adr/0020`, which also records what "RDF plain literal" has to mean now that RDF 1.1 has
+abolished the term.
+
+`openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
 schemes, and collections — including the ones no statement typed, because SKOS itself entails
 them — and names the specification statement behind every fact it inferred. It separates a violated
 SKOS integrity condition from something merely ill-formed and says which judgement is ours (see
@@ -590,10 +596,38 @@ the interface is a core differentiator, and building it late means retrofitting 
       > on disk — including that the store is byte-for-byte unchanged afterwards. See `adr/0019`.
       > **Scope, honestly:** the four core classes only. Labels, semantic relations, mapping
       > properties, and SKOS-XL are the items below and are not modelled here.
-- [ ] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
-- [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy
-- [ ] Labels: `prefLabel`, `altLabel`, `hiddenLabel`, per-language, with the one-preferred-label-
+- [x] Labels: `prefLabel`, `altLabel`, `hiddenLabel`, per-language, with the one-preferred-label-
       per-language rule enforced
+      > **Taken before SKOS-XL at iteration 21, deliberately.** SKOS-XL was listed first and it
+      > depends on this: S55–S57 make the property chain (`skosxl:prefLabel`,
+      > `skosxl:literalForm`) a sub-property of `skos:prefLabel`, so an XL label's whole point is
+      > that it "dumbs down" to a plain SKOS label — and Appendix B.3.4.2 says the SKOS+XL
+      > inconsistencies (Examples 84–87) are inconsistencies *because of* S13 and S14, which are
+      > this item. Building XL first would have meant building the derived thing before the thing
+      > it derives to. The order in the list was not a dependency, and now it is.
+      > **The two integrity conditions the specification states are implemented and no others.**
+      > §5.4 lists exactly two — S13, pairwise disjointness, and S14, at most one `skos:prefLabel`
+      > per language *tag* — and both are enforced. S12's "range is the class of RDF plain
+      > literals" is **not** one: §5.6.2 says an application "may reject such data but is not
+      > required to", so a typed or IRI-valued label is reported as ill-formed and the vocabulary
+      > still stands. Getting that the wrong way round would refuse valid enterprise data.
+      > **The decision that needed the specification open is what "plain literal" means now.**
+      > RDF 1.1 abolished the term; §3.3 of RDF 1.1 Concepts splits it into a language-tagged
+      > string (`rdf:langString`) and a simple literal (`xsd:string`), and that pair is what we
+      > accept. Language tags are compared lower-cased *in this crate*, not relied upon from the
+      > engine, because `openbiz-skos` is engine-free and a parsed file or an agent's proposal can
+      > hand us `@EN`. See `adr/0020`.
+      > **Production caller:** `openbiz inspect` gained a `languages:` section — coverage per
+      > language plus how many concepts have no preferred label in any of them, which is the
+      > translation gap a multilingual programme manages — and now names schemes and collections
+      > by their label rather than by IRI alone. Counts, never a list: every other section of that
+      > report is bounded by the vocabulary's structure and labels are bounded by its size.
+      > **Scope, honestly:** S11 (`rdfs:label` as a super-property) is quoted and not entailed, and
+      > there is no BCP 47 lookup fallback when asking for a language. Both in `docs/UNTESTED.md`,
+      > along with the memory claim `adr/0019` made and this item withdrew.
+- [ ] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
+      > Now buildable: S55–S57 need the plain-SKOS labels above to dumb down *to*, and they exist.
+- [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy
 - [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number
