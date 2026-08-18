@@ -41,12 +41,16 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 4 of 16 items done. **The build now knows
-what a concept is, and what it is called.** A vocabulary's lexical labels are modelled per
-language, both of the integrity conditions SKOS states on them are enforced (S13, S14), and
-`openbiz inspect` reports which languages a thesaurus is actually in and how far behind each one
-is — see `adr/0020`, which also records what "RDF plain literal" has to mean now that RDF 1.1 has
-abolished the term.
+**Current position:** Phase 2 (SKOS authoring model), 5 of 17 items done. **The build now knows
+what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
+way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
+SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
+thesaurus is actually in and how far behind each one is — see `adr/0020`, which also records what
+"RDF plain literal" has to mean now that RDF 1.1 has abolished the term. **SKOS-XL's labelling
+half is in** (Appendix B.2 and B.3): a label is a resource with an IRI you can date, attribute and
+version, and the S55–S57 chains dumb it down to a plain SKOS label so the same two integrity
+conditions catch Appendix B's own Examples 84–87 — see `adr/0021`, which records why Appendix B
+having no "Integrity Conditions" heading made every severity in it a decision to write down.
 
 `openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
 schemes, and collections — including the ones no statement typed, because SKOS itself entails
@@ -625,8 +629,45 @@ the interface is a core differentiator, and building it late means retrofitting 
       > **Scope, honestly:** S11 (`rdfs:label` as a super-property) is quoted and not entailed, and
       > there is no BCP 47 lookup fallback when asking for a language. Both in `docs/UNTESTED.md`,
       > along with the memory claim `adr/0019` made and this item withdrew.
-- [ ] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
-      > Now buildable: S55–S57 need the plain-SKOS labels above to dumb down *to*, and they exist.
+- [x] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
+      > **Done at iteration 22**, and **split in place**: this item is Appendix B.2 and B.3 — the
+      > `skosxl:Label` class, `skosxl:literalForm`, the three XL labelling properties, and the
+      > dumbing-down. B.4's `skosxl:labelRelation` is the item below.
+      > **The dumbing-down is the point.** S55–S57 make the property chain (`skosxl:prefLabel`,
+      > `skosxl:literalForm`) a sub-property of `skos:prefLabel`, so a concept labelled only
+      > through SKOS-XL still has plain SKOS labels — by entailment, if somebody performs it. The
+      > derived labels go into the **same map** as the asserted ones, each carrying a
+      > `LabelOrigin`, because B.3.4.2 says Examples 84–87 are inconsistent *because of* S13 and
+      > S14, which are conditions on that map. Keeping them elsewhere would report Example 84 as
+      > a clean vocabulary. See `adr/0021`.
+      > **Appendix B states no integrity conditions at all** — B.2.2, B.3.2 and B.4.2 are headed
+      > "Class and Property Definitions", and §1.7 makes that heading meaningful. So the severity
+      > of every SKOS-XL finding is ours to decide and the ADR records whose judgement each is: the
+      > specification's for two literal forms (Examples 76–79 are marked "not consistent"), ours
+      > for the disjointness rules and the datatype-property rule, ours for the two ill-formed
+      > ones. A label with **no** literal form is deliberately *not* inconsistent — "cardinality
+      > exactly 1" entails a form exists, it does not require the graph to state one, and calling
+      > a partial export broken would refuse valid data.
+      > **Production caller:** `openbiz inspect` gained a `skos-xl labels:` section, omitted
+      > entirely for a vocabulary that does not use SKOS-XL so that its presence answers "is this
+      > thesaurus using SKOS-XL?". Proven end to end against the real binary with a fixture that
+      > states **no plain label anywhere**.
+      > **Scope, honestly:** S59–S62 are not read at all, so a `skosxl:labelRelation` is silently
+      > ignored — in `docs/UNTESTED.md`, along with the memory cost (an XL thesaurus holds each
+      > label roughly twice) and the export gap, which SKOS-XL makes materially worse: our export
+      > of an XL-authored thesaurus carries no plain labels at all.
+- [ ] `skosxl:labelRelation` — links between labels, and the ISO 25964 extension point (B.4,
+      S59–S62)
+      > Split out of the item above at iteration 22. B.4 says the property "is not intended to be
+      > used directly, but rather as an extension point which can be refined" — Example 89 refines
+      > it to `ex:acronym` — which is exactly how ISO 25964's label relationships map onto SKOS-XL.
+      > Four statements to apply: S59 (object property), S60 and S61 (domain and range are
+      > `skosxl:Label`), and S62, which makes it **symmetric** — so a link entails its converse,
+      > and B.4.4.1 warns that a *sub-property* of a symmetric property is not necessarily
+      > symmetric, which is the trap to test for.
+      > It was split rather than built because nothing in the authoring path depends on it, while
+      > everything depends on the dumbing-down, and doing both in one item would have been the
+      > "much bigger than it reads" case the loop is told to split.
 - [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy
 - [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`

@@ -117,6 +117,37 @@ impl LabelKind {
         }
     }
 
+    /// The SKOS-XL property IRI for this kind — `skosxl:prefLabel` and its two siblings. B.3.
+    ///
+    /// The local names are the same as the plain properties', which is what B.3.1 means by
+    /// "analogous to the properties of the same local name". Only the namespace differs.
+    pub fn xl_property_iri(self) -> String {
+        format!("{}{}", ns::SKOSXL, self.local_name())
+    }
+
+    /// The kind an SKOS-XL predicate IRI names, or `None` if it is not one of the three.
+    pub fn from_xl_iri(iri: &str) -> Option<Self> {
+        match iri {
+            crate::xl::SKOSXL_PREF_LABEL => Some(LabelKind::Preferred),
+            crate::xl::SKOSXL_ALT_LABEL => Some(LabelKind::Alternative),
+            crate::xl::SKOSXL_HIDDEN_LABEL => Some(LabelKind::Hidden),
+            _ => None,
+        }
+    }
+
+    /// The sub-property chain axiom that dumbs an XL label of this kind down to a plain one.
+    ///
+    /// S55 for preferred, S56 for alternative, S57 for hidden — the three are stated separately
+    /// in B.3.2 and each names one property, so the rule is a property of the kind rather than a
+    /// single citation covering all three.
+    pub fn dumbing_down_rule(self) -> crate::SkosRule {
+        match self {
+            LabelKind::Preferred => crate::SkosRule::S55,
+            LabelKind::Alternative => crate::SkosRule::S56,
+            LabelKind::Hidden => crate::SkosRule::S57,
+        }
+    }
+
     /// Whether SKOS permits at most one of these per language tag on one resource.
     ///
     /// Integrity condition [`S14`](crate::SkosRule::S14). Only the preferred label is limited;

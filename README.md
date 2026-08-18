@@ -158,6 +158,33 @@ Two `skos:memberList` values on one resource are the case that catches tools out
 violation of S35 and is consistent with SKOS, so we report it and say the judgement is ours. See
 [`docs/adr/0019`](docs/adr/0019-skos-core-model.md).
 
+### SKOS-XL
+
+A thesaurus that follows ISO 25964 gives each label an IRI of its own, so it can record who
+created the label, when it was approved, and what it stands for — none of which plain SKOS has
+anywhere to put. `inspect` reads that too, and applies the SKOS Reference's sub-property chains
+(S55–S57), so a concept labelled **only** through SKOS-XL still reports the plain SKOS labels it
+entails:
+
+```
+skos-xl labels:
+  2 skosxl:Label resource(s), 2 with exactly one literal form
+  1 resource(s) labelled through SKOS-XL, 2 plain SKOS label(s) inferred from them
+```
+
+Those inferred labels count towards the per-language coverage and name the concept in the report,
+because to the person asking "how much of this is in French?" a SKOS-XL label is a French label.
+Each one is printed with its chain, like any other inference.
+
+Appendix B of the SKOS Reference states no integrity conditions, so the severity of every SKOS-XL
+finding is a judgement — and [`docs/adr/0021`](docs/adr/0021-skos-xl-labels-and-dumbing-down.md)
+records, rule by rule, whose. Two literal forms on one label is the specification's own
+"not consistent"; a label with *no* literal form is deliberately **not** an inconsistency, because
+"cardinality exactly 1" entails that a form exists without requiring the graph to state it, and
+refusing a partial export would be refusing valid data.
+
+`skosxl:labelRelation` is not read yet — see [`docs/UNTESTED.md`](docs/UNTESTED.md).
+
 `inspect` only reads. It writes nothing, and a test asserts the store is byte-for-byte unchanged.
 
 ## Development

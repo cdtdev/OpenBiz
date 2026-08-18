@@ -1175,8 +1175,14 @@ Do not delete it — the record of what took how long to close is the signal.
   label per resource, shared across the three properties) and the *report* is still bounded by
   the language count rather than the label count, but the model is not, and the measurement is
   now more overdue than it was.
+  **Amended again at iteration 22, and it got worse a second time.** A vocabulary authored in
+  SKOS-XL holds each label roughly twice — once as a label resource with its literal form, once as
+  the dumbed-down plain label on the concept — plus one entry per (resource, label) link. For an
+  ISO 25964 thesaurus, which is exactly the customer that authors in SKOS-XL, that is the common
+  case rather than the corner. Still unmeasured.
 - **What would close it:** run `inspect` against the generated stores from `adr/0013`'s harness and
-  record the memory and the time, as that ADR did for the tree and the label search.
+  record the memory and the time, as that ADR did for the tree and the label search. The harness
+  generates plain-SKOS stores, so closing this now also means generating a SKOS-XL one.
 - **Opened:** iteration 20
 
 ### A derivation chain is a list, not a tree
@@ -1267,3 +1273,62 @@ Do not delete it — the record of what took how long to close is the signal.
 - **What would close it:** decide whether `resources()` means "mentioned" or "understood" once,
   when a second caller exists. Today `openbiz inspect` is the only one and it reads findings too.
 - **Opened:** iteration 21
+
+### SKOS-XL is implemented as far as the labels, and `skosxl:labelRelation` is not read at all
+- **Kind:** partial-standard
+- **What is proven:** Appendix B.2 and B.3 — S48–S58. Thirteen of the appendix's own numbered
+  examples (75–87) are asserted to be what the specification marks them, the S55–S57 chains are
+  entailed and feed S13 and S14, and five mutations turned the suite red before it was trusted.
+  `openbiz inspect` reports it against a real store.
+- **What is not:** **B.4 — `skosxl:labelRelation`, S59–S62 — is not read.** A graph using it gets
+  no `skosxl:Label` entailed from S60 or S61, no symmetric closure from S62, and no finding for a
+  literal on it under S59. The property is silently ignored, exactly as any predicate outside the
+  model is. So we must not claim SKOS-XL support without qualification: we support the labelling
+  half, which is the half ISO 25964's SKOS mapping leans on, and not the linking half.
+  Also not applied: S47 (`skosxl:Label` is an `owl:Class`) and S52's *sub-class* reading — the
+  cardinality restriction is checked as a count, not modelled as a class expression, so nothing
+  would notice a graph that restated the restriction incorrectly.
+- **What would close it:** the `skosxl:labelRelation` build-plan item, split out of the SKOS-XL
+  item at iteration 22 and sitting in Phase 2.
+- **Opened:** iteration 22
+
+### An entailed label is in our answers and not in our exports
+- **Kind:** partial-coverage
+- **What is proven:** a concept labelled only through SKOS-XL is reported by `openbiz inspect` as
+  having plain SKOS labels, counted in the language coverage, and named by them — asserted end to
+  end through the binary against a fixture that states no plain label anywhere.
+- **What is not:** `openbiz export` hands out the **asserted** graph. So the same vocabulary,
+  exported, contains no `skos:prefLabel` at all, and a generic RDF browser, a DCAT catalogue or a
+  SPARQL query written against `skos:prefLabel` sees an unlabelled thesaurus. Nothing in the build
+  says so to the person downloading the file. This is iteration 21's recorded doubt about S11 with
+  a concrete instance attached, and it now applies to S7, S8, S29, S36 and S55–S57 as well.
+  The opposite choice — materialising entailments into the vocabulary — was rejected at iteration
+  20 and that reasoning still holds: a materialised statement is indistinguishable from an asserted
+  one to every other reader, so the user would own statements they never wrote and cannot delete.
+  Both cannot be right, and neither has been decided.
+- **What would close it:** a decision on entailment materialisation, recorded as an ADR. The
+  shapes worth comparing are an `--entailed` flag on `export`, a separate entailed named graph the
+  user can choose to serve, and a cached model invalidated by the candidate seam's apply step.
+  Raised in `docs/PROPOSED.md` rather than taken here, because it changes what a customer's data
+  *is* and that is not a decision to make inside an item about labels.
+- **Opened:** iteration 22
+
+### The window before the stop signals are registered is closed as far as a program can close it
+- **Kind:** partial-coverage
+- **What is proven:** `StopSignals::install()` registers `SIGINT` and `SIGTERM` synchronously, at
+  the top of `serve()`, before the graph registry is read and before the listener binds. Two tests
+  assert it: that the registration is logged before the port is, and that a `SIGTERM` sent as soon
+  as the registration line appears still exits zero and still closes the store. Both were shown to
+  discriminate — moving the registration after the bind fails one, never registering `SIGTERM`
+  fails five.
+- **What is not:** the window from `exec` to that call. Process start, argument parsing, config
+  load and **the store open** all happen first, and a `SIGTERM` during any of them is still a hard
+  kill under the default disposition. No program can register a handler before it runs, so this
+  cannot be closed entirely — but the store open is the slow part and it is on the wrong side of
+  the line. Moving the registration into `main` before the store opens would shrink it further and
+  has not been done, because `install()` would then also run for `openbiz backup` and the other
+  one-shot commands, where a stop *should* be abrupt.
+- **What would close it:** decide whether the one-shot commands want graceful stops too. If they
+  do, `install()` moves to the top of `main` and this shrinks to argument parsing. If they do not,
+  this entry is the floor and should be marked environment-limited instead.
+- **Opened:** iteration 22

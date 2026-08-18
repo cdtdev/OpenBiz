@@ -24,7 +24,8 @@
 //! vocabulary redirects to a file; an operator with a truncated report has no way to know.
 
 use openbiz_skos::{
-    ClassOrigin, CoreModel, LabelKind, Literal, Node, Resource, SkosClass, Statement, Term,
+    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, Resource, SkosClass, Statement,
+    Term,
 };
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
@@ -90,11 +91,11 @@ fn term(value: StatementTerm<'_>) -> Term {
 
 /// Render the model as the report an operator reads.
 ///
-/// Five sections, in the order somebody asking "what is this vocabulary?" wants them: what is in
-/// it, what languages it is in, how it is organised, what was inferred rather than stated, and
-/// what is wrong with it. A section with nothing to say is left out rather than printed empty,
-/// except the last — "no findings" is the answer to a question that was asked, and its absence
-/// would be indistinguishable from a report that does not check.
+/// Sections in the order somebody asking "what is this vocabulary?" wants them: what is in it,
+/// what languages it is in, whether it is authored in SKOS-XL, how it is organised, what was
+/// inferred rather than stated, and what is wrong with it. A section with nothing to say is left
+/// out rather than printed empty, except the last — "no findings" is the answer to a question that
+/// was asked, and its absence would be indistinguishable from a report that does not check.
 ///
 /// # Why the languages section is counts and not labels
 ///
@@ -150,6 +151,45 @@ fn report(graph: &str, model: &CoreModel) -> String {
         // responsible for the vocabulary wants to know, so it is a count and not a finding.
         out.push_str(&format!(
             "  {unlabelled} concept(s) have no skos:prefLabel in any language\n"
+        ));
+    }
+
+    // Left out entirely for a vocabulary authored in plain SKOS, which is most of them. A section
+    // reading "0 labels" on every report would be noise; here its presence is the answer to "is
+    // this thesaurus using SKOS-XL at all?", which is the first thing a migration asks.
+    let labels: Vec<_> = model.instances_of(SkosClass::Label).collect();
+    let labelled: Vec<_> = model
+        .resources()
+        .filter(|(_, resource)| !resource.xl_labels().is_empty())
+        .collect();
+    if !labels.is_empty() || !labelled.is_empty() {
+        let with_form = labels
+            .iter()
+            .filter(|(_, resource)| resource.literal_forms().len() == 1)
+            .count();
+        // Counted from the labels themselves rather than from the derivation list, because the
+        // two can differ: a resource that also states the plain label outright keeps the asserted
+        // one and no derivation is recorded, which is the correct answer to both questions.
+        let dumbed_down: usize = model
+            .resources()
+            .map(|(_, resource)| {
+                resource
+                    .labels()
+                    .values()
+                    .flat_map(|kinds| kinds.values())
+                    .filter(|origin| matches!(origin, LabelOrigin::DumbedDown(_)))
+                    .count()
+            })
+            .sum();
+        out.push_str("\nskos-xl labels:\n");
+        out.push_str(&format!(
+            "  {} skosxl:Label resource(s), {with_form} with exactly one literal form\n",
+            labels.len()
+        ));
+        out.push_str(&format!(
+            "  {} resource(s) labelled through SKOS-XL, {dumbed_down} plain SKOS label(s) \
+             inferred from them\n",
+            labelled.len()
         ));
     }
 

@@ -387,7 +387,15 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Why the loop is not deciding it:** it has been the "still uncertain" line of iterations 18, 20
   and 21, which by the loop's own rule (iteration 18) makes it a design change rather than a
   nuisance — and the cost of getting it wrong falls on a customer's exported data, not on us.
-- **Suggested phase:** Phase 2, before the concept tree; at the latest before Phase 4.
+- **Amended at iteration 22, and the case is now much stronger.** SKOS-XL landed, and S55–S57 mean
+  a thesaurus authored in SKOS-XL — which is the ISO 25964 customer, the one this product is aimed
+  at — has **no plain SKOS labels at all** in the file we export. Not a missing `rdfs:label` on a
+  concept that already has a `skos:prefLabel`, as S11 was: no labels. Every generic RDF tool a
+  customer points at that export sees an unlabelled thesaurus, and the dumbing-down that Appendix
+  B.3.4.1 exists to provide is a thing only OpenBiz performs. It is no longer plausible to call
+  this a tidy-up, and it should be decided before the concept tree rather than at the latest
+  before Phase 4.
+- **Suggested phase:** Phase 2, **before** the concept tree.
 
 ### Decide what to do about the store dropping derived integer datatypes
 - **Status:** proposed.

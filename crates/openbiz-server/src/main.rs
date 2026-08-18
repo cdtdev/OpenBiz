@@ -4,7 +4,7 @@ use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::Context;
-use openbiz_server::{app, shutdown_signal, AppState, Command, Config, USAGE};
+use openbiz_server::{app, AppState, Command, Config, StopSignals, USAGE};
 use openbiz_store::{Decision, Store};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -160,6 +160,13 @@ fn one_shot(
 
 /// Serve until a shutdown signal arrives, then close the store.
 async fn serve(config: Config, store: Store) -> anyhow::Result<()> {
+    // Before anything else a hard kill would interrupt. Until these are registered the kernel's
+    // default disposition applies, and for SIGTERM that is immediate termination — so a
+    // `docker stop` arriving during the registry read or the bind below would kill the process
+    // outright, mid-open, which is precisely what `shutdown.rs` exists to prevent. Registering
+    // lazily, at the first poll inside `axum::serve`, left that window open across both.
+    let stop = StopSignals::install();
+
     // Read the graph registry now rather than on first request. It is the store's own account of
     // what it holds, so a registry it cannot describe — an unknown graph kind, an entry that
     // breaks the namespace rule — is a store we would be guessing about, and guessing is how a
@@ -203,7 +210,7 @@ async fn serve(config: Config, store: Store) -> anyhow::Result<()> {
     );
 
     axum::serve(listener, app(AppState::new(Arc::clone(&store))))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(stop.wait())
         .await
         .context("server terminated unexpectedly")?;
 

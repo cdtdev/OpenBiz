@@ -290,3 +290,150 @@ fn inspect_changes_nothing_in_the_store() {
         "inspect must leave the store byte-for-byte as it found it"
     );
 }
+
+/// SKOS-XL as an enterprise thesaurus actually uses it: the label has an IRI of its own, so the
+/// thesaurus can record who created it and when — which is the whole reason ISO 25964 needs
+/// SKOS-XL and plain SKOS will not do (`CLAUDE.md` §2).
+///
+/// Note what is **not** here, as in [`CONCEPTS`]: no `skos:prefLabel` statement anywhere. Every
+/// plain label in the report below is entailed from a chain, and a vocabulary that reported none
+/// would be one an ordinary RDF tool sees as unlabelled.
+const XL_CONCEPTS: &str = r#"
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix skosxl: <http://www.w3.org/2008/05/skos-xl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix ex: <https://example.org/regions/> .
+
+ex:latam a skos:Concept ;
+    skosxl:prefLabel ex:label-latam ;
+    skosxl:altLabel ex:label-latam-short ;
+    skos:topConceptOf ex:scheme .
+
+ex:label-latam a skosxl:Label ;
+    skosxl:literalForm "Latin America"@en ;
+    dcterms:created "2026-01-14"^^<http://www.w3.org/2001/XMLSchema#date> ;
+    dcterms:creator "ada@example.org" .
+
+ex:label-latam-short a skosxl:Label ;
+    skosxl:literalForm "LATAM"@en .
+"#;
+
+/// The dumbing-down, end to end: an XL-labelled concept reads as a plain SKOS one.
+#[test]
+fn inspect_infers_plain_skos_labels_from_skos_xl_and_says_which_chain_licensed_each() {
+    let dir = authored();
+    import_and_approve(dir.path(), "xl.ttl", XL_CONCEPTS);
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = stdout(&output);
+
+    assert!(
+        report.contains("skosxl:Label"),
+        "the class must be counted: {report}"
+    );
+    assert!(
+        report.contains("2 skosxl:Label resource(s), 2 with exactly one literal form"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "1 resource(s) labelled through SKOS-XL, 2 plain SKOS label(s) inferred from them"
+        ),
+        "{report}"
+    );
+
+    // The chains, quoted. S55 and S56 are separate statements of the specification and each names
+    // one property, so a report citing S55 for the alternative label would be citing the wrong one.
+    assert!(
+        report.contains(
+            "The property chain (skosxl:prefLabel, skosxl:literalForm) is a sub-property of \
+             skos:prefLabel."
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "The property chain (skosxl:altLabel, skosxl:literalForm) is a sub-property of \
+             skos:altLabel."
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("skos:prefLabel \"Latin America\"@en"),
+        "the inferred plain label must be shown, not merely counted: {report}"
+    );
+
+    // And the inferred labels answer the question a translation programme asks. Before this
+    // import the English column read "2 preferred on 2 resource(s), 1 alternative"; the XL
+    // concept moves both, which is only true if a dumbed-down label counts as a label.
+    assert!(
+        report.contains("@en  3 preferred on 3 resource(s), 2 alternative, 0 hidden"),
+        "{report}"
+    );
+    assert!(
+        report.contains("0 concept(s) have no skos:prefLabel in any language"),
+        "an XL-labelled concept is not an unlabelled concept: {report}"
+    );
+
+    assert!(report.contains("findings: 0"), "{report}");
+    assert!(
+        report.contains("no SKOS integrity condition is violated"),
+        "{report}"
+    );
+}
+
+/// Appendix B.3.4.2's Example 84, through the binary: two preferred XL labels in one language.
+///
+/// The point is *where* the fault is caught. Nothing in the XL data model alone forbids this —
+/// B.3.4.2 says so outright — and it is inconsistent only because the chains produce two
+/// `skos:prefLabel` values that S14 then forbids. A build that dumbed labels down into a separate
+/// bucket would report this vocabulary as clean.
+#[test]
+fn inspect_finds_a_duplicate_preferred_label_that_exists_only_by_dumbing_down() {
+    let dir = authored();
+    import_and_approve(dir.path(), "xl.ttl", XL_CONCEPTS);
+    assert!(
+        stdout(&run(dir.path(), &["inspect", REGIONS])).contains("findings: 0"),
+        "the fixture must start clean"
+    );
+
+    import_and_approve(
+        dir.path(),
+        "second-label.ttl",
+        "@prefix skosxl: <http://www.w3.org/2008/05/skos-xl#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:latam skosxl:prefLabel ex:label-latam-alt .\n\
+         ex:label-latam-alt a skosxl:Label ; skosxl:literalForm \"LatAm\"@en .\n",
+    );
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    let report = stdout(&output);
+
+    assert!(report.contains("S14"), "{report}");
+    assert!(
+        report.contains("\"LatAm\"@en") && report.contains("\"Latin America\"@en"),
+        "the finding must name both labels even though neither is stated as a plain label: \
+         {report}"
+    );
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "{report}"
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+/// A plain-SKOS vocabulary gains no SKOS-XL section, because "0 labels" on every report is noise
+/// and the section's presence is itself the answer to "does this thesaurus use SKOS-XL?".
+#[test]
+fn inspect_says_nothing_about_skos_xl_for_a_vocabulary_that_does_not_use_it() {
+    let dir = authored();
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+
+    assert!(!report.contains("skos-xl labels:"), "{report}");
+    assert!(
+        report.contains("skosxl:Label            0\n"),
+        "the class is still counted, so the reader can see it was looked for: {report}"
+    );
+}
