@@ -78,6 +78,11 @@ pub enum Command {
         /// The RDF file naming the statements to remove.
         file: PathBuf,
     },
+    /// Report what a vocabulary holds, in SKOS terms. Reads and nothing else.
+    Inspect {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+    },
     /// List every proposed change the store holds.
     Candidates,
     /// Show one proposed change, with the statements it would add.
@@ -111,6 +116,7 @@ Usage:
                              propose the file's statements as additions to <graph>
   openbiz retract <graph> <file>
                              propose the file's statements as removals from <graph>
+  openbiz inspect <graph>    report what <graph> holds in SKOS terms, and why
   openbiz candidates         list the proposed changes waiting for a decision
   openbiz candidate <id>     show one proposed change and the statements it would add
   openbiz approve <id>       apply a proposed change to its vocabulary
@@ -125,6 +131,12 @@ Neither import nor retract writes to a vocabulary. Each reads the file — the s
 the file extension — stages the statements where you can read them, and records who proposed what
 and why. `openbiz approve` is what applies them, and it records who approved them. Approving and
 rejecting need a name to record: OPENBIZ_ACTOR if it is set, otherwise USER or LOGNAME.
+
+Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
+including the ones no statement typed — SKOS itself says a resource with concepts in it is a
+concept scheme — and it names the specification statement behind every fact it inferred. It
+separates a violated SKOS integrity condition, which makes a graph not a SKOS vocabulary, from
+something merely ill-formed, which is our judgement and says so.
 
 Retract refuses statements the vocabulary does not already hold, and approving a retraction is
 refused if the vocabulary has changed underneath it — a removal that quietly takes away less than
@@ -222,6 +234,12 @@ impl Command {
                         &mut args,
                     )?,
                     file: Self::one_file("retract", "read", &mut args)?,
+                },
+            ),
+            "inspect" => (
+                "inspect",
+                Self::Inspect {
+                    graph: Self::text("inspect", "the IRI of a vocabulary to read", &mut args)?,
                 },
             ),
             "candidates" => ("candidates", Self::Candidates),
@@ -818,6 +836,28 @@ mod tests {
                 command: "candidates",
                 extra: 1
             })
+        );
+    }
+
+    #[test]
+    fn inspect_takes_one_vocabulary_and_refuses_a_second_argument() {
+        assert_eq!(
+            parse(&["inspect", "https://example.org/regions"]),
+            Ok(Command::Inspect {
+                graph: "https://example.org/regions".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse(&["inspect", "https://example.org/regions", "extra"]),
+            Err(ArgsError::TooManyArguments {
+                command: "inspect",
+                extra: 1
+            })
+        );
+        let error = parse(&["inspect"]).expect_err("a vocabulary is required");
+        assert!(
+            error.to_string().contains("inspect") && error.to_string().contains("IRI"),
+            "the message must say what was missing: {error}"
         );
     }
 

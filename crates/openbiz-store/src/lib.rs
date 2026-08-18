@@ -52,6 +52,7 @@ mod results;
 /// ship. See the module's own documentation for why round-trip fidelity is not conformance.
 #[cfg(test)]
 mod spec_conformance;
+mod statement;
 mod syntax;
 
 /// What Oxigraph's query evaluation costs at 10k, 100k, and 1M concepts, measured through our own
@@ -74,6 +75,7 @@ pub use candidate::{
 pub use migrate::{Migration, MigrationReport, MigrationStep};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
+pub use statement::{StatementRef, StatementTerm};
 pub use syntax::RdfSyntax;
 
 pub use graph::{
@@ -784,6 +786,44 @@ impl Store {
         serializer.finish().map_err(failed)?;
 
         Ok(())
+    }
+
+    /// Hand every statement of one graph to `visit`, and return how many there were.
+    ///
+    /// The reasoning exit, where [`Store::export_graph`] is the serialising one. A caller that
+    /// wants to *understand* a graph rather than write it to a file would otherwise have to
+    /// serialise it and parse it back, which means carrying a parser to read our own store.
+    ///
+    /// # What comes out
+    ///
+    /// The statements of that one graph, as [`StatementRef`]s borrowed for the duration of each
+    /// call. No OpenBiz bookkeeping, no other vocabulary, no materialised inference — for the same
+    /// reason as the export: our metadata was never in the graph to begin with (`docs/adr/0007`).
+    ///
+    /// Order is the backend's, not the graph's. Nothing in RDF gives a graph an order, so a caller
+    /// that needs one — an `rdf:List`, say — has to reconstruct it from the statements rather than
+    /// assume the scan hands them over in it.
+    ///
+    /// # Refusals and cost
+    ///
+    /// An IRI with no registry entry is [`StoreError::NoSuchGraph`], never zero statements: a
+    /// vocabulary that does not exist and one that is empty are different answers and a caller
+    /// deciding whether to create one needs to tell them apart.
+    ///
+    /// Streams, and takes no write lock, exactly as [`Store::export_graph`] does and for the same
+    /// reasons — peak memory is one statement, an author is never blocked, and the backend's
+    /// iterator holds one snapshot so a commit landing mid-scan cannot tear the result.
+    pub fn for_each_statement(
+        &self,
+        iri: &str,
+        visit: impl FnMut(StatementRef<'_>),
+    ) -> Result<usize, StoreError> {
+        let (Ok(graph_name), true) = (NamedNode::new(iri), self.contains_graph(iri)?) else {
+            return Err(StoreError::NoSuchGraph {
+                iri: iri.to_owned(),
+            });
+        };
+        statement::for_each_statement(&self.backend, graph_name.as_ref(), visit)
     }
 
     /// Register a new vocabulary graph.

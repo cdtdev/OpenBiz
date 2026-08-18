@@ -1154,3 +1154,60 @@ Do not delete it — the record of what took how long to close is the signal.
   per-vocabulary views are the likely first — should arrive with a test that changing the URL
   abandons the first response.
 - **Opened:** iteration 6
+
+### The SKOS core model is not measured at scale
+- **Kind:** partial-coverage
+- **What is proven:** `CoreModel` classifies the four core classes, applies nine axioms, and walks
+  `skos:memberList` correctly on graphs of a few dozen statements — 31 unit tests keyed to the
+  SKOS Reference's own examples, plus an end-to-end run through the binary. Three mutations turned
+  the suite red before it was trusted (the registry check dropped, S29 entailment disabled, the
+  disjointness checks disabled).
+- **What is not:** it holds one `Resource` per subject **in memory**, and nothing has run it over
+  the 100k- or 1M-concept stores `adr/0013` built. The statements stream, so the peak is the model
+  rather than the graph, but the model over a million concepts is an unmeasured number and
+  `openbiz inspect` on such a store is an unmeasured wall-clock. `adr/0013` found one 21-second
+  cliff by measuring rather than reasoning, which is the reason not to assume this one is fine.
+- **What would close it:** run `inspect` against the generated stores from `adr/0013`'s harness and
+  record the memory and the time, as that ADR did for the tree and the label search.
+- **Opened:** iteration 20
+
+### A derivation chain is a list, not a tree
+- **Kind:** partial-coverage
+- **What is proven:** every derived fact carries the statement it followed from and the
+  specification statement that licensed it, and the list is emitted in the order the rules ran, so
+  an S8 → S5 chain reads downwards. A test asserts every derivation names both.
+- **What is not:** a premise that was *itself* derived is printed as a statement, not as a link to
+  the derivation that produced it. Reading "because `<S>` `skos:hasTopConcept` `<C>`" requires the
+  reader to scan upwards for where that came from. On the fixture there are eight derivations and
+  that is easy; on a real vocabulary with thousands it is not a explanation a person can follow.
+- **What would close it:** give `Derivation` a reference to its premise's derivation where one
+  exists, and render the chain indented. Cheap now, and it becomes the shape the interface's "why?"
+  panel needs — which is the point at which it stops being cosmetic.
+- **Opened:** iteration 20
+
+### `inspect` has no machine-readable output and no exit status for "inconsistent"
+- **Kind:** partial-coverage
+- **What is proven:** the report is readable by a person, exits 0 on a successful read, and
+  non-zero when the vocabulary does not exist.
+- **What is not:** a graph that violates S9 or S37 still exits **0** — the inconsistency is in the
+  text, not the status — so `openbiz inspect … && deploy` does not gate on it. There is also no
+  JSON form, so nothing but a human can consume the answer. Neither is a defect of the model; both
+  are decisions deferred rather than made, and they are recorded so the deferral is visible.
+- **What would close it:** Phase 4's SHACL validation is where a *gate* belongs, with an exit
+  status and a machine-readable report. If `inspect` grows one first it should be the same shape,
+  not a second one.
+- **Opened:** iteration 20
+
+### A literal in subject position is mapped rather than refused
+- **Kind:** inspected-only
+- **What is proven:** `openbiz-server`'s `node()` maps the store's three term kinds onto the
+  domain's two. Oxigraph's subject type cannot hold a literal, so the third arm is unreachable
+  through `Store::for_each_statement`.
+- **What is not:** that unreachability is a property of *this* engine's type, verified by reading
+  it, not by a test — nothing could construct the input to write one. The arm maps a literal to a
+  blank node labelled with its lexical form, which is visibly wrong rather than silently wrong, but
+  if a future source of `StatementRef` (a parser, a discovery connector) is less careful than
+  Oxigraph, this is where a malformed statement would enter the model looking well-formed.
+- **What would close it:** make `StatementRef::subject` a type that cannot hold a literal, as
+  Oxigraph's does. Worth doing when a second producer of `StatementRef` exists; premature now.
+- **Opened:** iteration 20

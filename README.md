@@ -129,6 +129,37 @@ There is **no online backup yet**: see [`docs/adr/0015`](docs/adr/0015-backup-an
 why these are commands rather than HTTP endpoints, and `docs/PROPOSED.md` for the authenticated
 endpoint that would remove the need to stop the server.
 
+## Reading a vocabulary
+
+```sh
+openbiz inspect https://example.org/regions   # what does this vocabulary hold, in SKOS terms?
+```
+
+It reports the concepts, concept schemes, and collections a vocabulary holds — **including the ones
+no statement typed**, because SKOS entails them: a graph saying `<C> skos:inScheme <S>` has a
+concept scheme whether or not anyone said so, and a tool that counted only `rdf:type` would report
+zero schemes for a large share of real thesauri.
+
+Every fact it inferred is printed with the statement it followed from and the statement of the SKOS
+Reference that licensed it:
+
+```
+<…/scheme> rdf:type skos:ConceptScheme
+  because <…/scheme> skos:hasTopConcept <…/apac>
+  and S5: The rdfs:domain of skos:hasTopConcept is the class skos:ConceptScheme.
+```
+
+That is not decoration. A governance team defending a decision to an auditor needs to show why a
+concept is in a scheme, and "the tool says so" is not an answer.
+
+It also separates a violated **integrity condition** — S9 and S37, which make a graph not a SKOS
+vocabulary — from something merely **ill-formed**, which SKOS permits and we think is a mistake.
+Two `skos:memberList` values on one resource are the case that catches tools out: it looks like a
+violation of S35 and is consistent with SKOS, so we report it and say the judgement is ours. See
+[`docs/adr/0019`](docs/adr/0019-skos-core-model.md).
+
+`inspect` only reads. It writes nothing, and a test asserts the store is byte-for-byte unchanged.
+
 ## Development
 
 Requires a recent stable Rust toolchain and Node.js.
