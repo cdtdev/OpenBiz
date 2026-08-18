@@ -135,6 +135,32 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   reader, so it should check the *falsifiable* claims only and leave the prose alone.
 - **Suggested phase:** Phase 0, as a harness item.
 
+### Bring the Oxigraph benchmark spike forward, ahead of the remaining Phase 1 items
+
+- **Why:** this is the same doubt for the second iteration running, which is the signal the loop log
+  exists to surface. Iteration 6 shipped `GET /api/graphs` returning the *whole* registry from an
+  unmeasured pattern scan and closed with "I do not know whether I have designed the contract or
+  merely deferred it". Iteration 7 shipped a write lock that serialises every writer and closed with
+  "I have measured that the lock is necessary and not measured what it costs". Both are load-bearing
+  shapes, both are now underneath callers, and both were decided on reasoning rather than numbers
+  because the spike that would produce the numbers is item 9 of 11.
+- **What it changes:** the spike currently owes four numbers rather than the one it was written for —
+  query evaluation at 10k/100k/1M (its original scope), `close()` flush cost at those sizes,
+  registry scan cost on the `GET /api/graphs` hot path, and concurrent write throughput plus lock
+  wait time under the `adr/0009` lock. Three of those four were added by items built *after* the
+  spike was scheduled, which is itself the argument: each further item adds a number the spike owes
+  and a caller written against an unmeasured assumption.
+- **What it costs:** the four remaining Phase 1 items before it (serialisation, SPARQL query, SPARQL
+  update, Graph Store Protocol) are the ones that make a large store *easy to populate*, so running
+  the spike first means building its fixtures by hand instead of loading a Turtle file. That is real
+  work and it is the honest reason the spike was placed where it is. The counter-argument is that
+  SPARQL query evaluation is the specific thing upstream documents as unoptimised, so building the
+  query endpoint before measuring it is the least reversible order available.
+- **Why this is not the loop's call:** phases are ordered by dependency and `CLAUDE.md` §7 says the
+  loop does not promote its own proposals or reorder the plan. Reordering on the strength of the
+  loop's own recurring unease is exactly the scope creep that brake exists to stop.
+- **Opened:** iteration 7
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
@@ -222,3 +248,19 @@ findable rather than making a new one easier to write, which is the direction §
 to push. Worth pairing with the Phase 2 discovery work, since the same summary is what a discovery
 result needs to show. Note the degradation is clean: with `NullProvider` the list shows IRIs and
 whatever descriptions a human wrote, which is exactly today's behaviour._
+
+_Iteration 7 (transactional writes): none in the built path, and one genuine one it creates. The
+transaction machinery is the last place an LLM belongs — atomicity, lock ordering, and rollback are
+exactly the properties that must be deterministic and provable, and "the model thought the write
+should commit" is not a sentence anyone should be able to say about a governance store. The
+opportunity is the **consequence** of serialising writers. Once writes are serialised, a second
+author's work can be refused because the store moved underneath them, and the manual path — which
+must always exist under §1.6 — is showing them a triple-level diff. That is precisely what the
+incumbents do and what governance teams complain about: a diff of RDF statements is not an answer to
+"what changed and does it affect what I was doing?". An agent that reads the intervening change set
+and says "while you were editing, someone added three narrower concepts under Loan and deprecated
+Bridging Loan — your edit touches neither" is a recall-and-summarise task over data we already hold,
+it emits no writes, and it degrades to the raw diff with `NullProvider`. This is the same shape as
+the planned "change-request impact summary for reviewers" agent, and the two should probably be one
+agent serving two moments rather than two implementations: the reviewer's question and the
+conflicted author's question are the same question asked from different seats._

@@ -5,24 +5,29 @@ The backlog and the burn-down. One `- [ ]` per item; check it off only when it m
 
 **Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
 memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is four items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
+Phase 1 is five items in. The embedded store opens, stamps, and closes an Oxigraph instance inside
 the binary; it has a **named-graph model with a real enforcement point** — one graph per
 vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
 authoring, and a single write choke point that every write passes through — and **that model is now
 visible to a user**: `GET /api/graphs` serves the registry, and the interface lists the
 vocabularies in it while keeping OpenBiz's own graphs out of the user's list and counted rather
-than hidden. 97 Rust tests and 22 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+than hidden. **Writes are transactional and serialised**, which closed a real corruption race in
+the creation path. 105 Rust tests and 22 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **The single binary is real:** a
 `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 4 of 11 items done. The store is now reachable
-from a browser: `main` shares the open store with the router, `GET /api/graphs` serves the registry
-as JSON, and the interface renders it. **Next: the transactional write API with rollback, and
-concurrent-reader safety under test.** Vocabulary *creation* over HTTP remains deliberately absent —
-§1.7 requires discovery to run before creation and `DiscoveryProvider` does not exist until
-Phase 2 — so `POST /api/graphs` answers 405 rather than being quietly added.
+**Current position:** Phase 1 (RDF core & store), 5 of 11 items done. Writes are now
+transactional: `Store::transaction` is all-or-nothing, rolls back on error *and* on panic, and is
+serialised against other writers by a lock we own — because the backend's transaction was measured
+and does **not** serialise. Readers are never blocked and never see an uncommitted write. **Next:
+parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, and JSON-LD, round-trip tested** —
+which is also what gives the store a term model of its own, and so what lets raw triple writing
+become part of the public transaction API rather than staying private. Vocabulary *creation* over
+HTTP remains deliberately absent — §1.7 requires discovery to run before creation and
+`DiscoveryProvider` does not exist until Phase 2 — so `POST /api/graphs` answers 405 rather than
+being quietly added.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -162,7 +167,22 @@ the interface is a core differentiator, and building it late means retrofitting 
       > outranks creation (§1.7) instead of offering a "New vocabulary" button.
       > `POST /api/graphs` is a 405, not a 404: the registry is deliberately read-only until
       > `DiscoveryProvider` exists. See `adr/0008`.
-- [ ] Transactional write API with rollback; concurrent-reader safety under test
+- [x] Transactional write API with rollback; concurrent-reader safety under test
+      > **Better, not parity:** the finding that shaped this item is that **the backend's own
+      > transaction does not serialise writers**. Oxigraph 0.5.9's transaction is a snapshot plus a
+      > write batch, and commit is an unconditional write of that batch — no conflict detection.
+      > Two callers that both read "this IRI is free" both commit. A test written first proved it:
+      > eight threads creating one IRI, **all eight succeeded**, and because a graph registered
+      > twice makes `Store::graphs` refuse the *whole* registry, one user's mistimed second click
+      > took the entire vocabulary list down. The incumbents inherit their triplestore's isolation
+      > level and mostly do not say what it is; here it is measured, named in `adr/0009`, and the
+      > gap is closed by a write lock we own — proven load-bearing by removing it and watching the
+      > race return. Rollback is a **closure**, so the safe outcome is the one a failing caller
+      > gets by default rather than one they must remember to ask for; a panic rolls back too, and
+      > does not leave the store silently read-only. Nesting is refused rather than deadlocked on.
+      > The production caller is store startup: the format stamp and the system graph's registry
+      > entry now commit **together**, closing a window where a kill left a stamped store this
+      > build reports as inconsistent.
 - [ ] Parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, JSON-LD — round-trip tested
 - [ ] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)
 - [ ] SPARQL 1.1 Update endpoint, guarded by authorisation

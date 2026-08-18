@@ -29,7 +29,9 @@
 //!
 //! [Oxigraph]: https://oxigraph.org/
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use oxigraph::model::vocab::{rdf, xsd};
 use oxigraph::model::{GraphName, Literal, NamedNode, NamedNodeRef, Quad, Term};
@@ -136,6 +138,12 @@ pub enum StoreError {
         /// The IRI that is already taken.
         iri: String,
     },
+    /// A transaction was started from inside another transaction on the same store.
+    #[error(
+        "a write transaction is already open on this store from this thread; \
+         a transaction cannot be nested inside another"
+    )]
+    NestedTransaction,
     /// The backend failed.
     #[error("store backend failed: {0}")]
     Backend(String),
@@ -150,6 +158,44 @@ pub struct Store {
     backend: Backend,
     path: PathBuf,
     format_version: u32,
+    /// Serialises write transactions, so a read-modify-write is atomic against other writers.
+    ///
+    /// The backend does **not** do this for us. Its transaction is a snapshot plus an in-memory
+    /// write batch, and committing is an unconditional write of that batch — there is no
+    /// conflict detection and no validation that the snapshot is still current. Two transactions
+    /// that both read "this IRI is free" therefore both commit, and the second silently
+    /// overwrites the first's decision. That is a lost update, and in a governance product a
+    /// lost update is an approval that vanishes.
+    ///
+    /// Serialising writers is cheap here in a way it would not be for a shared server: the
+    /// single-binary rule (`CLAUDE.md` §1.2) means exactly one process owns this store, and the
+    /// backend's exclusive file lock enforces it. Readers never take this lock, so concurrent
+    /// reads stay concurrent. See `docs/adr/0009`.
+    writes: Mutex<()>,
+}
+
+thread_local! {
+    /// Addresses of the stores this thread already has a write transaction open on.
+    ///
+    /// [`Store::writes`] is not reentrant, so a transaction opened inside another transaction on
+    /// the same store would block forever against itself. A silent deadlock in the write path is
+    /// the worst possible failure — no error, no log line, just a request that never returns —
+    /// so we detect the case and refuse it. Keyed by store address rather than by a global flag
+    /// so a process holding two stores over two data directories is not falsely refused.
+    static OPEN_TRANSACTIONS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Held for the duration of a write transaction; releases the lock and the reentrancy mark.
+struct WriteAccess<'a> {
+    _lock: MutexGuard<'a, ()>,
+    store: usize,
+}
+
+impl Drop for WriteAccess<'_> {
+    fn drop(&mut self) {
+        let store = self.store;
+        OPEN_TRANSACTIONS.with_borrow_mut(|open| open.retain(|held| *held != store));
+    }
 }
 
 /// Hand-written because the backend is not [`Debug`], and because a store's *contents* have no
@@ -187,19 +233,41 @@ impl Store {
 
         let backend = Backend::open(&path).map_err(|error| classify_open(&path, error))?;
 
-        let format_version = stamp_or_check_format_version(&backend, &path)?;
-
-        let store = Self {
+        let mut store = Self {
             backend,
             path,
-            format_version,
+            format_version: FORMAT_VERSION,
+            writes: Mutex::new(()),
         };
 
-        // The system graph describes itself. Doing this on every open, rather than only when the
-        // store is created, means a store written before the registry existed acquires one by
-        // being opened — additive, so no format bump and no migration, and an older build reading
-        // the same store simply ignores quads it does not look for.
-        store.ensure_registered(&GraphId::system())?;
+        // Stamping the format version and registering the system graph happen in **one**
+        // transaction, because a store that is stamped but has no system graph in its registry is
+        // a store this build would report as inconsistent. Before transactions existed these were
+        // two independent writes, and a kill in the gap between them left exactly that state on
+        // disk — a first start is the likeliest moment for a container to be killed, so the gap
+        // was not hypothetical.
+        //
+        // The system graph is registered on **every** open, not only when the store is created,
+        // so a store written before the registry existed acquires one by being opened. That is
+        // additive, so it needs no format bump and no migration, and an older build reading the
+        // same store simply ignores quads it does not look for.
+        let (format_version, wrote) = store.transaction(|txn| {
+            let (version, stamped) = stamp_or_check_format_version(txn, &store.path)?;
+            let registered = txn.ensure_registered(&GraphId::system())?;
+            Ok((version, stamped || registered))
+        })?;
+
+        store.format_version = format_version;
+
+        if wrote {
+            // Flush immediately: the stamp and the registry must survive a hard kill in the
+            // seconds after a first start, or the next open sees an unstamped store that already
+            // holds data.
+            store
+                .backend
+                .flush()
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+        }
 
         Ok(store)
     }
@@ -226,14 +294,10 @@ impl Store {
     pub fn graphs(&self) -> Result<Vec<GraphId>, StoreError> {
         let mut graphs = Vec::new();
 
-        for quad in self.backend.quads_for_pattern(
-            None,
-            Some(named_node(GRAPH_KIND_IRI)),
-            None,
-            Some(named_node(SYSTEM_GRAPH_IRI).into()),
-        ) {
-            let quad = quad.map_err(|error| StoreError::Backend(error.to_string()))?;
-
+        for quad in self
+            .backend
+            .system_quads(None, named_node(GRAPH_KIND_IRI))?
+        {
             let iri = match quad.subject {
                 oxigraph::model::NamedOrBlankNode::NamedNode(node) => node.into_string(),
                 other => {
@@ -278,22 +342,7 @@ impl Store {
     /// Kind-blind on purpose: this answers "is this IRI taken", which is the question the creation
     /// path needs, and a caller that wants the kind should ask [`Store::graphs`].
     pub fn contains_graph(&self, iri: &str) -> Result<bool, StoreError> {
-        let Ok(subject) = NamedNode::new(iri) else {
-            return Ok(false);
-        };
-
-        Ok(self
-            .backend
-            .quads_for_pattern(
-                Some(subject.as_ref().into()),
-                Some(named_node(GRAPH_KIND_IRI)),
-                None,
-                Some(named_node(SYSTEM_GRAPH_IRI).into()),
-            )
-            .next()
-            .transpose()
-            .map_err(|error| StoreError::Backend(error.to_string()))?
-            .is_some())
+        contains_graph_in(&self.backend, iri)
     }
 
     /// Register a new vocabulary graph.
@@ -307,44 +356,76 @@ impl Store {
     /// This creates the *container*, not its contents; a freshly created vocabulary graph holds no
     /// quads. The discovery-first creation path (§1.7) and the authoring API sit above this.
     pub fn create_vocabulary_graph(&self, graph: &GraphId) -> Result<(), StoreError> {
-        if !graph.is_directly_writable() {
-            return Err(StoreError::NotWritable(graph.iri().to_owned()));
-        }
-        if self.contains_graph(graph.iri())? {
-            return Err(StoreError::GraphExists {
-                iri: graph.iri().to_owned(),
-            });
-        }
-        self.register(graph)
+        self.transaction(|txn| txn.create_vocabulary_graph(graph))
     }
 
-    /// Register `graph` if it is not already registered.
-    fn ensure_registered(&self, graph: &GraphId) -> Result<(), StoreError> {
-        if self.contains_graph(graph.iri())? {
-            return Ok(());
-        }
-        self.register(graph)
+    /// Run `work` as a single all-or-nothing write.
+    ///
+    /// Everything `work` writes lands together or not at all. Returning `Err` — or panicking —
+    /// discards every write it made, so a caller cannot leave the store half-changed by giving
+    /// up partway. That is the whole point of the closure: the backend's own transaction handle
+    /// rolls back when dropped, which means the *safe* outcome is the one a forgetful caller gets
+    /// by default, whereas a `begin`/`commit` pair makes silently-never-committed the default
+    /// instead.
+    ///
+    /// Writers are serialised (see [`Store::writes`]) and readers are not, so `work` blocks other
+    /// writers for its duration and blocks nobody else. Keep it short: a transaction holds its
+    /// whole change set in memory, and it is the one thing in this store that other writers wait
+    /// behind.
+    ///
+    /// Reads made *inside* `work` see the store as it was when the transaction began, plus that
+    /// transaction's own uncommitted writes — so a check-then-write inside one transaction is
+    /// sound, which is exactly what [`Store::create_vocabulary_graph`] relies on.
+    ///
+    /// Nesting a transaction inside another on the same store returns
+    /// [`StoreError::NestedTransaction`] rather than deadlocking against the lock this one holds.
+    pub fn transaction<T>(
+        &self,
+        work: impl FnOnce(&mut Transaction<'_>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let _access = self.begin_write()?;
+
+        let mut transaction = Transaction {
+            inner: self
+                .backend
+                .start_transaction()
+                .map_err(|error| StoreError::Backend(error.to_string()))?,
+        };
+
+        // `?` here is the rollback: it drops `transaction` on the way out, and the backend
+        // discards an uncommitted transaction's write batch. A panic inside `work` unwinds
+        // through the same drop, so that rolls back too.
+        let outcome = work(&mut transaction)?;
+
+        transaction
+            .inner
+            .commit()
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        Ok(outcome)
     }
 
-    /// Write a graph's registry entry into the system graph.
-    fn register(&self, graph: &GraphId) -> Result<(), StoreError> {
-        let subject = NamedNode::new_unchecked(graph.iri());
-        insert_into(
-            &self.backend,
-            &GraphId::system(),
-            vec![
-                (
-                    subject.clone(),
-                    rdf::TYPE.into_owned(),
-                    named_node(GRAPH_CLASS_IRI).into_owned().into(),
-                ),
-                (
-                    subject,
-                    named_node(GRAPH_KIND_IRI).into_owned(),
-                    Literal::new_simple_literal(graph.kind().as_str()).into(),
-                ),
-            ],
-        )
+    /// Take exclusive write access, refusing a nested transaction rather than deadlocking on it.
+    fn begin_write(&self) -> Result<WriteAccess<'_>, StoreError> {
+        let store = std::ptr::from_ref(self) as usize;
+
+        if OPEN_TRANSACTIONS.with_borrow(|open| open.contains(&store)) {
+            return Err(StoreError::NestedTransaction);
+        }
+
+        // Recover from poisoning instead of propagating it. The mutex guards no data — it is a
+        // serialisation token — and a panic inside a transaction leaves the *store* untouched,
+        // because unwinding drops the transaction and discards its writes. Refusing every later
+        // write because an earlier one panicked would turn a rolled-back edit into a store that
+        // has silently gone read-only.
+        let lock = self
+            .writes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        OPEN_TRANSACTIONS.with_borrow_mut(|open| open.push(store));
+
+        Ok(WriteAccess { _lock: lock, store })
     }
 
     /// A [`StoreError::Corrupt`] naming this store's path.
@@ -412,39 +493,35 @@ fn classify_open(path: &Path, error: oxigraph::store::StorageError) -> StoreErro
 
 /// Read the store's format stamp, writing it first if the store is new.
 ///
-/// Returns the version in force. Refuses a store from the future, and refuses one whose stamp is
-/// not a single integer — a store with two stamps is one we cannot reason about, and guessing
-/// which is right is how a migration corrupts data.
-fn stamp_or_check_format_version(backend: &Backend, path: &Path) -> Result<u32, StoreError> {
+/// Returns the version in force and whether this call stamped it. Refuses a store from the
+/// future, and refuses one whose stamp is not a single integer — a store with two stamps is one
+/// we cannot reason about, and guessing which is right is how a migration corrupts data.
+///
+/// Runs inside the caller's transaction so that refusing a store is a decision taken against a
+/// single consistent snapshot, and so that a stamp written here commits together with the system
+/// graph's registry entry rather than as a separate write that a kill could land without it.
+fn stamp_or_check_format_version(
+    transaction: &mut Transaction<'_>,
+    path: &Path,
+) -> Result<(u32, bool), StoreError> {
     let subject = named_node(STORE_IRI);
     let predicate = named_node(FORMAT_VERSION_IRI);
-    let graph = named_node(SYSTEM_GRAPH_IRI);
 
-    let mut found: Vec<Term> = Vec::new();
-    for quad in backend.quads_for_pattern(
-        Some(subject.into()),
-        Some(predicate),
-        None,
-        Some(graph.into()),
-    ) {
-        let quad = quad.map_err(|error| StoreError::Backend(error.to_string()))?;
-        found.push(quad.object);
-    }
+    let found: Vec<Term> = transaction
+        .inner
+        .system_quads(Some(subject), predicate)?
+        .into_iter()
+        .map(|quad| quad.object)
+        .collect();
 
     match found.as_slice() {
         [] => {
             let version = Literal::new_typed_literal(FORMAT_VERSION.to_string(), xsd::INTEGER);
-            insert_into(
-                backend,
+            transaction.insert(
                 &GraphId::system(),
                 vec![(subject.into_owned(), predicate.into_owned(), version.into())],
             )?;
-            // Flush immediately: the stamp must survive a hard kill in the seconds after a first
-            // start, or the next open sees an unstamped store that already holds data.
-            backend
-                .flush()
-                .map_err(|error| StoreError::Backend(error.to_string()))?;
-            Ok(FORMAT_VERSION)
+            Ok((FORMAT_VERSION, true))
         }
         [Term::Literal(literal)] => {
             let found = literal
@@ -461,7 +538,7 @@ fn stamp_or_check_format_version(backend: &Backend, path: &Path) -> Result<u32, 
                     supported: FORMAT_VERSION,
                 });
             }
-            Ok(found)
+            Ok((found, false))
         }
         other => Err(StoreError::Corrupt {
             path: path.to_path_buf(),
@@ -470,43 +547,191 @@ fn stamp_or_check_format_version(backend: &Backend, path: &Path) -> Result<u32, 
     }
 }
 
-/// The single point through which every write to this store passes.
+/// A write in progress.
 ///
-/// Two things are true of it and neither is negotiable. **Every quad names a graph** — nothing is
-/// written to the default graph, so no statement can exist without a vocabulary it belongs to.
-/// And **the target graph must be directly writable**, so `GraphId::is_directly_writable` is a
-/// rule the store enforces rather than a comment a caller may forget. Today's writes are all to
-/// the system graph, so the refusal branch does not yet fire in production; the point of putting
-/// the choke point in now is that the first import, materialisation, or agent proposal to arrive
-/// cannot route around it.
+/// Obtained only from [`Store::transaction`], and everything written through it lands together
+/// when that call commits or vanishes entirely if it does not. The backend type it wraps is
+/// deliberately private: `CLAUDE.md` §3 keeps third-party engine types out of our API so the
+/// engine stays swappable.
 ///
-/// The quads are written atomically. A registry entry is two quads — a type and a kind — and a
-/// process that died between them would leave a graph that half exists, which is worse than one
-/// that does not exist at all.
-fn insert_into(
-    backend: &Backend,
-    graph: &GraphId,
-    triples: Vec<(NamedNode, NamedNode, Term)>,
-) -> Result<(), StoreError> {
-    if !graph.is_directly_writable() {
-        return Err(StoreError::NotWritable(graph.iri().to_owned()));
+/// Its read methods see the store as it stood when the transaction opened, **plus** this
+/// transaction's own uncommitted writes. That is what makes a check-then-write inside one
+/// transaction sound where the same pair of calls against [`Store`] would race.
+pub struct Transaction<'a> {
+    inner: oxigraph::store::Transaction<'a>,
+}
+
+impl Transaction<'_> {
+    /// Whether a graph is registered at `iri`, including one registered by this transaction.
+    pub fn contains_graph(&self, iri: &str) -> Result<bool, StoreError> {
+        contains_graph_in(&self.inner, iri)
     }
 
-    // Unchecked because `GraphId` validated this IRI through the same parser when it was
-    // constructed, and its fields are private so nothing can have changed it since. `expect` is
-    // barred outside tests (`CLAUDE.md` §6) and there is no error here to propagate.
-    let graph_name: GraphName = NamedNode::new_unchecked(graph.iri()).into();
+    /// Register a new vocabulary graph, as part of this transaction.
+    ///
+    /// Refuses an IRI that is already registered rather than quietly adopting it. Silently
+    /// succeeding here is how a user ends up with two vocabularies believing they own one graph,
+    /// and it is the store-level face of `CLAUDE.md` §1.7 — creating something new where
+    /// something existing would serve is the failure mode this product exists to attack, so the
+    /// store never makes it the path of least resistance.
+    ///
+    /// The check and the write are one atomic step because they are in one transaction. They were
+    /// not always: two callers racing on the same IRI both used to read "free" and both write,
+    /// leaving the IRI registered twice — which does not merely duplicate a row, it makes
+    /// [`Store::graphs`] refuse the whole registry as [`StoreError::Corrupt`]. One user's
+    /// mistimed second click took the entire vocabulary list down.
+    ///
+    /// This creates the *container*, not its contents; a freshly created vocabulary graph holds
+    /// no quads. The discovery-first creation path (§1.7) and the authoring API sit above this.
+    pub fn create_vocabulary_graph(&mut self, graph: &GraphId) -> Result<(), StoreError> {
+        if !graph.is_directly_writable() {
+            return Err(StoreError::NotWritable(graph.iri().to_owned()));
+        }
+        if self.contains_graph(graph.iri())? {
+            return Err(StoreError::GraphExists {
+                iri: graph.iri().to_owned(),
+            });
+        }
+        self.register(graph)
+    }
 
-    let quads: Vec<Quad> = triples
-        .into_iter()
-        .map(|(subject, predicate, object)| {
-            Quad::new(subject, predicate, object, graph_name.clone())
-        })
-        .collect();
+    /// Register `graph` if it is not already registered. Reports whether it wrote anything.
+    fn ensure_registered(&mut self, graph: &GraphId) -> Result<bool, StoreError> {
+        if self.contains_graph(graph.iri())? {
+            return Ok(false);
+        }
+        self.register(graph)?;
+        Ok(true)
+    }
 
-    backend
-        .extend(quads)
-        .map_err(|error| StoreError::Backend(error.to_string()))
+    /// Write a graph's registry entry into the system graph.
+    fn register(&mut self, graph: &GraphId) -> Result<(), StoreError> {
+        let subject = NamedNode::new_unchecked(graph.iri());
+        self.insert(
+            &GraphId::system(),
+            vec![
+                (
+                    subject.clone(),
+                    rdf::TYPE.into_owned(),
+                    named_node(GRAPH_CLASS_IRI).into_owned().into(),
+                ),
+                (
+                    subject,
+                    named_node(GRAPH_KIND_IRI).into_owned(),
+                    Literal::new_simple_literal(graph.kind().as_str()).into(),
+                ),
+            ],
+        )
+    }
+
+    /// The single point through which every write to the store passes.
+    ///
+    /// Two things are true of it and neither is negotiable. **Every quad names a graph** —
+    /// nothing is written to the default graph, so no statement can exist without a vocabulary it
+    /// belongs to. And **the target graph must be directly writable**, so
+    /// `GraphId::is_directly_writable` is a rule the store enforces rather than a comment a
+    /// caller may forget.
+    ///
+    /// Since transactions became the only way to write, this is the choke point in a stronger
+    /// sense than before: there is no non-transactional path to route around it. Today's writes
+    /// are all to the system graph, so the refusal branch does not yet fire in production; the
+    /// point of putting the choke point in now is that the first import, materialisation, or
+    /// agent proposal to arrive cannot bypass it.
+    ///
+    /// Not public: the triple type here is the backend's, and §3 keeps that out of our API. The
+    /// public write vocabulary is the domain methods above, and it grows when Phase 1's RDF
+    /// parsing item gives us a term model of our own.
+    ///
+    /// The writability check is a **runtime refusal**, not a debug assertion. A caller that has
+    /// already checked makes it redundant, and that is the point: the rule must hold for the
+    /// caller who has not, including one added in a later phase by someone reading only this
+    /// method's signature.
+    fn insert(
+        &mut self,
+        graph: &GraphId,
+        triples: Vec<(NamedNode, NamedNode, Term)>,
+    ) -> Result<(), StoreError> {
+        if !graph.is_directly_writable() {
+            return Err(StoreError::NotWritable(graph.iri().to_owned()));
+        }
+
+        // Unchecked because `GraphId` validated this IRI through the same parser when it was
+        // constructed, and its fields are private so nothing can have changed it since. `expect`
+        // is barred outside tests (`CLAUDE.md` §6) and there is no error here to propagate.
+        let graph_name: GraphName = NamedNode::new_unchecked(graph.iri()).into();
+
+        let quads: Vec<Quad> = triples
+            .into_iter()
+            .map(|(subject, predicate, object)| {
+                Quad::new(subject, predicate, object, graph_name.clone())
+            })
+            .collect();
+
+        self.inner.extend(&quads);
+
+        Ok(())
+    }
+}
+
+/// Anything the registry can be read out of: the store itself, or a transaction over it.
+///
+/// One implementation of each registry read, used by both, so a rule enforced against the store
+/// cannot quietly differ from the same rule enforced inside a transaction.
+trait RegistryReader {
+    /// Every quad in the system graph with this `predicate`, optionally narrowed to one subject.
+    fn system_quads(
+        &self,
+        subject: Option<NamedNodeRef<'_>>,
+        predicate: NamedNodeRef<'_>,
+    ) -> Result<Vec<Quad>, StoreError>;
+}
+
+impl RegistryReader for Backend {
+    fn system_quads(
+        &self,
+        subject: Option<NamedNodeRef<'_>>,
+        predicate: NamedNodeRef<'_>,
+    ) -> Result<Vec<Quad>, StoreError> {
+        self.quads_for_pattern(
+            subject.map(Into::into),
+            Some(predicate),
+            None,
+            Some(named_node(SYSTEM_GRAPH_IRI).into()),
+        )
+        .map(|quad| quad.map_err(|error| StoreError::Backend(error.to_string())))
+        .collect()
+    }
+}
+
+impl RegistryReader for oxigraph::store::Transaction<'_> {
+    fn system_quads(
+        &self,
+        subject: Option<NamedNodeRef<'_>>,
+        predicate: NamedNodeRef<'_>,
+    ) -> Result<Vec<Quad>, StoreError> {
+        self.quads_for_pattern(
+            subject.map(Into::into),
+            Some(predicate),
+            None,
+            Some(named_node(SYSTEM_GRAPH_IRI).into()),
+        )
+        .map(|quad| quad.map_err(|error| StoreError::Backend(error.to_string())))
+        .collect()
+    }
+}
+
+/// Whether `iri` has a registry entry in `source`.
+///
+/// An IRI the backend cannot even parse is reported absent rather than as an error: the question
+/// is "is this taken", and something that can never have been written is not taken.
+fn contains_graph_in(source: &impl RegistryReader, iri: &str) -> Result<bool, StoreError> {
+    let Ok(subject) = NamedNode::new(iri) else {
+        return Ok(false);
+    };
+
+    Ok(!source
+        .system_quads(Some(subject.as_ref()), named_node(GRAPH_KIND_IRI))?
+        .is_empty())
 }
 
 /// The first value that appears twice in a sorted slice, if any.
@@ -535,7 +760,7 @@ mod tests {
         tempfile::tempdir().expect("a temporary directory")
     }
 
-    fn vocabulary(iri: &str) -> GraphId {
+    fn vocabulary(iri: impl Into<String>) -> GraphId {
         GraphId::vocabulary(iri).expect("a valid absolute IRI outside the reserved namespace")
     }
 
@@ -712,16 +937,19 @@ mod tests {
         let inferred =
             GraphId::inferred_for(&vocabulary("http://example.org/v/animals")).expect("derivable");
 
-        let error = insert_into(
-            &store.backend,
-            &inferred,
-            vec![(
-                NamedNode::new_unchecked("http://example.org/v/animals/cat"),
-                rdf::TYPE.into_owned(),
-                NamedNode::new_unchecked("http://www.w3.org/2004/02/skos/core#Concept").into(),
-            )],
-        )
-        .expect_err("the choke point must refuse");
+        let error = store
+            .transaction(|txn| {
+                txn.insert(
+                    &inferred,
+                    vec![(
+                        NamedNode::new_unchecked("http://example.org/v/animals/cat"),
+                        rdf::TYPE.into_owned(),
+                        NamedNode::new_unchecked("http://www.w3.org/2004/02/skos/core#Concept")
+                            .into(),
+                    )],
+                )
+            })
+            .expect_err("the choke point must refuse");
 
         assert!(
             matches!(error, StoreError::NotWritable(_)),
@@ -1092,5 +1320,290 @@ mod tests {
         // Restore write permission so the TempDir can clean itself up.
         std::fs::set_permissions(&readonly, std::fs::Permissions::from_mode(0o700))
             .expect("permissions are settable");
+    }
+
+    /// Two threads racing to create the *same* vocabulary IRI must not both succeed.
+    ///
+    /// This is the store-level face of `CLAUDE.md` §1.7. `create_vocabulary_graph` asks
+    /// "is this IRI taken?" and then writes; without a transaction those are two separate
+    /// operations against the backend, so both racers can read "no" before either writes "yes".
+    /// The damage is not a duplicate row — it is that `graphs()` then refuses to read the
+    /// registry at all, because a graph registered twice is a `Corrupt` store. One user's
+    /// mis-timed second click takes the whole vocabulary list down.
+    #[test]
+    fn racing_creates_of_one_iri_leave_exactly_one_registration() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("a fresh directory opens");
+        let iri = "https://example.org/contested";
+
+        let racers = 8;
+        let start = std::sync::Barrier::new(racers);
+        let outcomes: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..racers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        store.create_vocabulary_graph(&vocabulary(iri))
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("no racer panics"))
+                .collect()
+        });
+
+        let winners = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
+        assert_eq!(
+            winners, 1,
+            "exactly one racer may create the graph; the rest must be refused"
+        );
+        assert!(
+            outcomes
+                .iter()
+                .filter_map(|outcome| outcome.as_ref().err())
+                .all(|error| matches!(error, StoreError::GraphExists { .. })),
+            "every loser must be told the IRI is taken, not given a backend error"
+        );
+
+        let graphs = store
+            .graphs()
+            .expect("the registry must still be readable after the race");
+        assert_eq!(
+            graphs.iter().filter(|graph| graph.iri() == iri).count(),
+            1,
+            "the contested IRI must appear exactly once in the registry"
+        );
+    }
+
+    /// Atomicity, in the form a caller actually hits: a transaction that gives up partway must
+    /// leave nothing behind. Without this, the first import or agent proposal that fails on its
+    /// hundredth concept leaves ninety-nine in the store and no record that it was ever running.
+    #[test]
+    fn a_transaction_that_fails_partway_writes_nothing() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let landed = "https://example.org/landed";
+        let refused = "https://example.org/refused";
+
+        let error = store
+            .transaction(|txn| {
+                txn.create_vocabulary_graph(&vocabulary(landed))?;
+                // Registered a moment ago in this same transaction, so this is the transaction
+                // reading its own uncommitted write and refusing on it.
+                txn.create_vocabulary_graph(&vocabulary(landed))?;
+                txn.create_vocabulary_graph(&vocabulary(refused))
+            })
+            .expect_err("the second create of one IRI must be refused");
+
+        assert!(
+            matches!(error, StoreError::GraphExists { .. }),
+            "expected GraphExists, got: {error}"
+        );
+        assert!(
+            !store.contains_graph(landed).expect("readable"),
+            "the write that succeeded before the failure must be rolled back too"
+        );
+        assert!(!store.contains_graph(refused).expect("readable"));
+        assert_eq!(
+            store.quad_count().expect("countable"),
+            3,
+            "a rolled-back transaction must leave the store byte-identical"
+        );
+    }
+
+    /// Everything in one transaction commits together, so a reader never sees half a change set.
+    #[test]
+    fn a_transaction_commits_every_write_together() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let iris = ["https://example.org/a", "https://example.org/b"];
+
+        store
+            .transaction(|txn| {
+                for iri in iris {
+                    txn.create_vocabulary_graph(&vocabulary(iri))?;
+                }
+                Ok(())
+            })
+            .expect("the transaction commits");
+
+        for iri in iris {
+            assert!(
+                store.contains_graph(iri).expect("readable"),
+                "{iri} is absent"
+            );
+        }
+    }
+
+    /// A panic is not a tidy `Err`, and it is the case a caller cannot opt into handling. The
+    /// backend rolls back on drop and unwinding drops the transaction, so the store is untouched —
+    /// and, just as importantly, the store is still *writable* afterwards. The write lock is a
+    /// `std::sync::Mutex`, which poisons when a holder panics; propagating that poison would turn
+    /// one rolled-back edit into a store that had silently gone read-only for the process's life.
+    #[test]
+    fn a_panicking_transaction_rolls_back_and_leaves_the_store_writable() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let abandoned = "https://example.org/abandoned";
+        let afterwards = "https://example.org/afterwards";
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            store.transaction(|txn| -> Result<(), StoreError> {
+                txn.create_vocabulary_graph(&vocabulary(abandoned))?;
+                panic!("a transaction that panics partway through");
+            })
+        }));
+
+        assert!(panicked.is_err(), "the panic must reach the caller");
+        assert!(
+            !store.contains_graph(abandoned).expect("readable"),
+            "unwinding out of a transaction must discard its writes"
+        );
+
+        store
+            .create_vocabulary_graph(&vocabulary(afterwards))
+            .expect("a panicked transaction must not leave the store read-only");
+        assert!(store.contains_graph(afterwards).expect("readable"));
+    }
+
+    /// Repeatable read, from the outside. While a transaction holds an uncommitted create, every
+    /// reader must still see the store as it was — and must see it *without waiting*, which is the
+    /// second half of the claim and the one a lock-based fix would quietly break. The readers here
+    /// run to completion while the writer is parked mid-transaction; if reads took the write lock,
+    /// this test would deadlock rather than fail.
+    #[test]
+    fn readers_are_neither_blocked_by_an_open_transaction_nor_shown_its_writes() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let pending = "https://example.org/pending";
+
+        let readers = 4;
+        let written = std::sync::Barrier::new(readers + 1);
+        let inspected = std::sync::Barrier::new(readers + 1);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                store
+                    .transaction(|txn| {
+                        txn.create_vocabulary_graph(&vocabulary(pending))?;
+                        // Written, not committed. Hold here until every reader has looked.
+                        written.wait();
+                        inspected.wait();
+                        Ok(())
+                    })
+                    .expect("the transaction commits");
+            });
+
+            let lookers: Vec<_> = (0..readers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        written.wait();
+                        let seen = store.contains_graph(pending).expect("readable");
+                        inspected.wait();
+                        seen
+                    })
+                })
+                .collect();
+
+            for looker in lookers {
+                assert!(
+                    !looker.join().expect("no reader panics"),
+                    "a reader must not see a write that has not committed"
+                );
+            }
+        });
+
+        assert!(
+            store.contains_graph(pending).expect("readable"),
+            "and must see it once the transaction commits"
+        );
+    }
+
+    /// Distinct IRIs created concurrently must all land. Serialising writers makes them wait; it
+    /// must not make them fail, and it must not lose any of them.
+    #[test]
+    fn concurrent_creates_of_distinct_iris_all_land() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+
+        let writers = 8;
+        let start = std::sync::Barrier::new(writers);
+        std::thread::scope(|scope| {
+            for index in 0..writers {
+                let store = &store;
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    store
+                        .create_vocabulary_graph(&vocabulary(format!(
+                            "https://example.org/v{index}"
+                        )))
+                        .expect("a distinct IRI must not be refused");
+                });
+            }
+        });
+
+        let graphs = store.graphs().expect("readable");
+        for index in 0..writers {
+            let iri = format!("https://example.org/v{index}");
+            assert!(
+                graphs.iter().any(|graph| graph.iri() == iri),
+                "{iri} was lost"
+            );
+        }
+    }
+
+    /// Writers are serialised by a non-reentrant lock, so a transaction opened inside another on
+    /// the same store would block forever against itself. Detecting it turns a silent hang — no
+    /// error, no log line, a request that never returns — into an error a caller can read.
+    ///
+    /// Note the failure mode of this test if the guard is removed: it hangs rather than failing.
+    /// That is the honest shape, because the bug it guards against is itself a hang.
+    #[test]
+    fn a_nested_transaction_is_refused_rather_than_deadlocking() {
+        let dir = temp_dir();
+        let store = Store::open(dir.path()).expect("open");
+        let inner_iri = "https://example.org/inner";
+
+        let error = store
+            .transaction(|_outer| {
+                store.transaction(|inner| inner.create_vocabulary_graph(&vocabulary(inner_iri)))
+            })
+            .expect_err("a nested transaction must be refused");
+
+        assert!(
+            matches!(error, StoreError::NestedTransaction),
+            "expected NestedTransaction, got: {error}"
+        );
+        assert!(
+            error.to_string().contains("cannot be nested"),
+            "the message must say what the caller did wrong: {error}"
+        );
+        assert!(!store.contains_graph(inner_iri).expect("readable"));
+
+        // The refusal must release the lock it never took, or the store is now unwritable.
+        store
+            .create_vocabulary_graph(&vocabulary("https://example.org/after-nesting"))
+            .expect("a refused nesting must not leave the store locked");
+    }
+
+    /// Two stores over two data directories are independent, so a transaction on one must not be
+    /// mistaken for a nesting attempt on the other. This is why the reentrancy mark is keyed by
+    /// store rather than being a single per-thread flag.
+    #[test]
+    fn a_transaction_on_one_store_does_not_block_a_transaction_on_another() {
+        let first_dir = temp_dir();
+        let second_dir = temp_dir();
+        let first = Store::open(first_dir.path()).expect("open");
+        let second = Store::open(second_dir.path()).expect("open");
+
+        first
+            .transaction(|_| second.create_vocabulary_graph(&vocabulary("https://example.org/x")))
+            .expect("a different store is not a nesting");
+
+        assert!(second
+            .contains_graph("https://example.org/x")
+            .expect("readable"));
     }
 }
