@@ -385,3 +385,76 @@ look competent disables the one signal that catches a stuck loop.
   in the export at all, and under whose namespace — because if the answer is "not ours", then this
   IRI scheme is an internal detail that must never be serialised, and nothing currently stops it
   being serialised.
+
+## Iteration 6 — 2026-08-18
+- **Took:** Phase 1 — "Expose the graph registry over HTTP (`GET /api/graphs`) and in the UI — the
+  **read** half", the next unchecked item, and the one iteration 5 split out for exactly this.
+- **Drained first, as the driver requires:** `promote-queue.json` was `[]` and `feedback.md` was
+  empty, so nothing to log or truncate. `main` was mid-run when the iteration started — the check
+  was watched to completion (`success`) rather than assumed from iteration 5's report, which is the
+  whole point of that step.
+- **Did:** the store is reachable from a browser for the first time. `app()` now takes an
+  `AppState`; `main` wraps the open store in an `Arc`, hands the router a clone, and reclaims it
+  with `Arc::into_inner` after the drain so `Store::close` still runs — failing loudly if it cannot,
+  rather than skipping the flush quietly. `GET /api/graphs` serves the whole registry as JSON;
+  `POST` is a **405**, because §1.7 has no honest creation path until `DiscoveryProvider` exists and
+  a documented refusal beats a silence. `ui/src/Vocabularies.tsx` lists the vocabularies, and
+  `ui/src/useProbe.ts` now holds the fetch-once-on-mount logic that was inline in `App`. See
+  `adr/0008`.
+- **The design decision worth naming:** the API returns **every** graph including OpenBiz's own, and
+  the **UI** is what keeps them out of the user's list. The reflex was to filter in the endpoint so
+  no client could show them by accident. That is the wrong layer. VocBench's failure is putting
+  support graphs in front of a subject-matter expert who is then asked which graph to author into —
+  a UI failure. Filtering in the API would swap it for an operator asking "what is in my store?" and
+  getting a silently short answer, which is the opacity §1 exists to attack. So `kind` is on the
+  wire, the endpoint never omits a row, and the graphs the interface holds back are **counted**
+  ("1 further graph is held for OpenBiz's own use") rather than dropped.
+- **Tests:** 97 Rust (was 84) + 22 UI (was 10). `cargo fmt`, `cargo clippy -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses`, and the UI typecheck/build/test all green.
+  **Thirteen mutants, all killed** — five Rust (inferred graphs reported as vocabularies; 200
+  instead of 500; echoing the store's own error text to the client; filtering our graphs out of the
+  *API*; not mounting the route) and eight UI (show every graph as a vocabulary; count all graphs as
+  held back; announce "0 further graphs"; invert singular/plural; render an empty list instead of
+  the empty state; trust a non-2xx body; report an abort as a failure; never abort on unmount).
+  Also verified by hand against the running binary: 200 with the system graph, 404 on `/api/graphss`,
+  405 on `POST`, `store closed cleanly` on `SIGTERM`.
+- **Learned:** three things. (1) **A mutant is what told me a test was missing, not a review.** The
+  "announce zero held-back graphs" mutation initially killed nothing — every registry fixture I had
+  written contained the system graph, so the `internal > 0` guard was never exercised at zero. The
+  suite looked thorough and had a hole shaped exactly like the case a real deployment reaches the
+  moment it has one vocabulary and nothing else. Writing the mutants **before** declaring the suite
+  done is now twice-proven as the thing that catches a plausible green. (2) **Sharing the store with
+  the router quietly weakened an existing test.** `Store::close` consumes the store, so the `Arc`
+  reclaim is a new way for shutdown to fail — and every existing shutdown test signalled a process
+  that had never served a request, so no connection had ever cloned the state and the reclaim was
+  trivially safe in all of them. The new integration test serves a real request *first*. The general
+  form: adding a sharer to an owned resource can turn a proven path into an unproven one without
+  changing a line of the tested code. (3) **Extracting `useProbe` was safe to do in the same
+  iteration as the feature only because `App`'s ten tests already existed** — they passed unchanged
+  across the extraction, which is the evidence that the refactor preserved behaviour. Iteration 4's
+  test runner paid for itself here, one iteration later than it was justified on.
+- **Recorded:** three new `UNTESTED.md` entries and three amendments. New: the JSON API has **no
+  authentication**, and `adr/0008` §3 already took a decision *because* of that — withholding the
+  store's own error text from the 500 — which costs diagnostic value and should be revisited at
+  Phase 7 rather than inherited; `main`'s refusal to close a still-shared store is inspected-only;
+  and `useProbe`'s re-fetch-on-URL-change branch has no production caller. Amended: the registry
+  scan is now on a **hot** path as well as the startup path and serialises with no paging, so the
+  Phase 1 benchmark spike owes the endpoint a number *before* Phase 3 builds on this shape; the
+  corrupt-registry fixture gap now has two callers wanting it rather than one; and the jsdom entry
+  now covers two components, with §4.4's keyboard clause **still satisfied vacuously** after a
+  second iteration of UI. One LLM opportunity recorded, and a genuine one: the list shows raw IRIs
+  until Phase 2 gives graphs labels, which at enterprise scale makes an existing vocabulary
+  unfindable and creating a new one the rational move — an agent that drafts a "what this covers"
+  line for review pushes in §1.7's direction rather than against it.
+- **Still uncertain:** whether returning the whole registry survives contact with scale, and I have
+  now built a UI on the assumption that it does. The reasoning in `adr/0008` §1 is about *honesty* —
+  an inventory endpoint that omits rows cannot be trusted about the rows it shows — and I still
+  think it is right. But honesty and shape are different questions, and I answered the second by
+  reflex from the first: an enterprise with a vocabulary per domain per jurisdiction gets a
+  four-thousand-element JSON body on every page load, read from an unmeasured pattern scan, filtered
+  client-side. The narrower version I cannot answer: if the spike says the scan is too slow, the fix
+  is paging or a `?kind=` filter, and **a paged registry is one that omits rows** — at which point
+  the argument that the API must never omit a row has to become an argument about *why* it omitted
+  them, which is a different and much weaker claim. I do not know whether I have designed the
+  contract or merely deferred it, and the honest answer is that the benchmark spike should have
+  come first.

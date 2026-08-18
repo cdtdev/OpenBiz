@@ -1,9 +1,10 @@
 //! OpenBiz — the single binary.
 
 use std::io::IsTerminal;
+use std::sync::Arc;
 
 use anyhow::Context;
-use openbiz_server::{app, shutdown_signal, Config};
+use openbiz_server::{app, shutdown_signal, AppState, Config};
 use openbiz_store::Store;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -46,6 +47,10 @@ async fn main() -> anyhow::Result<()> {
         "store open"
     );
 
+    // Shared with the router, which clones the state per connection. `main` keeps a handle so it
+    // can still close the store — see the reclaim below, which is where that ordering is enforced.
+    let store = Arc::new(store);
+
     // Read the graph registry now rather than on first request. It is the store's own account of
     // what it holds, so a registry it cannot describe — an unknown graph kind, an entry that
     // breaks the namespace rule — is a store we would be guessing about, and guessing is how a
@@ -84,13 +89,24 @@ async fn main() -> anyhow::Result<()> {
         "OpenBiz starting"
     );
 
-    axum::serve(listener, app())
+    axum::serve(listener, app(AppState::new(Arc::clone(&store))))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server terminated unexpectedly")?;
 
     // Reached only after the graceful shutdown above has drained in-flight requests, so nothing
     // is still writing when the store is flushed.
+    //
+    // `close` consumes the store, so the shared handle has to be reclaimed first. If it cannot be,
+    // something is still holding a clone — a leaked task, a request that outlived the drain — and
+    // the honest response is to say so rather than to skip the flush quietly. A silent skip is the
+    // exact failure `Store::close` exists to make impossible: an operator reading a clean shutdown
+    // log while the last writes never reached disk.
+    let store = Arc::into_inner(store).context(
+        "the store was still in use after the server drained, so it could not be closed cleanly; \
+         recent writes may not have reached disk",
+    )?;
+
     store
         .close()
         .context("the store did not close cleanly; recent writes may not have reached disk")?;

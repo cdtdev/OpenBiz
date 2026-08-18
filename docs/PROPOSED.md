@@ -205,3 +205,20 @@ the actual silo. Lexical and structural matching is the no-LLM baseline `adr/000
 what an LLM adds is recall on near-synonyms and definitional overlap that string matching misses.
 Recording it here so the Phase 12 overlap report is not designed as if IRI equality were the
 problem.
+
+_Iteration 6 (graph registry over HTTP and in the UI): **one, and it is a real one.** The interface
+now lists vocabularies **by raw IRI**, because that is all a graph has until Phase 2 gives it SKOS
+labels — `http://example.org/v/animals` and nothing else. At three vocabularies that is merely ugly;
+at the two hundred an enterprise actually has, "which of these is the one I want?" becomes
+unanswerable from the list, and the user's rational response is to create a two-hundred-and-first.
+That is §1.7's silo generator arriving through a UI affordance rather than a missing feature.
+The manual path is a curator writing `dcterms:description` on each vocabulary, and it must stay the
+path — but it is exactly the tedious editorial backlog nobody completes for vocabularies that
+already exist. **The candidate:** an agent that reads a vocabulary's top concepts and drafts a
+one-line "what this covers" summary, emitted as a proposal a curator accepts, edits, or rejects,
+never written directly. Provenance is straightforward (the graph is the input, and it is already
+named). This is a strong Phase 10 candidate precisely because it makes an **existing** vocabulary
+findable rather than making a new one easier to write, which is the direction §1.7 wants assistance
+to push. Worth pairing with the Phase 2 discovery work, since the same summary is what a discovery
+result needs to show. Note the degradation is clean: with `NullProvider` the list shows IRIs and
+whatever descriptions a human wrote, which is exactly today's behaviour._
