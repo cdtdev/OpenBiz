@@ -150,9 +150,16 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   wait time under the `adr/0009` lock. Three of those four were added by items built *after* the
   spike was scheduled, which is itself the argument: each further item adds a number the spike owes
   and a caller written against an unmeasured assumption.
-- **What it costs:** the four remaining Phase 1 items before it (serialisation, SPARQL query, SPARQL
-  update, Graph Store Protocol) are the ones that make a large store *easy to populate*, so running
-  the spike first means building its fixtures by hand instead of loading a Turtle file. That is real
+- **Amended, iteration 8:** five numbers now, not four — export wall-clock and peak RSS per syntax
+  joins the list, because `GET /api/export` buffers a whole graph into a response body. And the cost
+  argument below has **weakened by half**: it said the spike should wait because serialisation would
+  make a large store easy to populate, and serialisation landed this iteration — but only the
+  *write* half of it. The parser is deliberately deferred behind the candidate seam, so a fixture
+  still cannot be loaded from a Turtle file. The honest position is that the reason to wait is now
+  one item (the parser) rather than four, and that item is itself blocked on Phase 2.
+- **What it costs:** the remaining Phase 1 items before it (parsing, SPARQL query, SPARQL update,
+  Graph Store Protocol) are the ones that make a large store *easy to populate*, so running the
+  spike first means building its fixtures by hand instead of loading a Turtle file. That is real
   work and it is the honest reason the spike was placed where it is. The counter-argument is that
   SPARQL query evaluation is the specific thing upstream documents as unoptimised, so building the
   query endpoint before measuring it is the least reversible order available.
@@ -264,3 +271,25 @@ it emits no writes, and it degrades to the raw diff with `NullProvider`. This is
 the planned "change-request impact summary for reviewers" agent, and the two should probably be one
 agent serving two moments rather than two implementations: the reviewer's question and the
 conflicted author's question are the same question asked from different seats._
+
+_Iteration 8 (serialising a graph and exporting it): **one, and it is downstream of the item rather
+than in it.** Serialisation is byte-level transport work with a specification for an answer; an LLM
+has nothing to contribute and everything to lose there, and the round-trip test is the kind of
+assertion a model is most likely to make plausibly wrong. The opportunity is what happens **after**
+someone downloads a file. An export exists to be given to somebody — a regulator, a partner, a
+downstream system — and the question that follows it is never "is this valid Turtle", it is "what
+changed since the copy I sent last quarter, and does any of it affect the mappings my system relies
+on?". Today the manual path is diffing two Turtle files, which is a diff of statements: a renamed
+prefix or a reordered block reads as hundreds of changes, and a genuinely significant deprecation
+reads as one line among them. That is the same complaint governance teams make about the incumbents'
+version history. **The candidate:** an agent that reads two exports of the same vocabulary and
+produces a change summary in the vocabulary's own terms — "eleven concepts added under Derivatives,
+one deprecated with a replacement, no mapping targets removed" — emitted as a document a human
+approves before it is attached to the export, never written into the vocabulary. It is recall over
+data we already hold, it writes nothing, and with `NullProvider` the user gets exactly today's
+behaviour, which is the raw diff. Note this is the **third** iteration to record a variant of the
+same shape: iteration 6 wanted a vocabulary summarised for findability, iteration 7 wanted an
+intervening change set summarised for a conflicted author, and this wants a change set summarised
+for an external recipient. Three seats, one capability — Phase 10 should build "explain a set of RDF
+changes to a human in the vocabulary's own terms" once and route three questions to it, rather than
+discovering that convergence after building three agents._

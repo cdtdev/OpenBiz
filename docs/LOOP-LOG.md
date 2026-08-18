@@ -541,3 +541,97 @@ look competent disables the one signal that catches a stuck loop.
   designed for now — which is the same failure mode as iteration 6's uncertainty about paging the
   registry, one layer down. Two iterations running, the benchmark spike is the thing I keep wishing
   had already happened, and it is still four items away in a plan I am not allowed to reorder.
+
+## Iteration 8 — 2026-08-18
+- **Took:** Phase 1 — "Parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, JSON-LD —
+  round-trip tested", the next unchecked item. **Split it in place** and did the first half.
+- **Drained first, as the driver requires:** `promote-queue.json` was `[]` and `feedback.md` was
+  empty, so nothing to log or truncate. `main`'s last CI run was `success`, checked rather than
+  inherited from iteration 7's report; the tree was clean.
+- **The split, and it is a charter constraint rather than convenience.** One item wearing two hats.
+  A serialiser's production caller is an export, which is a read. A parser's production caller is an
+  **import**, which mutates a vocabulary — and `CLAUDE.md` §3 says a change to a vocabulary arrives
+  as a reviewable *candidate*, which is Phase 2's first item. Building the parser now had exactly
+  two outcomes and both are the failures the charter names: code with no production caller (§4.1),
+  or a direct-write `POST /api/import` to be retrofitted later, which is verbatim what §3 warns
+  about. So the parser lands with backup/restore (parses N-Quads, touches no vocabulary) or with the
+  candidate seam, whichever comes first. Round-tripping did not have to wait: serialise, re-read
+  with the engine's parser, compare the statement set.
+- **Did:** `RdfSyntax` — our own six-variant enum owning the media type, extension, and `?format=`
+  token for each syntax. `Store::export_graph(iri, syntax, writer)` streams one graph out.
+  `GET /api/export?graph=…&format=…` serves it with `Accept` negotiation, and
+  `GET /api/export/formats` advertises what this build can write. The interface gained its **first
+  interactive control**: a format chooser, with a per-vocabulary download link. See `adr/0010`.
+- **The finding I did not expect, and it changed the type.** `oxrdfio::RdfFormat` carries **N3**,
+  which is not a W3C Recommendation and is not on `CLAUDE.md` §2's standards surface. Re-exporting
+  the engine's enum — the obvious thing, and one line — would have published a seventh serialisation
+  we have never tested, documented, or committed to. That is a standards claim made by accident,
+  which §4.5 forbids, and §3's "no third-party type in our API" would have caught it only as a style
+  rule. The rule turned out to have a second, better reason than the one it is written for. A test
+  now asserts the gap is deliberate: the engine still recognises `text/n3`; we return `None`.
+- **The thing I got wrong and caught.** I wrote in `export_graph`'s doc comment that reads are "a
+  snapshot per quad rather than one snapshot for the whole scan", and recorded it as a consistency
+  gap. Then I read Oxigraph's `Store::quads_for_pattern` and it takes `self.storage.snapshot()` once
+  and holds it for the iterator's life — so an export **cannot** be torn by a concurrent commit, and
+  I had written a false weakness into the code and was about to write it into `UNTESTED.md`. Both
+  are corrected. The real, narrower gap is that `contains_graph` runs on its own earlier snapshot,
+  which is unreachable today because nothing deregisters a graph; that one is recorded, honestly, as
+  argued-from-code rather than tested.
+- **Better, not parity** (the standing instruction, answered before building): three things the
+  incumbents do badly here. Their export is *not what you saw* — PoolParty and TopBraid EDG keep
+  project bookkeeping in the content store, so a consumer must be told which parts to ignore; ours
+  cannot, because `adr/0007` never put our metadata in a vocabulary, and a test asserts
+  `urn:openbiz:` appears in no export. Their export is *silently lossy* — three of six syntaxes
+  cannot record a graph name, universally true and universally unmentioned; ours states it, from the
+  same constant the serialiser branches on. And their export is *a wizard or a job*, so it cannot be
+  scripted or diffed in CI; ours is one URL the interface and `curl` share.
+- **Tests:** 143 Rust (was 105) + 29 UI (was 22). `cargo fmt`, `cargo clippy -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses`, and the UI typecheck/test/build all green.
+  **Twelve mutants, all killed** — registry check removed, graph name never written, every graph
+  exported instead of one, document never finished (this one only dies on RDF/XML and JSON-LD, which
+  is why the empty-document test exists), `Accept` weights ignored, unsatisfiable `Accept` silently
+  defaulted, filename left unsanitised, unknown `?format=` defaulted, the graph-name claim made to
+  disagree with the engine, and three of the component: link ignoring the chosen format, warning
+  removed, IRI spliced into the URL unescaped. Also verified by hand against the real binary:
+  TriG and N-Quads exports with correct headers, `Accept:` negotiation, and a 404 for a graph that
+  is not registered.
+- **Learned, about test design.** The round-trip test passed on the *first* run, which for a
+  seven-statement fixture across six syntaxes is exactly the result a vacuous test gives. Two
+  assertions were added before I would believe it — that the expected set has as many members as the
+  fixture has statements, and that the bytes are non-empty — and then four mutants were run against
+  it. That is the second time this loop has learned that "green immediately" is a prompt to attack
+  the test rather than to move on. Related: blank-node labels are document-scoped by specification,
+  so comparing them would have tested the engine's label generator; they are collapsed to one
+  placeholder, and the fixture has exactly one blank node so nothing can be conflated by it.
+- **Recorded:** five new `UNTESTED.md` entries and three amendments. New: the round trip is proven
+  against **our own reader**, so it is fidelity and not conformance — if the engine's writer and
+  reader shared a misreading we would pass and a third-party consumer would choke, and §4.5 means
+  the claim this build makes is round-trip fidelity, not "we implement Turtle"; the HTTP layer
+  buffers a whole graph even though the store streams; the interface's download path has never met a
+  graph with statements in it, because nothing can put statements in one yet; `X-OpenBiz-Graph` has
+  no reader; and the check-then-scan snapshot window above. Amended: the benchmark spike now owes a
+  **fifth** number; a second test now hangs-rather-than-fails if its property regresses, which makes
+  that a pattern; and §4.4's keyboard clause is no longer satisfied *vacuously* — there is a real
+  control now, asserted to be a native `<select>` with a label that accepts focus, which is the
+  thing that makes a tab order but is not the tab order. One LLM opportunity recorded, and the note
+  worth carrying is that it is the **third** iteration to describe the same capability from a
+  different seat — Phase 10 should build "explain a set of RDF changes in the vocabulary's own
+  terms" once and route three questions to it.
+- **Still uncertain:** whether "round-trip tested" is a test at all, or a tautology I have dressed as
+  one. The suite serialises with Oxigraph and re-reads with Oxigraph, so what it proves is that the
+  library agrees with itself. Every mutant I killed was a mutant of *my* code — the branch that
+  picks quad-versus-triple, the registry check, the graph filter, the call to `finish()` — and those
+  are genuinely proven. What is not proven, and cannot be by this method, is the layer underneath:
+  a shared misreading of Turtle's escaping rules, or an RDF/XML writer that emits something its own
+  reader accepts and `rapper` does not, passes silently. I know the fix (the W3C rdf-tests suites,
+  or cheaper, a handful of fixtures produced by an independent tool) and I did not do it, and the
+  reason is not good: I judged it out of scope for one item, having already spent the item's budget
+  on a split I think was right. So the position I have landed is that OpenBiz can now hand a
+  customer a file, and the only evidence that the file is correct is that OpenBiz can read it back.
+  That is exactly the shape of assurance `CLAUDE.md` §4.5 exists to reject, and the fact that I wrote
+  the honest caveat into `UNTESTED.md` does not make the export any more interoperable — it makes
+  the gap *visible*, which is a different and lesser thing. The narrower question I cannot answer:
+  whether "prove it against the spec's own test suite" is a task the next parsing item should carry,
+  or a Phase 1 item of its own that nobody will schedule because the ledger entry makes it feel
+  already handled.
+

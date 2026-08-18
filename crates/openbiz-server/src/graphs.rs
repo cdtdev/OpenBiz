@@ -42,6 +42,11 @@ impl AppState {
     pub fn new(store: Arc<Store>) -> Self {
         Self { store }
     }
+
+    /// A handle on the store, for a handler that needs to hand it to a blocking task.
+    pub(crate) fn store(&self) -> Arc<Store> {
+        Arc::clone(&self.store)
+    }
 }
 
 /// A failed API response.
@@ -52,6 +57,30 @@ impl AppState {
 pub(crate) struct Failure {
     status: StatusCode,
     message: String,
+}
+
+impl Failure {
+    /// A failure reported as `status`, with `message` in the body.
+    pub(crate) fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    /// The status this failure will be reported as. **Test support only** — the response is the
+    /// production contract, and a handler that reads its own failure back is one indirection away
+    /// from branching on it.
+    #[cfg(test)]
+    pub(crate) fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// What the caller will be told. **Test support only**, for the same reason.
+    #[cfg(test)]
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl IntoResponse for Failure {

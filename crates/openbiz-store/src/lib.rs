@@ -33,12 +33,16 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use oxigraph::io::RdfSerializer;
 use oxigraph::model::vocab::{rdf, xsd};
 use oxigraph::model::{GraphName, Literal, NamedNode, NamedNodeRef, Quad, Term};
 use oxigraph::store::Store as Backend;
 use thiserror::Error;
 
 mod graph;
+mod syntax;
+
+pub use syntax::RdfSyntax;
 
 pub use graph::{
     GraphId, GraphIdError, GraphKind, INFERRED_GRAPH_PREFIX, OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
@@ -144,6 +148,27 @@ pub enum StoreError {
          a transaction cannot be nested inside another"
     )]
     NestedTransaction,
+    /// A graph was asked for that the registry does not know about.
+    ///
+    /// Distinct from "the graph is empty" on purpose. Handing back an empty export for a
+    /// vocabulary that does not exist is the failure mode this variant exists to prevent: the
+    /// caller gets a well-formed, valid, entirely wrong file and no reason to doubt it.
+    #[error("no graph is registered at {iri}")]
+    NoSuchGraph {
+        /// The IRI that is not registered.
+        iri: String,
+    },
+    /// A graph could not be written out in the requested syntax.
+    #[error("the graph {iri} could not be written as {syntax}: {source}")]
+    Export {
+        /// The graph being exported.
+        iri: String,
+        /// The syntax it was being written in.
+        syntax: RdfSyntax,
+        /// The underlying cause — usually the caller's writer failing, not the store.
+        #[source]
+        source: std::io::Error,
+    },
     /// The backend failed.
     #[error("store backend failed: {0}")]
     Backend(String),
@@ -343,6 +368,83 @@ impl Store {
     /// path needs, and a caller that wants the kind should ask [`Store::graphs`].
     pub fn contains_graph(&self, iri: &str) -> Result<bool, StoreError> {
         contains_graph_in(&self.backend, iri)
+    }
+
+    /// Write one graph's contents to `writer` in `syntax`.
+    ///
+    /// # What is in the file, exactly
+    ///
+    /// The statements of that one graph. Nothing else — no OpenBiz bookkeeping, no other
+    /// vocabulary, no materialised inference. That is not achieved by filtering on the way out; it
+    /// is the named-graph model (`docs/adr/0007`) paying for itself: our own metadata lives in the
+    /// system graph and inferences live in a derived graph, so a vocabulary export cannot contain
+    /// them because they were never in the vocabulary. This is the round-trip guarantee `CLAUDE.md`
+    /// §1.3 requires — the incumbents that keep project metadata alongside content produce exports
+    /// a standards-compliant consumer has to be *told* to ignore parts of.
+    ///
+    /// The graph *name* is another matter, and an honest one:
+    /// [`RdfSyntax::records_graph_names`] is false for Turtle, N-Triples, and RDF/XML, because a
+    /// triple syntax has nowhere to put it. In those three the statements are written to the
+    /// default graph and the IRI is not in the file. Callers are expected to say so rather than
+    /// let a user find out when the re-import lands somewhere unexpected.
+    ///
+    /// # Refusals
+    ///
+    /// An IRI with no registry entry is [`StoreError::NoSuchGraph`], never an empty file. A
+    /// *registered but empty* graph is an empty file, which is the correct and different answer —
+    /// a vocabulary that has been created and not yet populated genuinely has no statements.
+    ///
+    /// # Cost
+    ///
+    /// Streams: quads go to `writer` as they are read, so peak memory is one quad rather than the
+    /// whole graph. Takes no write lock, so an export never blocks an author and an author never
+    /// blocks an export — and it does not need one, because the backend's iterator holds a single
+    /// snapshot for the whole scan (read from its source, not assumed). A commit landing mid-export
+    /// therefore cannot tear the file: the export is the graph as it stood when the scan began.
+    ///
+    /// The registry check runs on its own, earlier snapshot, so an export can in principle be of a
+    /// graph deregistered a moment ago. Nothing deregisters a graph in this build; when something
+    /// does, the check belongs inside a read transaction. Recorded in `docs/UNTESTED.md`.
+    pub fn export_graph(
+        &self,
+        iri: &str,
+        syntax: RdfSyntax,
+        writer: impl std::io::Write,
+    ) -> Result<(), StoreError> {
+        // The registry is the authority on what exists, exactly as it is for `graphs()`. Asking
+        // the backend whether any quad names this graph would report a created-but-empty
+        // vocabulary as absent, which is the vocabulary a user is most likely to be looking for.
+        let (Ok(graph_name), true) = (NamedNode::new(iri), self.contains_graph(iri)?) else {
+            return Err(StoreError::NoSuchGraph {
+                iri: iri.to_owned(),
+            });
+        };
+
+        let failed = |source| StoreError::Export {
+            iri: iri.to_owned(),
+            syntax,
+            source,
+        };
+
+        let mut serializer = RdfSerializer::from_format(syntax.backend()).for_writer(writer);
+        for quad in
+            self.backend
+                .quads_for_pattern(None, None, None, Some(graph_name.as_ref().into()))
+        {
+            let quad = quad.map_err(|error| StoreError::Backend(error.to_string()))?;
+
+            // Two calls rather than one because the engine's `serialize_quad` *errors* on a named
+            // graph in a triple syntax rather than dropping it. Choosing per syntax is what turns
+            // that into the documented lossy-but-successful behaviour above.
+            if syntax.records_graph_names() {
+                serializer.serialize_quad(&quad).map_err(failed)?;
+            } else {
+                serializer.serialize_triple(quad.as_ref()).map_err(failed)?;
+            }
+        }
+        serializer.finish().map_err(failed)?;
+
+        Ok(())
     }
 
     /// Register a new vocabulary graph.
@@ -1605,5 +1707,398 @@ mod tests {
         assert!(second
             .contains_graph("https://example.org/x")
             .expect("readable"));
+    }
+
+    /// Serialisation, and the two questions an export has to answer honestly: *is this everything
+    /// that was in the graph*, and *is this only what was in the graph*.
+    mod export {
+        use super::*;
+        use oxigraph::io::RdfParser;
+        use oxigraph::model::{BlankNode, GraphName, NamedOrBlankNode};
+        use std::collections::BTreeSet;
+
+        const VOCABULARY: &str = "http://acme.example/v/finance";
+        const SKOS: &str = "http://www.w3.org/2004/02/skos/core#";
+
+        fn skos(term: &str) -> NamedNode {
+            NamedNode::new_unchecked(format!("{SKOS}{term}"))
+        }
+
+        /// Content chosen to break a serialiser rather than to flatter one: two language tags in
+        /// non-Latin and accented scripts, a typed literal, a literal carrying the quote, newline
+        /// and backslash every syntax escapes differently, an IRI with a percent-encoded space,
+        /// and a blank node. A round trip over ASCII proves almost nothing.
+        fn rich_statements() -> Vec<(NamedNode, NamedNode, Term)> {
+            let subject = NamedNode::new_unchecked(format!("{VOCABULARY}#Derivative"));
+            vec![
+                (
+                    subject.clone(),
+                    rdf::TYPE.into_owned(),
+                    skos("Concept").into(),
+                ),
+                (
+                    subject.clone(),
+                    skos("prefLabel"),
+                    Literal::new_language_tagged_literal_unchecked("Dérivé financier", "fr").into(),
+                ),
+                (
+                    subject.clone(),
+                    skos("prefLabel"),
+                    Literal::new_language_tagged_literal_unchecked("金融派生商品", "ja").into(),
+                ),
+                (
+                    subject.clone(),
+                    skos("notation"),
+                    Literal::new_typed_literal("42", xsd::INTEGER).into(),
+                ),
+                (
+                    subject.clone(),
+                    skos("scopeNote"),
+                    Literal::new_simple_literal(
+                        "A \"quoted\" note,\nspanning lines, with a \\ backslash and an emoji 🧾",
+                    )
+                    .into(),
+                ),
+                (
+                    subject.clone(),
+                    skos("exactMatch"),
+                    NamedNode::new_unchecked("http://other.example/scheme/a%20b").into(),
+                ),
+                (
+                    subject,
+                    skos("related"),
+                    BlankNode::new_unchecked("unnamedConcept").into(),
+                ),
+            ]
+        }
+
+        fn populated_store(dir: &tempfile::TempDir) -> Store {
+            let store = Store::open(dir.path()).expect("a fresh store opens");
+            let graph = vocabulary(VOCABULARY);
+            store
+                .transaction(|txn| {
+                    txn.create_vocabulary_graph(&graph)?;
+                    txn.insert(&graph, rich_statements())
+                })
+                .expect("a fresh vocabulary takes its statements");
+            store
+        }
+
+        fn export(store: &Store, iri: &str, syntax: RdfSyntax) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            store
+                .export_graph(iri, syntax, &mut bytes)
+                .unwrap_or_else(|error| panic!("exporting {iri} as {syntax}: {error}"));
+            bytes
+        }
+
+        /// Blank node labels are not preserved across a round trip and are not meant to be — the
+        /// specifications say they are scoped to the document. Comparing them would test the
+        /// serialiser's label generator rather than whether the statement survived, so every blank
+        /// node collapses to one placeholder before comparison. There is exactly one in the
+        /// fixture, so this cannot mask two being conflated.
+        fn anonymise(quad: Quad) -> Quad {
+            fn subject(node: NamedOrBlankNode) -> NamedOrBlankNode {
+                match node {
+                    NamedOrBlankNode::BlankNode(_) => BlankNode::new_unchecked("anonymous").into(),
+                    named => named,
+                }
+            }
+            Quad {
+                subject: subject(quad.subject),
+                predicate: quad.predicate,
+                object: match quad.object {
+                    Term::BlankNode(_) => BlankNode::new_unchecked("anonymous").into(),
+                    other => other,
+                },
+                graph_name: quad.graph_name,
+            }
+        }
+
+        fn reparse(bytes: &[u8], syntax: RdfSyntax) -> BTreeSet<String> {
+            RdfParser::from_format(syntax.backend())
+                .for_slice(bytes)
+                .map(|quad| {
+                    let quad =
+                        quad.unwrap_or_else(|error| panic!("re-reading our own {syntax}: {error}"));
+                    anonymise(quad).to_string()
+                })
+                .collect()
+        }
+
+        fn expected(syntax: RdfSyntax) -> BTreeSet<String> {
+            let graph_name: GraphName = if syntax.records_graph_names() {
+                NamedNode::new_unchecked(VOCABULARY).into()
+            } else {
+                GraphName::DefaultGraph
+            };
+            rich_statements()
+                .into_iter()
+                .map(|(subject, predicate, object)| {
+                    anonymise(Quad::new(subject, predicate, object, graph_name.clone())).to_string()
+                })
+                .collect()
+        }
+
+        /// The item's central claim, tested the only way it can honestly be tested: write the
+        /// graph out, read it back with a parser for that syntax, and require the statements to be
+        /// the same set. A serialiser that drops a language tag, mangles an escape, or silently
+        /// omits a statement fails here rather than in a customer's re-import.
+        #[test]
+        fn every_syntax_round_trips_the_statements_it_was_given() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            for syntax in RdfSyntax::ALL {
+                assert_eq!(
+                    expected(syntax).len(),
+                    rich_statements().len(),
+                    "the comparison is worthless if the expected set collapsed"
+                );
+
+                let bytes = export(&store, VOCABULARY, syntax);
+                assert!(
+                    !bytes.is_empty(),
+                    "{syntax} produced no bytes for seven statements"
+                );
+                assert_eq!(
+                    reparse(&bytes, syntax),
+                    expected(syntax),
+                    "{syntax} did not survive a round trip"
+                );
+            }
+        }
+
+        /// Three of the six cannot carry a graph name, and this asserts what *actually* happens
+        /// rather than what the flag says: the statements land in the default graph, the IRI is
+        /// nowhere in the file, and nothing errors. The engine's `serialize_quad` would have
+        /// errored instead, so this is the branch that makes the documented behaviour true.
+        #[test]
+        fn a_triple_syntax_drops_the_graph_name_and_says_so() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            for syntax in RdfSyntax::ALL {
+                let bytes = export(&store, VOCABULARY, syntax);
+                let text = String::from_utf8(bytes.clone()).expect("UTF-8 output");
+                let in_default_graph = RdfParser::from_format(syntax.backend())
+                    .for_slice(&bytes)
+                    .all(|quad| quad.expect("re-readable").graph_name == GraphName::DefaultGraph);
+
+                if syntax.records_graph_names() {
+                    assert!(
+                        text.contains(VOCABULARY),
+                        "{syntax} claims to record graph names and did not write one"
+                    );
+                    assert!(!in_default_graph, "{syntax} wrote to the default graph");
+                } else {
+                    assert!(
+                        in_default_graph,
+                        "{syntax} cannot name a graph, so everything must be in the default one"
+                    );
+                }
+            }
+        }
+
+        /// The round-trip guarantee `CLAUDE.md` §1.3 asks for. The vocabulary *has* a registry
+        /// entry — it is how the store knows it exists — and that entry must not be in the export.
+        /// This is the failure PoolParty and TopBraid EDG ship: project bookkeeping in the same
+        /// store as the content, so a consumer has to be told which parts to ignore.
+        #[test]
+        fn a_vocabulary_export_carries_none_of_openbizs_own_bookkeeping() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            assert!(
+                store.contains_graph(VOCABULARY).expect("readable"),
+                "the test is worthless unless the registry entry it looks for exists"
+            );
+
+            for syntax in RdfSyntax::ALL {
+                let text = String::from_utf8(export(&store, VOCABULARY, syntax)).expect("UTF-8");
+                assert!(
+                    !text.contains(OPENBIZ_NAMESPACE),
+                    "{syntax} leaked the reserved namespace into a vocabulary export:\n{text}"
+                );
+            }
+        }
+
+        /// The other half of the same rule: an inferred graph is a separate graph, so it is not
+        /// quietly folded into its vocabulary's export. A user who cannot tell an asserted
+        /// statement from a derived one cannot defend the vocabulary to an auditor.
+        #[test]
+        fn materialised_inferences_are_not_folded_into_the_vocabulary() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+            let graph = vocabulary(VOCABULARY);
+            let inferred = GraphId::inferred_for(&graph).expect("an inferred graph derives");
+
+            // Registered through the same path a reasoner would use; the choke point refuses a
+            // direct write to it, which is the point of `GraphKind::Inferred`.
+            store
+                .transaction(|txn| txn.ensure_registered(&inferred).map(|_| ()))
+                .expect("an inferred graph registers");
+
+            let text =
+                String::from_utf8(export(&store, VOCABULARY, RdfSyntax::NQuads)).expect("UTF-8");
+            assert!(!text.contains(inferred.iri()));
+            assert_eq!(
+                reparse(text.as_bytes(), RdfSyntax::NQuads),
+                expected(RdfSyntax::NQuads)
+            );
+        }
+
+        /// An operator's "what is actually in my store?" question. The system graph is exportable
+        /// because hiding it would be the opacity `CLAUDE.md` §1 exists to attack — the rule is
+        /// that our bookkeeping is never mixed into the user's work, not that it is unreachable.
+        #[test]
+        fn the_system_graph_can_be_exported_for_support() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            let text = String::from_utf8(export(&store, SYSTEM_GRAPH_IRI, RdfSyntax::TriG))
+                .expect("UTF-8");
+
+            assert!(text.contains(SYSTEM_GRAPH_IRI), "its own registry entry");
+            assert!(text.contains(VOCABULARY), "the vocabulary's registry entry");
+            assert!(text.contains(FORMAT_VERSION_IRI), "the format stamp");
+        }
+
+        /// A created-but-empty vocabulary is a real state — it is what every vocabulary is for the
+        /// moment between creation and its first concept. The export must be an *empty document*,
+        /// not zero bytes: RDF/XML and JSON-LD both need a wrapper to parse at all, so a
+        /// serialiser that skipped `finish()` on an empty graph would emit a file no consumer can
+        /// read, and would look fine in a byte-length assertion.
+        #[test]
+        fn an_empty_vocabulary_exports_as_a_readable_empty_document() {
+            let dir = temp_dir();
+            let store = Store::open(dir.path()).expect("a fresh store opens");
+            let graph = vocabulary("http://acme.example/v/brand-new");
+            store
+                .create_vocabulary_graph(&graph)
+                .expect("a fresh IRI registers");
+
+            for syntax in RdfSyntax::ALL {
+                let bytes = export(&store, graph.iri(), syntax);
+                assert!(
+                    reparse(&bytes, syntax).is_empty(),
+                    "{syntax} invented statements for an empty graph"
+                );
+            }
+        }
+
+        /// The difference between "empty" and "absent" is the whole reason this refusal exists.
+        /// Returning an empty file for a vocabulary that does not exist hands the caller a valid,
+        /// well-formed, entirely wrong document and no reason to doubt it.
+        #[test]
+        fn a_graph_that_is_not_registered_is_refused_rather_than_exported_empty() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            for iri in [
+                "http://acme.example/v/never-created",
+                "not an iri at all",
+                "",
+                SYSTEM_GRAPH_IRI.strip_suffix("system").unwrap_or_default(),
+            ] {
+                let mut sink = Vec::new();
+                let error = store
+                    .export_graph(iri, RdfSyntax::Turtle, &mut sink)
+                    .expect_err("an unregistered graph must be refused");
+                assert!(
+                    matches!(&error, StoreError::NoSuchGraph { iri: reported } if reported == iri),
+                    "exporting {iri:?} gave {error}"
+                );
+                assert!(sink.is_empty(), "nothing may be written before the refusal");
+            }
+        }
+
+        /// A graph that holds quads but has no registry entry is still absent, because the
+        /// registry is the authority on what exists. The alternative — deciding from the data —
+        /// would report a created-but-empty vocabulary as missing, which is the vocabulary a user
+        /// is most likely to be looking for.
+        #[test]
+        fn the_registry_decides_what_exists_not_the_presence_of_quads() {
+            let dir = temp_dir();
+            let store = Store::open(dir.path()).expect("a fresh store opens");
+            let orphan = "http://acme.example/v/unregistered";
+            store
+                .backend
+                .insert(QuadRef::new(
+                    NamedNodeRef::new_unchecked(orphan),
+                    rdf::TYPE,
+                    NamedNodeRef::new_unchecked(orphan),
+                    NamedNodeRef::new_unchecked(orphan),
+                ))
+                .expect("the backend accepts a quad");
+
+            assert!(matches!(
+                store.export_graph(orphan, RdfSyntax::Turtle, Vec::new()),
+                Err(StoreError::NoSuchGraph { .. })
+            ));
+        }
+
+        /// The writer belongs to the caller, so it is the thing most likely to fail in production
+        /// — a client that hangs up mid-download. It must surface as our error naming the graph
+        /// and the syntax, not as a panic and not as a silently truncated file.
+        #[test]
+        fn a_failing_writer_is_reported_as_an_export_failure() {
+            struct Broken;
+            impl std::io::Write for Broken {
+                fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "the client hung up",
+                    ))
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            for syntax in RdfSyntax::ALL {
+                let error = store
+                    .export_graph(VOCABULARY, syntax, Broken)
+                    .expect_err("a broken writer must fail the export");
+                let StoreError::Export {
+                    iri,
+                    syntax: reported,
+                    source,
+                } = &error
+                else {
+                    panic!("{syntax} reported a writer failure as {error}");
+                };
+                assert_eq!(iri, VOCABULARY);
+                assert_eq!(*reported, syntax);
+                assert_eq!(source.kind(), std::io::ErrorKind::BrokenPipe);
+            }
+        }
+
+        /// Exporting takes no write lock, so it cannot be the thing that blocks an author. Asserted
+        /// by exporting from inside an open transaction: if `export_graph` took the write lock this
+        /// would deadlock against the transaction holding it, and the test would hang rather than
+        /// fail — noted in `docs/UNTESTED.md` as a bad failure shape, kept because the property is
+        /// worth more than the shape costs.
+        #[test]
+        fn exporting_does_not_block_on_the_write_lock() {
+            let dir = temp_dir();
+            let store = populated_store(&dir);
+
+            let bytes = store
+                .transaction(|_| {
+                    let mut bytes = Vec::new();
+                    store.export_graph(VOCABULARY, RdfSyntax::NQuads, &mut bytes)?;
+                    Ok(bytes)
+                })
+                .expect("an export inside a write transaction");
+
+            assert_eq!(
+                reparse(&bytes, RdfSyntax::NQuads),
+                expected(RdfSyntax::NQuads)
+            );
+        }
     }
 }
