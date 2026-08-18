@@ -268,7 +268,12 @@ fn the_graph_registry_is_read_at_startup() {
     );
 
     server.signal("TERM");
-    assert!(server.wait_for_exit().success());
+    let status = server.wait_for_exit();
+    assert!(
+        status.success(),
+        "the server must exit zero on SIGTERM. Status: {status}. Log:\n{}",
+        server.log()
+    );
 }
 
 /// `GET <path>` against a running child, returning the whole response as text.
@@ -400,5 +405,6 @@ fn the_stop_signals_are_registered_before_the_server_announces_its_port() {
     );
 
     server.signal("TERM");
-    assert!(server.wait_for_exit().success());
+    let status = server.wait_for_exit();
+    assert!(status.success(), "Status: {status}. Log:\n{}", server.log());
 }
