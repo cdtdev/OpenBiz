@@ -729,3 +729,115 @@ look competent disables the one signal that catches a stuck loop.
   makes work feel handled when it has only been noticed. That is the same failure I named in
   iteration 8's uncertainty about the W3C test suites, one item later and about a different spec.
   Twice now the honest caveat has been the deliverable.
+
+
+## Iteration 10 — 2026-08-19
+- **Took:** the **blind-spot pass** (every tenth iteration), so no plan item. Started clean: `main`
+  green on `65af169`, working tree clean, both human inboxes empty — nothing to drain, nothing to
+  promote.
+- **Chose the gap the log itself was pointing at.** Iterations 8 and 9 both closed with the same
+  "still uncertain" line in different words: our six serialisations are proven by a round trip
+  through *Oxigraph's own reader*, so what is tested is that the library agrees with itself. Two
+  consecutive iterations naming one doubt is exactly the non-convergence signal the mandatory
+  uncertainty line exists to raise, and iteration 8 had already named the failure mode — writing
+  the honest caveat had *become* the deliverable. So this pass took it rather than logging it a
+  third time.
+- **Did:** `crates/openbiz-store/src/spec_conformance.rs` — a reader for N-Triples and N-Quads
+  transcribed from the EBNF published in [N-Triples §7] and [N-Quads §4], sharing no code with the
+  writer under test, plus the five layout constraints of [Canonical N-Triples §4] as a separate
+  layer (a non-canonical document is still legal, and conflating the two would let a layout
+  complaint pose as a syntax error). Two of six syntaxes, chosen because their grammars are small
+  enough to be *reviewed against the spec* by a human — seven productions and eight terminals for
+  the pair. The fixture is [N-Triples Example 3] verbatim, compared byte-for-byte against our
+  output. See `adr/0012`. **Turtle, TriG, RDF/XML and JSON-LD are untouched** and their claim is
+  unchanged; a Turtle recogniser written to check our Turtle writer would in practice be written to
+  accept whatever it emits, which is the tautology this whole exercise exists to escape.
+- **The pass found two real defects, and that is the headline.**
+  **One: the store returns a different term from the one you wrote.** Every literal whose datatype
+  the engine models natively is decoded to a value and re-rendered — `"1.663E-4"^^xsd:double` →
+  `"0.0001663"`, `"007"^^xsd:integer` → `"7"`, `"4.00"^^xsd:decimal` → `"4"`,
+  `"1"^^xsd:boolean` → `"true"`, and five more measured. RDF 1.1 defines a literal as the pair
+  (lexical form, datatype IRI), so these are different *terms*, not different spellings — and
+  `two_triples_that_differ_only_in_lexical_form_collapse_into_one` proves the sharper harm: two
+  distinct triples in, one out. The graph a user gets back is smaller than the one they put in and
+  nothing says so. The control set produced the detail I did not expect and would not have guessed:
+  what survives byte-for-byte is the value that is **invalid** for its datatype
+  (`"abc"^^xsd:nonNegativeInteger`), while the well-typed `"007"^^xsd:integer` does not. The store
+  is faithful to what it cannot interpret and lossy with what it can, which is backwards from what
+  anyone would assume. My first draft of that test asserted `xsd:nonNegativeInteger` was unaffected
+  — that came from the earlier probe, where I had happened to use an invalid value — and the
+  control set is what caught me. The control existed only because a table of rewrites with no
+  counter-examples would have been consistent with "the store mangles every literal", a larger and
+  wrong claim.
+  **Two: our N-Triples is one constraint short of canonical.** §4 says `ECHAR` must not be used for
+  characters `STRING_LITERAL_QUOTE` admits directly; a tab is one, and we write `\t`. Nothing is
+  lost and every reader recovers the same term — which is precisely why the round trip could not
+  see it. What is lost is byte-identical serialisation, and with it the git-diffability the charter
+  builds a pillar on. Worth naming how it was found: the first fixture had no tab, the canonical
+  test passed, and I added a tab and a carriage return *because* §4 treats them in opposite ways
+  and I wanted to know whether the check had teeth. It did. A conformance test whose fixture avoids
+  the hard characters is decoration.
+- **Neither is fixed, and both are landed green — the honest way, not the convenient one.** I cannot
+  fix either from outside the engine, and `CLAUDE.md` §7 says the loop does not authorise its own
+  scope. So each defect is pinned as an executable assertion that names the wrong behaviour, states
+  it is wrong, and **fails if it is ever fixed** with a message saying which ledger entries to
+  strike. That is the opposite of loosening an assertion to get green: the failure is now permanent,
+  visible, and in the test suite rather than in a paragraph. Three proposals record the actual
+  choices — upstream, our own term encoding, or accept-and-disclose — and I deliberately did not
+  rank the second defect as urgent, because it is not: no consumer breaks, and there is no git
+  integration until Phase 8. An inflated proposal wastes a human decision.
+- **Tests:** 224 Rust (was 212) + 29 UI (unchanged; no UI files touched). `cargo fmt --check`,
+  `cargo clippy -D warnings`, `cargo test --workspace`, and `cargo deny check licenses` all green.
+  **The checker is proven to discriminate**, which is the only reason to believe anything above it:
+  twenty-one documents each violating exactly one named production or one named §4 constraint are
+  required to be rejected — a relative IRI, a raw space in an IRIREF, a raw line break in a
+  literal, an escape ECHAR does not define, a blank node label ending in `.`, a UCHAR short of its
+  hex digits, two statements on one line, a graph label in N-Triples, a doubled separator, an
+  indented line, a comment, `\t` where the tab is legal, a UCHAR at all, lower-case hex — and a
+  canonical document is required to be *accepted*, without which a checker that always complained
+  would pass every negative case and be useless.
+- **Learned.** Two of my own test fixtures were wrong in ways the tests caught: the
+  "unterminated literal" case was refused for the *raw newline* rather than for being unterminated,
+  and the two UCHAR cases contained a raw `é` and so were canonical after all. Both were fixtures
+  written from what I expected the reader to do rather than from the document text, and both were
+  caught only because I asserted on the *reason* for each refusal rather than on the fact of it.
+  Asserting "this fails" would have passed and proven nothing. Separately: `rustfmt` oscillated on
+  one `match` arm containing a long string, reformatting it two ways on alternate runs, so
+  `cargo fmt --all` followed by `--check` failed at exit 1 with the file already formatted. Not a
+  bug in our code; fixed by lifting the string into a binding. Worth carrying, because the obvious
+  reading of that symptom is "fmt is broken" or "I forgot to run it", and it is neither.
+- **Recorded:** `adr/0012`; one `UNTESTED.md` entry half-closed with what remains for the other four
+  syntaxes stated explicitly rather than folded in; two new `UNTESTED.md` entries; three proposals;
+  one LLM opportunity — the **fourth** iteration to describe "explain a set of RDF changes in the
+  vocabulary's own terms" from a different seat, which at this point is less a note than a Phase 10
+  requirement with four independent callers waiting for it.
+- **Still uncertain:** whether pinning a defect as a passing test is a discipline or a sedative. It
+  is honest — the wrong behaviour is written down as an assertion, in the suite, with a message
+  telling the next reader what to strike when it changes — and it is strictly better than the
+  paragraph in `UNTESTED.md` that iteration 8 correctly called out as the deliverable becoming the
+  caveat. But the suite is now green, the burn-down looks healthy, and a user of this build still
+  gets `"7"` when they wrote `"007"` with nothing telling them so. I have converted a red into a
+  green plus a proposal, and the proposal is a decision only a human can take, which means the
+  defect's expected lifetime is however long it takes someone to read `PROPOSED.md`. That may be
+  correct — it genuinely is a commercial-shaped choice about a dependency the whole product rests
+  on. What I cannot judge from inside the loop is whether "shipped, known-lossy, undisclosed" is a
+  state the product should be allowed to sit in at all, or whether the disclosure half of option 3
+  is something I should have taken unilaterally this iteration on the grounds that saying what we
+  do is never scope creep. I chose not to, because §7 exists precisely to stop me finding my own
+  ideas compelling, and I notice that reasoning is also exactly what I would say if I were simply
+  avoiding a second item. The narrower thing I actually do not know: whether the SPARQL endpoint
+  rewrites lexical forms the same way the export does. It reads through the same store, so it
+  almost certainly does, and "almost certainly" is the word this pass was created to delete — I
+  wrote it into `UNTESTED.md` as unmeasured — and then, on rereading that sentence, went and
+  measured it, because "one item" is a rule about scope and not a licence to leave a ten-minute
+  question open inside the item I was already doing. A `CONSTRUCT` that never touches
+  `export_graph` returns `"7"` as well, so the loss is the term encoding's and every reader
+  inherits it; that makes the third proposal's option 2 more expensive than I wrote it, since a fix
+  has to touch stored data and not just a serialiser. What remains genuinely unmeasured, and I have
+  left it: whether the rewrite lands at insert or at read, which is what decides whether an existing
+  store can be repaired in place or has to be rebuilt from an export that is itself already lossy.
+
+[N-Triples §7]: https://www.w3.org/TR/n-triples/#sec-grammar
+[N-Quads §4]: https://www.w3.org/TR/n-quads/#sec-grammar
+[Canonical N-Triples §4]: https://www.w3.org/TR/n-triples/#canonical-ntriples
+[N-Triples Example 3]: https://www.w3.org/TR/n-triples/#sec-literals

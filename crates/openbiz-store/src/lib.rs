@@ -42,6 +42,11 @@ use thiserror::Error;
 mod graph;
 mod query;
 mod results;
+/// Conformance of the line-based exports against the specifications' own grammars. Test-only:
+/// it holds a reader written from the published EBNF, which exists to disagree with the one we
+/// ship. See the module's own documentation for why round-trip fidelity is not conformance.
+#[cfg(test)]
+mod spec_conformance;
 mod syntax;
 
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};

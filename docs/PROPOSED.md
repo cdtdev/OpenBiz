@@ -188,6 +188,75 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Suggested phase:** Phase 1 (alongside the endpoint) or early Phase 3 (the interface phase), and
   the loop has no view on which — that is the judgement being asked for.
 
+### Decide what to do about the store rewriting literal lexical forms
+- **Status:** proposed.
+- **Gap:** the store returns a *different RDF term* from the one written, for every literal whose
+  datatype the engine models natively. `"007"^^xsd:integer` comes back `"7"`;
+  `"1.663E-4"^^xsd:double` comes back `"0.0001663"`; `"1"^^xsd:boolean` comes back `"true"`. Two
+  triples differing only in an object's lexical form collapse to one, so a graph loses statements.
+  Nothing tells the user. Measured and pinned in iteration 10 — see `adr/0012` and `UNTESTED.md`.
+- **Why load-bearing:** it breaks `CLAUDE.md` §1.3 — an artefact that does not survive a write and a
+  read has not round-tripped, never mind round-tripped through somebody else's tool. Zero-padded
+  notation codes are ordinary in enterprise classification schemes, so this is not an exotic edge
+  case. And silence is the specific thing the charter's wedge attacks: we say the incumbents' export
+  is lossy in ways they do not disclose, and here we have a larger undisclosed loss. **The loop
+  cannot decide this alone** — the three options have very different costs and one of them is a
+  judgement about a dependency the whole product rests on:
+  1. **Upstream.** Get Oxigraph to preserve the lexical form. Cheapest for us, slowest and least
+     certain, and it is a dependency on somebody else's roadmap.
+  2. **Our own term encoding.** Keep the original lexical form beside the value. Real work in
+     `openbiz-store`, a store format bump, and it puts us on a fork of the engine's data model —
+     which is the "swap the engine later" cost `CLAUDE.md` §3 was written to avoid paying. Note
+     this is the *expensive* option: `the_rewrite_is_the_stores_and_not_the_exports` shows the loss
+     is in the term encoding rather than in the serialiser, so a fix touches stored data and every
+     existing store needs a migration or a rebuild.
+  3. **Accept and disclose.** Say it in the API, the export, and the interface, the way
+     `records_graph_names` already says its smaller thing. Cheap, honest, and **not a fix**: a
+     governance team cannot sign off a vocabulary whose notations silently changed.
+  There is a fourth that is not on the table without a much larger decision — a different store —
+  and naming it is part of what makes 1–3 a real choice rather than a foregone one.
+- **Cost & impact:** option 3 is one iteration. Option 2 is several and touches the format version.
+  Option 1 is unbounded. Whichever is chosen, the disclosure work in option 3 is worth doing first
+  because it is a prerequisite for being honest while the rest is decided.
+- **Suggested phase:** Phase 1. It is a property of the substrate and every later phase inherits it.
+
+### Write our own N-Triples serialiser, or get the escaped tab fixed upstream
+- **Status:** proposed.
+- **Gap:** our N-Triples output violates one of Canonical N-Triples §4's five constraints — it
+  writes `\t` for a tab, where §4 requires characters that `STRING_LITERAL_QUOTE` admits directly to
+  be written directly. Valid N-Triples, not canonical N-Triples. Measured in iteration 10; see
+  `adr/0012`.
+- **Why load-bearing:** honestly, **less than the entry above**, and saying so is the point of this
+  file. Nothing is lost and no consumer breaks. What it costs is the claim that two tools serialising
+  one graph produce identical bytes, which is what makes a vocabulary reviewable as a git diff —
+  a charter pillar, but one nothing in the product depends on yet, because there is no git
+  integration until Phase 8. Promoting this ahead of the lexical-form decision would be the wrong
+  order.
+- **Cost & impact:** N-Triples is the simplest of the six syntaxes and writing a conforming
+  serialiser is perhaps half an iteration, with the conformance checker from iteration 10 already in
+  place to prove it. But it means one of the six no longer goes through the engine's writer, which
+  is an inconsistency a reader would have to re-derive — so it is probably only worth doing as part
+  of the decision above, or not at all.
+- **Suggested phase:** Phase 1, or deferred to Phase 8 when git integration makes the diff matter.
+
+### Run the W3C rdf-tests suites against all six serialisations
+- **Status:** proposed.
+- **Gap:** iteration 10 covered two of the six syntaxes with a reader written from the published
+  EBNF. The other four — Turtle, TriG, RDF/XML, JSON-LD — are still proven only by being re-read by
+  the library that wrote them, which is self-consistency rather than conformance. Their grammars are
+  far too large to transcribe the way N-Triples' was.
+- **Why load-bearing:** `CLAUDE.md` §4.5 requires a standards claim to rest on the spec's own tests,
+  and Turtle is our **default** export format — the one most users will accept without reading
+  further. The two defects found the moment a genuinely independent check existed for N-Triples are
+  the argument: neither was visible to a round trip, and there is no reason to think the other four
+  are cleaner, only that nothing has looked.
+- **Cost & impact:** one to two iterations. The corpus is dual-licensed W3C Test Suite / BSD-3-Clause
+  — BSD-3-Clause is permitted by §5 outright, so vendoring a subset is a licence question with a
+  known answer, but it should still be recorded per §6's fixture rule. The manifests are RDF, which
+  we can already read. Wiring it into CI is the part with real cost, since it should not be
+  a download at test time (§1.1, air-gapped).
+- **Suggested phase:** Phase 1.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
@@ -334,3 +403,16 @@ what this shares with the other three: it is again "explain something to a human
 vocabulary's own terms", but the input is a *query* rather than a change set, so it is a genuinely
 fourth capability rather than the fourth seat on the same one — and if Phase 10 builds the
 change-explanation agent first, this one should be checked against it before being built separately._
+
+_Iteration 10 (conformance blind-spot pass): one, and it is the **fourth** time the same capability
+has been described from a different seat. The finding this pass produced is a sentence a user needs
+to be told — "the notation you wrote as `007` will come back as `7`, and a second notation that
+differed only in padding has been merged into it" — and producing that sentence means diffing two
+RDF graphs and describing the difference in the vocabulary's own terms rather than in triples.
+Iterations 7, 8 and 9 each reached the same place from validation, from export lossiness, and from
+query results. Phase 10 should build **"explain a set of RDF changes in the vocabulary's own
+terms"** once, with the graph diff computed deterministically and the LLM used only to narrate it —
+which keeps it inside `adr/0002`'s rule that a model never establishes a fact, only phrases one.
+Note the manual path already exists and must keep existing: the difference is computable and
+printable without any model, and an air-gapped deployment gets the triples and loses only the
+prose._
