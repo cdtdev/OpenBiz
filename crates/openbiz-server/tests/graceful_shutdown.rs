@@ -94,11 +94,19 @@ impl Server {
         panic!("{needle:?} never appeared in the log. Log:\n{}", self.log());
     }
 
+    /// Block until the server **answers a request**, not merely until its port is bound.
+    ///
+    /// The distinction is not pedantry. `serve` binds the listener and logs the port it got
+    /// *before* it hands the listener to `axum::serve`, so a TCP connect succeeds — out of the
+    /// kernel's accept backlog — while the process is still some way from serving anything. A
+    /// probe that stopped there would return early and, worse, would leave an accepted-but-never-
+    /// answered connection behind for the graceful drain to reason about. Completing one exchange
+    /// proves the whole path and leaves nothing dangling.
     fn wait_until_serving(&self) {
         let deadline = Instant::now() + PATIENCE;
         while Instant::now() < deadline {
             if let Some(addr) = self.listening_on() {
-                if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+                if try_get(addr, "/healthz").is_some_and(|response| response.contains("200")) {
                     return;
                 }
             }
@@ -274,6 +282,28 @@ fn the_graph_registry_is_read_at_startup() {
         "the server must exit zero on SIGTERM. Status: {status}. Log:\n{}",
         server.log()
     );
+}
+
+/// `GET <path>` against a child that may not be answering yet, for the readiness probe.
+///
+/// Returns `None` for anything that is not a completed exchange — a refused connection, a reset
+/// mid-response, a server that is bound but not yet serving. A readiness probe must never turn a
+/// "not yet" into a panic, which is why this is separate from [`http_get`] rather than a flag on
+/// it.
+fn try_get(addr: SocketAddr, path: &str) -> Option<String> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok()?;
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .ok()?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    Some(String::from_utf8_lossy(&response).into_owned())
 }
 
 /// `GET <path>` against a running child, returning the whole response as text.
