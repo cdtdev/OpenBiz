@@ -5,7 +5,7 @@ The backlog and the burn-down. One `- [ ]` per item; check it off only when it m
 
 **Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
 memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is **11 of 14**, and the three that remain are all deliberately deferred to Phase 2 — see below. The embedded store opens, stamps, and closes an Oxigraph instance inside
+Phase 1 is **12 of 14**, and the two that remain are deliberately deferred — see below. The embedded store opens, stamps, and closes an Oxigraph instance inside
 the binary; it has a **named-graph model with a real enforcement point** — one graph per
 vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
 authoring, and a single write choke point that every write passes through — and **that model is now
@@ -41,11 +41,24 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 11 of 14 items done (the serialisation item was
-split in two — see the split note below), and **the remaining three are all blocked on Phase 2's
-candidate seam by design**, each with its reason written against it. **Iteration 16 took the
-store-format migration framework**, whose first migration turned out to be code that already
-existed: an unconditional per-open self-heal that re-registered the system graph forever, for the
+**Current position:** Phase 2 (SKOS authoring model), 1 of 16 items done after the candidate seam
+was split in three. Phase 1 is 12 of 14 and the two that remain — SPARQL Update and the Graph Store
+Protocol — are blocked on **authorisation**, not on the seam: the seam they were waiting for now
+exists, and what is left is that neither may be an unauthenticated write.
+
+**Iteration 17 took Phase 2's candidate seam**, which is the dependency the whole phase is ordered
+around and which three Phase 1 items had been deferred on for six iterations. A proposed change is
+now a **named graph plus a record**: the statements are staged in
+`urn:openbiz:graph:candidate:<id>`, so a pending change is exportable in any of the six syntaxes and
+queryable over SPARQL on the day it exists, and approval is a copy between two graphs *inside the
+transaction that records who approved it* — so the store can never hold statements in a vocabulary
+with no record of who let them in. Provenance is mandatory and its source is a closed token, so
+"show me everything an assistant proposed" is answerable before there is an assistant. The first
+producer is `openbiz import`, and **that closed Phase 1's RDF parsing item**: all six syntaxes,
+round-tripped against the serialiser, with a real production caller. See `adr/0017`.
+
+**Iteration 16 took the store-format migration framework**, whose first migration turned out to be
+code that already existed: an unconditional per-open self-heal that re-registered the system graph forever, for the
 benefit of stores that needed it once and with no record that it had ever happened. It is now a
 versioned, one-off, self-explaining step, and `openbiz restore` migrates an older backup instead of
 refusing it. See `adr/0016`. **Iteration 14 took backup and restore**, which is the
@@ -58,8 +71,7 @@ open. Its production caller is the command line, because a backup script needs a
 because an unauthenticated `POST /api/restore` would be the same defect SPARQL Update is deferred
 over. **This also gave the N-Quads parser its first production caller**, which is the condition
 `adr/0010` set — but the parsing item stays open, because one syntax of six reading a whole store
-into an empty one is not an import. **The three items above remain refused rather than skipped**,
-for the reasons iterations 11 and 12 recorded and this one re-checked.
+into an empty one is not an import — a gap iteration 17 closed with the candidate seam's import.
 
 **Iteration 15 took no plan item.** Iteration 14 built, tested, and pushed backup/restore but ended
 without merging it, so PR #17 sat open with a required check wedged in an unbounded `apt-get` and
@@ -70,12 +82,10 @@ still-running — and then landed PR #17. Iteration 16 landed the store-format m
 which closed that gap: `openbiz restore` no longer refuses a backup written by an older build, it
 migrates it as it reads it (see `adr/0016`).
 
-**Next is Phase 2's candidate seam**, and that is not a choice — it is the dependency. All three
-remaining Phase 1 items wait on it: the RDF parser needs an import, an import mutates a vocabulary,
-and `CLAUDE.md` §3 says a change to a vocabulary arrives as a reviewable candidate; SPARQL Update
-and the Graph Store Protocol are the same argument with a different verb. Each of the three has its
-deferral written against it below, and none should be started before the seam exists. **Phase 1 is
-therefore as complete as it can be without Phase 2.** Vocabulary *creation* over HTTP remains
+**Next is the SKOS core model**, now that the seam every mutation path arrives through exists.
+Phase 1's two open items are no longer waiting on it: SPARQL Update and the Graph Store Protocol
+each wait on authorisation, which is what part 3 of the seam waits on too. **Phase 1 is therefore
+as complete as it can be without an identity model.** Vocabulary *creation* over HTTP remains
 deliberately absent for the same §1.7 reason, so `POST /api/graphs` answers 405. **There is still
 no SPARQL console in the interface**; the endpoint's caller is HTTP, and the console is an open
 §4.4 gap in `UNTESTED.md` and a proposal. **And there is no online backup** — both new commands
@@ -258,7 +268,7 @@ the interface is a core differentiator, and building it late means retrofitting 
       > **Scope, honestly:** this is the serialise half. Parsing is the item below, and the round
       > trip is proven against our own reader, which is fidelity rather than conformance — see
       > `docs/UNTESTED.md`.
-- [ ] Parse those same six syntaxes into the store, round-tripped against the serialiser above
+- [x] Parse those same six syntaxes into the store, round-tripped against the serialiser above
       > **Split note (iteration 8).** One item wearing two hats, and the seam between them is a
       > charter constraint rather than convenience. A parser's production caller is an *import*, an
       > import mutates a vocabulary, and `CLAUDE.md` §3 says a change to a vocabulary arrives as a
@@ -275,6 +285,16 @@ the interface is a core differentiator, and building it late means retrofitting 
       > vocabulary, and that is the mutation still waiting on Phase 2's candidate seam. Checking
       > this box now would claim five parsers we do not have and an import path we deliberately do
       > not.
+      >
+      > **Closed at iteration 17, by the seam it was waiting for.** Phase 2's candidate seam landed
+      > and brought its first producer with it: `openbiz import <graph> <file>` parses **all six**
+      > syntaxes and proposes the statements as a reviewable candidate. The round trip is proven per
+      > syntax — a vocabulary is exported, re-proposed, and the staged statements compared to the
+      > source graph statement for statement — and the production caller is the command line.
+      > **Scope, honestly:** the parser's *only* entry point is the candidate seam. There is no
+      > direct-write import and there is not going to be one, which is the whole reason this item
+      > waited. The round trip is still against our own serialiser, so it is fidelity rather than
+      > conformance; that gap is unchanged and stays in `docs/UNTESTED.md`. See `adr/0017`.
 - [x] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)
       > **Better, not parity.** Every tool in this market has a SPARQL endpoint, so the question is
       > not whether but what it answers with by default, what stops it, and what it refuses to
@@ -465,14 +485,52 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 > Enables: the product's core noun. Everything a taxonomist does lands here.
 
-- [ ] **Candidate seam:** every path that mutates a vocabulary takes a *candidate* — a proposed
-      change carrying provenance, source, and a confidence where one is meaningful — reviewed before
-      it lands. One shape for a CSV import, a discovery match, a bulk edit, and a Phase 10 agent.
+- [x] **Candidate seam, part 1 — additions:** a proposed change to one vocabulary, carrying
+      provenance, source, and a confidence where one is meaningful, staged where a human can read it
+      and applied only on approval. First producer: `openbiz import`.
       > Added on product-owner instruction (`FEEDBACK-LOG.md`, 2026-08-18), which names it the
       > highest-value near-term work for LLM integration. It is `CLAUDE.md` §3 "design for
       > assistability" made concrete, and it is **interface shape, not new functionality** — do not
       > build agents or an `LlmProvider` behind it. Build this **before** the mutation items below,
       > or every one of them needs retrofitting.
+      > **Split at iteration 17** into three: additions (this item), removals, and the HTTP/UI half.
+      > The split is not convenience — the second waits on nothing and the third waits on
+      > authentication, so bundling them would have meant holding the seam back behind a blocker
+      > that has nothing to do with it.
+      > **Better, not parity.** Every incumbent has *some* review step and three things they do
+      > badly are what this item is about. (1) **The proposal is opaque until you accept it.** A
+      > pending import in PoolParty or EDG is a job in a queue, not a thing you can read; the diff
+      > you are approving is rendered by one screen that has to exist for the purpose. Here the
+      > payload is an ordinary named graph, so a pending change is exportable in any of the six
+      > syntaxes and queryable over SPARQL the day it exists, and `openbiz candidate 7` prints the
+      > statements through the same `GET /api/export` a runbook would use. (2) **Provenance is
+      > whatever the producer felt like writing.** Here the source is a closed token, so "show me
+      > everything an assistant proposed" is answerable, and a proposal that cannot say who raised
+      > it or why is refused at the point of proposal rather than discovered at review. (3) **The
+      > approval and the change are two events.** Here they are one transaction, so the store can
+      > never hold statements in a vocabulary with no record of who let them in — which is the only
+      > version of this an auditor can use.
+      > **Its production caller is the command line**, not HTTP: `openbiz import`, `openbiz
+      > candidates`, `openbiz candidate <id>`, `openbiz approve <id>`, `openbiz reject <id>`. An
+      > unauthenticated "apply this change to a vocabulary" is the same objection that has SPARQL
+      > Update deferred. This also gave Phase 1's RDF parsing item its production caller and closed
+      > it. See `adr/0017`.
+      > **Scope, honestly:** additions only — a candidate cannot yet propose a removal, so nothing
+      > that needs one (merge, split, deprecate) is reachable through the seam. The evidence is kept
+      > forever, so an approved import is stored twice and there is no retention policy. Both are in
+      > `docs/UNTESTED.md`.
+- [ ] **Candidate seam, part 2 — removals:** a candidate proposes statements to *remove* as well as
+      to add, so a merge, a split, a move, and a deprecation are all one shape.
+      > Split out of the item above at iteration 17. Every bulk operation below needs this, and none
+      > of them should be built before it exists — that is the same argument the seam itself was
+      > built on, one level down. The record shape already leaves room for it.
+- [ ] **Candidate seam, part 3 — over HTTP and in the interface:** propose, list, review, approve,
+      and reject from the API and the UI.
+      > Split out at iteration 17 and **blocked on authentication**, which does not exist yet. The
+      > CLI half is deliberately complete without it, so a deployment can use the seam today; what
+      > is missing is that a reviewer has to be on the server's console. `POST /api/candidates` and
+      > an approve endpoint are unauthenticated arbitrary writes to a customer's vocabulary until
+      > there is an identity behind them, which is a defect rather than a partial feature.
 - [ ] SKOS core model: `Concept`, `ConceptScheme`, `Collection`, `OrderedCollection`
 - [ ] SKOS-XL labels as first-class resources (required for ISO 25964 fidelity — not optional)
 - [ ] Semantic relations: `broader`/`narrower`/`related`, transitive variants, polyhierarchy

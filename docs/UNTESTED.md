@@ -29,6 +29,90 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### A candidate's evidence is kept forever, and nobody has decided for how long
+- **Kind:** partial-coverage
+- **What is proven:** an applied candidate's staging graph survives the decision, and so does a
+  rejected one, so "what exactly was approved" stays answerable after the vocabulary has moved on.
+  Tests assert both.
+- **What is not:** the cost. An approved import is stored **twice** — once staged, once in the
+  vocabulary — forever, and a 100k-concept import doubles the store on disk for the life of the
+  deployment. Nothing measures that, nothing prunes it, and there is no retention policy because
+  *how long to keep the evidence* is a compliance decision rather than an engineering one. The
+  behaviour is the conservative default (never delete evidence) taken deliberately, not an oversight,
+  but a customer with a monthly bulk import will notice.
+- **What would close it:** a retention policy a deployment can configure, and a measurement of what
+  duplication actually costs at the scale `adr/0013` used. The policy is in `PROPOSED.md`.
+- **Opened:** iteration 17
+
+### A candidate cannot propose a removal, so nothing that needs one is reachable
+- **Kind:** partial-coverage
+- **What is proven:** the seam carries **additions**: proposed, staged, reviewed, applied or
+  rejected, all end to end.
+- **What is not:** every operation that has to take something away — merge, split, move a subtree,
+  deprecate with a replacement, an agent correcting a wrong label — is not expressible as a
+  candidate, so none of them can be built without extending the seam first. The record shape leaves
+  room for removals and nothing has been written against them, which means the *shape* claim in
+  `CLAUDE.md` §3 ("one shape for a CSV import, a discovery match, a bulk edit, and a Phase 10
+  agent") is proven for one of those four and asserted for the rest.
+- **What would close it:** part 2 of the seam, which is an unblocked item in `BUILD-PLAN.md`.
+- **Opened:** iteration 17
+
+### An import holds the whole file in the backend's write batch, and the ceiling is unmeasured
+- **Kind:** partial-coverage
+- **What is proven:** an import is one transaction, so a file that fails to parse two thirds of the
+  way through stages nothing — proven by a test that checks no candidate is left behind after a
+  syntax error.
+- **What is not:** the memory that costs. This is the same unmeasured ceiling `Store::restore`
+  carries (see the restore entry below) and it arrives sooner, because an import is something a user
+  does routinely rather than once after a disaster. `adr/0013` measured a million concepts loading
+  through the transactional write path in five minutes and ~6 GB; an import of that size has never
+  been run through the seam and would additionally hold the staged copy.
+- **What would close it:** importing a large file and measuring resident memory, then deciding
+  whether a bounded-memory import is worth the half-staged state it would cost.
+- **Opened:** iteration 17
+
+### The candidate list and record reads are unmeasured above a handful
+- **Kind:** partial-coverage
+- **What is proven:** listing works and is ordered by identifier; reading one candidate reads its
+  whole record in a single subject scan.
+- **What is not:** `Store::candidates` reads every candidate record in the system graph and then
+  re-reads each one, so it is linear in the number of candidates ever raised — and nothing is ever
+  deleted, so that number only grows. Minting an identifier scans the same set. A deployment doing a
+  bulk import a day would have thousands of records within a few years and nobody has measured what
+  that does to `openbiz candidates` or to the *proposal* path, which pays the scan on every write.
+  Same class as the registry-read entry below, with a worse growth curve.
+- **What would close it:** a benchmark in the `scale` harness at 1k / 10k / 100k candidates, and, if
+  it bites, a sequence counter in the system graph instead of a max-scan.
+- **Opened:** iteration 17
+
+### The migration that rewrites nothing is proven to run, not proven to be unnecessary
+- **Kind:** inspected-only
+- **What is proven:** migration `0003-allow-candidate-graphs` runs on open and on restore, reports
+  itself, records itself, and moves the stamp — end to end, through the real binary, from a
+  hand-written version-2 backup.
+- **What is not:** the claim that it *needs to write nothing* is a claim that every version-2 store
+  is already a valid version-3 store, and that is reasoning from the diff rather than a measurement.
+  It is true for every store this build can produce; it rests on the change being purely additive,
+  which is exactly the kind of belief that is right until somebody adds a non-additive detail to a
+  "purely additive" version.
+- **What would close it:** nothing cheap. The honest mitigation is that the next migration to claim
+  it writes nothing should be viewed with more suspicion than this one was.
+- **Opened:** iteration 17
+
+### An approval is attributed to whoever the operating system says ran the command
+- **Kind:** partial-coverage
+- **What is proven:** a decision with nobody to record is refused, by the store and by the command
+  line, and the refusal names the variable to set. The recorded string says the decision came from
+  the command line.
+- **What is not:** it is not an *authenticated* identity and cannot be. `OPENBIZ_ACTOR` is an
+  environment variable anybody with shell access can set to anything, and `USER` is barely better.
+  For an audit trail whose whole purpose is attribution, that is a real limitation and not a
+  cosmetic one — the trail records a claim, not a verified fact. It is honest today because the
+  product has no authentication at all and does not pretend to; it stops being honest the moment
+  somebody reads the trail as proof.
+- **What would close it:** authentication, which part 3 of the candidate seam waits on.
+- **Opened:** iteration 17
+
 ### No migration has ever run against a store an older build actually wrote
 - **Kind:** partial-coverage
 - **What is proven:** the 1 → 2 migration runs on open and on restore, keeps a populated store's
@@ -160,19 +244,19 @@ Do not delete it — the record of what took how long to close is the signal.
   it through. A blind-spot iteration is the natural home for it.
 - **Opened:** iteration 14
 
-### Restore reads one syntax of six, and reads a store rather than importing into a vocabulary
+### ~~Restore reads one syntax of six, and reads a store rather than importing into a vocabulary~~ — CLOSED, iteration 17
 - **Kind:** partial-standard
-- **What is proven:** N-Quads *parsing* now has a real production caller, which is the condition
-  `adr/0010` set for the parser landing. Malformed input is refused with a one-based line number,
-  tested.
-- **What is not:** Turtle, N-Triples, TriG, RDF/XML, and JSON-LD are still write-only — we
-  serialise them and cannot read them back. Phase 1's parsing item stays unchecked for that reason
-  and because restore is not an import: it reconstructs a whole store into an empty one, where an
-  import lands statements in somebody's existing vocabulary and therefore waits on Phase 2's
-  candidate seam. Nothing should read the N-Quads caller as evidence the parsing item is nearly
-  done.
-- **What would close it:** the parsing item itself, behind the candidate seam.
-- **Opened:** iteration 14
+- **What is proven:** all six syntaxes now parse through a real production caller — `openbiz
+  import` — and each is round-tripped against the serialiser: a vocabulary is exported, re-proposed
+  as a candidate, and the staged statements compared to the source graph statement for statement.
+  Malformed input is refused with a one-based line number, and an extension we do not know is
+  refused naming the six we do rather than guessed at.
+- **What was not, and now is:** an *import* — statements landing in somebody's existing
+  vocabulary — exists, behind the candidate seam that `CLAUDE.md` §3 required it to wait for.
+- **What remains open, separately:** the round trip is proven against *our own* reader, which is
+  fidelity rather than conformance. That is the pre-existing entry further down this file and it is
+  unchanged. And there is still no direct-write import, deliberately.
+- **Opened:** iteration 14 · **Closed:** iteration 17
 
 ### A SHACL `sh:datatype` constraint over a derived integer type can never be satisfied
 - **Kind:** partial-standard

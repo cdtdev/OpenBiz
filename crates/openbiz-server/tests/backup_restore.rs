@@ -31,7 +31,7 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// graph's registration; the vocabulary's registration; and two statements of actual content.
 const BACKUP: &str = concat!(
     "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
-    "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
@@ -54,6 +54,29 @@ const BACKUP: &str = concat!(
 const BACKUP_VERSION_1: &str = concat!(
     "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
     "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
+    "<urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions/emea> ",
+    "<http://www.w3.org/2004/02/skos/core#prefLabel> \"Europe, Middle East and Africa\"@en ",
+    "<https://example.org/regions> .\n",
+    "<https://example.org/regions/emea> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://www.w3.org/2004/02/skos/core#Concept> <https://example.org/regions> .\n",
+);
+
+/// The same store as [`BACKUP`], as a **format version 2** build wrote it.
+///
+/// Version 2 is version 3 in every byte except the stamp — the candidate seam's change to the
+/// store was additive — so this fixture is the proof that the 2 → 3 step, which rewrites nothing,
+/// nevertheless runs, reports itself, and leaves the store stamped where this build expects.
+/// A migration that does nothing is exactly the one that could silently not happen.
+const BACKUP_VERSION_2: &str = concat!(
+    "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
+    "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
     "<https://example.org/regions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
@@ -192,8 +215,8 @@ fn a_restored_backup_is_a_vocabulary_the_running_server_serves() {
     let file = temp.path().join("yesterday.nq");
     assert_eq!(
         openbiz_store::FORMAT_VERSION,
-        2,
-        "the fixture is a version-2 backup; bumping the format means writing the fixture for the \
+        3,
+        "the fixture is a version-3 backup; bumping the format means writing the fixture for the \
          new one and adding an older-format test beside it, not editing this number"
     );
     std::fs::write(&file, BACKUP).expect("write the backup fixture");
@@ -314,7 +337,7 @@ fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
         "restore must report what it did, got {said:?}"
     );
     assert!(
-        said.contains("migrated the store format from version 1 to 2"),
+        said.contains("migrated the store format from version 1 to 3"),
         "a migration must be reported, not silently performed: {said:?}"
     );
     assert!(
@@ -358,14 +381,20 @@ fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
     assert!(
         written.contains(
             "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
-             \"2\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+             \"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
         ),
         "the migrated store must be stamped at the current version: {written}"
     );
-    assert!(
-        written.contains("urn:openbiz:migration:0002-register-system-graph"),
-        "the migration must have left a record in the store: {written}"
-    );
+    for step in [
+        "urn:openbiz:migration:0002-register-system-graph",
+        "urn:openbiz:migration:0003-allow-candidate-graphs",
+    ] {
+        assert!(
+            written.contains(step),
+            "every migration that ran must have left a record in the store: {step} is not in \
+             {written}"
+        );
+    }
     assert!(
         written.contains("XMLSchema#dateTime"),
         "the record must say when the migration ran: {written}"
@@ -536,5 +565,69 @@ fn restoring_an_export_instead_of_a_backup_is_refused_for_the_right_reason() {
         stderr(&output).contains("not an OpenBiz backup"),
         "the refusal must name what the file is not: {}",
         stderr(&output)
+    );
+}
+
+/// The migration that changes nothing still has to happen.
+///
+/// Format version 3 introduced the candidate seam. Every version-2 store was already a valid
+/// version-3 store, so the step rewrites no bytes — which makes it the one migration that could
+/// silently fail to run and leave no trace anybody would notice, until an older build read the
+/// store and reported its registry as corrupt instead of saying "upgrade". This restores a real
+/// version-2 file through the real binary and checks the stamp moved and the step said so.
+#[test]
+fn a_version_two_backup_is_brought_forward_by_a_migration_that_rewrites_nothing() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let data_dir = temp.path().join("data");
+    std::fs::create_dir(&data_dir).expect("create the data directory");
+    let file = temp.path().join("version-2.nq");
+    std::fs::write(&file, BACKUP_VERSION_2).expect("write the backup fixture");
+
+    let restore = run(
+        &data_dir,
+        &["restore", file.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        restore.status.success(),
+        "restore failed: {}{}",
+        stdout(&restore),
+        stderr(&restore)
+    );
+
+    let said = stdout(&restore);
+    assert!(
+        said.contains("migrated the store format from version 2 to 3"),
+        "a migration that writes nothing must still be reported: {said:?}"
+    );
+    assert!(
+        said.contains("candidate graphs"),
+        "and must still say why it exists: {said:?}"
+    );
+
+    let second = temp.path().join("today.nq");
+    let backup = run(
+        &data_dir,
+        &["backup", second.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        backup.status.success(),
+        "backup failed: {}",
+        stderr(&backup)
+    );
+    let written = std::fs::read_to_string(&second).expect("read the backup back");
+    assert!(
+        written.contains(
+            "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
+             \"3\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+        ),
+        "the store must be stamped at the current version: {written}"
+    );
+    assert!(
+        written.contains("urn:openbiz:migration:0003-allow-candidate-graphs"),
+        "the step must have left a record even though it wrote no data: {written}"
+    );
+    assert!(
+        written.contains("Europe, Middle East and Africa"),
+        "the content must have survived: {written}"
     );
 }

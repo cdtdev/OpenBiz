@@ -16,7 +16,10 @@ mod shutdown;
 mod sparql;
 mod ui;
 
-pub use cli::{back_up, restore, ArgsError, Command, CommandError, USAGE};
+pub use cli::{
+    back_up, candidates, decide, import, restore, show, ArgsError, Command, CommandError,
+    ACTOR_VARIABLE, USAGE,
+};
 pub use config::{Config, ConfigError, Setting, Source};
 pub use graphs::AppState;
 pub use shutdown::shutdown_signal;

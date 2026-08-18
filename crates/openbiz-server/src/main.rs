@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use openbiz_server::{app, shutdown_signal, AppState, Command, Config, USAGE};
-use openbiz_store::Store;
+use openbiz_store::{Decision, Store};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Exit status for arguments we could not make sense of.
@@ -112,6 +112,17 @@ async fn main() -> anyhow::Result<()> {
     match command {
         Command::Backup { file } => one_shot(store, |store| openbiz_server::back_up(store, &file)),
         Command::Restore { file } => one_shot(store, |store| openbiz_server::restore(store, &file)),
+        Command::Import { graph, file } => {
+            one_shot(store, |store| openbiz_server::import(store, &graph, &file))
+        }
+        Command::Candidates => one_shot(store, openbiz_server::candidates),
+        Command::Show { id } => one_shot(store, |store| openbiz_server::show(store, &id)),
+        Command::Approve { id } => one_shot(store, |store| {
+            openbiz_server::decide(store, &id, Decision::Approve)
+        }),
+        Command::Reject { id } => one_shot(store, |store| {
+            openbiz_server::decide(store, &id, Decision::Reject)
+        }),
         Command::Serve => serve(config, store).await,
         // Answered above, before anything was configured or opened.
         Command::Help => Ok(()),

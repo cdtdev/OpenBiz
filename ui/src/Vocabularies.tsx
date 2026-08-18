@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useProbe } from "./useProbe";
 
 /** How a named graph is used. Mirrors `openbiz_api::GraphKind`. */
-type GraphKind = "vocabulary" | "system" | "inferred";
+type GraphKind = "vocabulary" | "system" | "inferred" | "candidate";
 
 /** One entry in the graph registry. Mirrors `openbiz_api::GraphSummary`. */
 interface GraphSummary {

@@ -157,6 +157,31 @@ describe("Vocabularies", () => {
     ).toBeTruthy();
   });
 
+  /**
+   * A proposed change is staged in a graph of its own until somebody approves it. It is in the
+   * registry — an operator asking what the store holds is entitled to the whole answer — and it
+   * must not be in front of a taxonomist as a vocabulary, because the statements in it are not
+   * part of anybody's vocabulary yet. That is what "not yet approved" has to mean in the UI.
+   */
+  it("does not present a pending change's staging graph as a vocabulary", async () => {
+    registry([
+      { iri: "http://example.org/v/animals", kind: "vocabulary" },
+      SYSTEM_GRAPH,
+      { iri: "urn:openbiz:graph:candidate:1", kind: "candidate" },
+    ]);
+    render(<Vocabularies />);
+
+    const items = await screen.findAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "http://example.org/v/animals Download",
+    ]);
+    expect(
+      await screen.findByText(
+        "2 further graphs are held for OpenBiz’s own use and are not shown here.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("says it in the singular when there is one", async () => {
     registry([{ iri: "http://example.org/v/animals", kind: "vocabulary" }, SYSTEM_GRAPH]);
     render(<Vocabularies />);

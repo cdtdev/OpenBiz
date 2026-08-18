@@ -18,6 +18,13 @@
 //!   application code may not write into it — see [`GraphId::is_directly_writable`]. Losing the
 //!   asserted/inferred distinction is how a governance tool ends up unable to answer "why?"
 //!   (`CLAUDE.md` §3, explainability).
+//! - A **candidate** graph holds the statements of one *proposed* change, staged where they are
+//!   visible and reviewable but are not yet part of anybody's vocabulary. It is the named-graph
+//!   half of the candidate seam (`CLAUDE.md` §3): a change arrives as a proposal, a human sees
+//!   exactly what it would do, and only approval moves the statements into the vocabulary. It is
+//!   ours — it lives under [`OPENBIZ_NAMESPACE`], so a user cannot author into it directly — but
+//!   unlike an inferred graph it *is* written by application code, because staging a proposal is
+//!   the whole point of it.
 //!
 //! # The reserved namespace
 //!
@@ -38,6 +45,14 @@ pub const OPENBIZ_NAMESPACE: &str = "urn:openbiz:";
 /// Named graph holding OpenBiz's own metadata.
 pub const SYSTEM_GRAPH_IRI: &str = "urn:openbiz:graph:system";
 
+/// Prefix under which the staging graph of a proposed change is minted.
+///
+/// The full IRI is this prefix followed by the candidate's identifier, so the graph a proposal is
+/// staged in is derived from the proposal rather than chosen by whoever raised it. Inside
+/// [`OPENBIZ_NAMESPACE`] because a staging graph is OpenBiz's own: a user must not be able to
+/// register a vocabulary at the IRI where a pending change is waiting to be reviewed.
+pub const CANDIDATE_GRAPH_PREFIX: &str = "urn:openbiz:graph:candidate:";
+
 /// Prefix for the graph holding a vocabulary's materialised entailments.
 ///
 /// The full IRI is this prefix followed by the vocabulary's own IRI, so two vocabularies can never
@@ -55,6 +70,8 @@ pub enum GraphKind {
     System,
     /// Materialised inferences, kept separate so they are never confused with asserted facts.
     Inferred,
+    /// The staged statements of one proposed change, kept out of every vocabulary until approved.
+    Candidate,
 }
 
 impl GraphKind {
@@ -67,6 +84,7 @@ impl GraphKind {
             Self::Vocabulary => "vocabulary",
             Self::System => "system",
             Self::Inferred => "inferred",
+            Self::Candidate => "candidate",
         }
     }
 
@@ -80,6 +98,7 @@ impl GraphKind {
             "vocabulary" => Some(Self::Vocabulary),
             "system" => Some(Self::System),
             "inferred" => Some(Self::Inferred),
+            "candidate" => Some(Self::Candidate),
             _ => None,
         }
     }
@@ -117,6 +136,14 @@ pub enum GraphIdError {
     Reserved {
         /// What was offered.
         iri: String,
+    },
+    /// The IRI is under [`CANDIDATE_GRAPH_PREFIX`] but does not name a candidate we could read.
+    #[error("{iri:?} is not the staging graph of any candidate this build can identify: {detail}")]
+    NotACandidateGraph {
+        /// What was offered.
+        iri: String,
+        /// Why the identifier after the prefix was not one.
+        detail: String,
     },
     /// A derived graph was asked for from something that is not a vocabulary.
     #[error("{iri:?} is a {kind} graph; only a vocabulary graph has inferences derived from it")]
@@ -164,6 +191,25 @@ impl GraphId {
         Self {
             iri: SYSTEM_GRAPH_IRI.to_owned(),
             kind: GraphKind::System,
+        }
+    }
+
+    /// The graph in which candidate `id`'s proposed statements are staged.
+    ///
+    /// Derived rather than chosen, for the same reason [`GraphId::inferred_for`] is: two
+    /// proposals must not be able to share a staging graph, and nobody may aim a proposal at a
+    /// graph a human authored.
+    ///
+    /// Crate-private because there is no legitimate reason for a caller outside this crate to
+    /// mint one. A staging graph exists because a candidate exists, so the way to name one is to
+    /// ask a [`crate::Candidate`] for it.
+    pub(crate) fn candidate(id: &crate::CandidateId) -> Self {
+        Self {
+            // The prefix is a valid `urn:` IRI and a `CandidateId` is a decimal number, so the
+            // concatenation always parses. `from_registry` re-validates it on the way back in,
+            // which is where an IRI that came off disk is judged.
+            iri: format!("{CANDIDATE_GRAPH_PREFIX}{id}"),
+            kind: GraphKind::Candidate,
         }
     }
 
@@ -215,6 +261,26 @@ impl GraphId {
                     Err(GraphIdError::Reserved { iri })
                 }
             }
+            GraphKind::Candidate => {
+                validate_iri(&iri)?;
+                let Some(id) = iri.strip_prefix(CANDIDATE_GRAPH_PREFIX) else {
+                    return Err(GraphIdError::Reserved { iri });
+                };
+                // The identifier is re-parsed rather than accepted as text, because it is the
+                // link back to the candidate's record in the system graph. A staging graph whose
+                // identifier names no candidate is a graph the store cannot explain, and the
+                // registry is data on disk that a doctored backup can reach.
+                crate::CandidateId::parse(id).map_err(|error| {
+                    GraphIdError::NotACandidateGraph {
+                        detail: error.to_string(),
+                        iri: iri.clone(),
+                    }
+                })?;
+                Ok(Self {
+                    iri,
+                    kind: GraphKind::Candidate,
+                })
+            }
         }
     }
 
@@ -239,6 +305,9 @@ impl GraphId {
         if iri.starts_with(INFERRED_GRAPH_PREFIX) {
             return Self::from_registry(iri.to_owned(), GraphKind::Inferred);
         }
+        if iri.starts_with(CANDIDATE_GRAPH_PREFIX) {
+            return Self::from_registry(iri.to_owned(), GraphKind::Candidate);
+        }
         Self::vocabulary(iri.to_owned())
     }
 
@@ -257,6 +326,11 @@ impl GraphId {
     /// Inferred graphs are written only by a reasoner-driven materialisation pass; letting
     /// application code assert into them would destroy the asserted-versus-inferred distinction
     /// the UI and every "why?" explanation depend on.
+    ///
+    /// A **candidate** graph is directly writable and that is deliberate rather than an
+    /// oversight of the same rule: staging a proposal *is* an application-code write. What keeps
+    /// it safe is not this flag but [`OPENBIZ_NAMESPACE`] — a user cannot register a vocabulary
+    /// at a staging graph's IRI, so the only writer is the seam that created it.
     pub fn is_directly_writable(&self) -> bool {
         !matches!(self.kind, GraphKind::Inferred)
     }

@@ -139,6 +139,7 @@ fn on_the_wire(kind: openbiz_store::GraphKind) -> GraphKind {
         openbiz_store::GraphKind::Vocabulary => GraphKind::Vocabulary,
         openbiz_store::GraphKind::System => GraphKind::System,
         openbiz_store::GraphKind::Inferred => GraphKind::Inferred,
+        openbiz_store::GraphKind::Candidate => GraphKind::Candidate,
     }
 }
 
@@ -160,6 +161,10 @@ mod tests {
         assert_eq!(
             on_the_wire(openbiz_store::GraphKind::Inferred),
             GraphKind::Inferred
+        );
+        assert_eq!(
+            on_the_wire(openbiz_store::GraphKind::Candidate),
+            GraphKind::Candidate
         );
     }
 
