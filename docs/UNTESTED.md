@@ -96,7 +96,13 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Kind:** partial-coverage
 - **Opened:** Phase 0 hand-build (pre-iteration-1) · **Config-file half closed:** iteration 2
 
-### `data_dir` is configured, logged, and used by nothing
+### ~~`data_dir` is configured, logged, and used by nothing~~ — CLOSED, iteration 3
+- **Closed by:** `Store::open(config.data_dir.value())` in `main.rs`, which runs *before* the
+  listener binds. A `data_dir` that is a file, is unwritable, or is already locked by another
+  OpenBiz now fails startup with a message naming both the path and the configuration layer that
+  chose it. Covered by `a_data_directory_that_is_a_file_is_reported_as_such`,
+  `an_unwritable_data_directory_is_reported_before_the_backend_sees_it`, and — across real
+  processes — `a_second_instance_refuses_to_share_the_data_directory`. See `adr/0006`.
 - **Kind:** no-production-caller
 - **What is proven:** `data_dir` is read from the defaults, a file, or `OPENBIZ_DATA_DIR`, is
   rejected when blank, carries its provenance, and is logged at startup.
@@ -125,7 +131,13 @@ Do not delete it — the record of what took how long to close is the signal.
   it — with two settings a hook is more machinery than the problem.
 - **Opened:** iteration 2
 
-### Configuration precedence is untested against the real process environment
+### ~~Configuration precedence is untested against the real process environment~~ — CLOSED, iteration 3
+- **Closed by:** `crates/openbiz-server/tests/graceful_shutdown.rs`'s
+  `the_process_environment_reaches_the_configuration_with_its_provenance`, which spawns the real
+  binary with a controlled environment and asserts on its startup log — that `data_dir` and `bind`
+  both report `$OPENBIZ_*` as their source, and that requesting port 0 logs the port actually
+  allocated rather than the request. `Config::load` now has a regression test; a typo in a variable
+  name inside it fails CI. This was also the promoted plan item of the same name.
 - **Kind:** partial-coverage
 - **What is proven:** `Config::resolve` is tested exhaustively with an injected environment lookup,
   and the four headline failure paths were run by hand against the real binary with real env vars
@@ -139,3 +151,89 @@ Do not delete it — the record of what took how long to close is the signal.
   controlled environment and asserts on its startup log — the same shape as
   `tests/serves_embedded_ui.rs`. Cheap; deferred only to keep this iteration to one item.
 - **Opened:** iteration 2
+
+### The named-graph model has no production caller
+- **Kind:** no-production-caller
+- **What is proven:** `GraphId`, `GraphKind`, `SYSTEM_GRAPH_IRI`, and `is_directly_writable()`
+  compile and are unit-tested — a vocabulary graph is directly writable, an inferred one is not.
+- **What is not:** **nothing constructs a `GraphId` outside tests, and no code writes to a named
+  graph.** `is_directly_writable()` is a rule with no enforcement point: `StoreError::NotWritable`
+  exists as a variant that is never returned. The only quad the store has ever held is its own
+  format stamp, written by `stamp_or_check_format_version` against a hardcoded IRI. This is the
+  honest reading of `CLAUDE.md` §4.1 — the model is designed, not delivered.
+- **What would close it:** the next plan item, "Named-graph model: one graph per vocabulary, plus a
+  system graph", which must route writes through `is_directly_writable()` so the check has a caller.
+- **Opened:** iteration 3
+
+### Durability is proven for one quad, not for a vocabulary
+- **Kind:** partial-coverage
+- **What is proven:** what one open commits, the next open reads back — `the_format_stamp_survives_
+  close_and_reopen` closes the store and reopens it, and the cross-process test restarts a real
+  binary against the same directory. The stamp is flushed immediately on first open.
+- **What is not:** the store has never held more than a single quad. Nothing has written a
+  vocabulary, so nothing has measured write throughput, flush cost at size, or how long `close()`
+  takes when there is real data to flush — which is the number that decides whether a `docker stop`
+  grace period of 10 s is enough or whether we are hard-killed anyway. The two upstream Oxigraph
+  risks (unoptimised query evaluation, literal precision) are **untouched** by this iteration and
+  keep their Phase 1 spike items; `adr/0006` must not be read as clearing them.
+- **What would close it:** the Phase 1 benchmark spike, which should measure `close()` at 10k /
+  100k / 1M concepts and not only query evaluation.
+- **Opened:** iteration 3
+
+### Graceful shutdown is proven to exit cleanly, not to drain
+- **Kind:** partial-coverage
+- **What is proven:** `SIGTERM` to a real process exits zero, logs which signal stopped it, logs
+  `store closed cleanly`, and releases the lock so the next process can open the same directory.
+  `shutdown_signal()` is proven not to resolve on its own — which matters, because `axum::serve`
+  returns `Ok(())` on graceful shutdown, so a signal future that resolved immediately would produce
+  a binary that exits zero while serving nothing.
+- **What is not:** **no test has an in-flight request when the signal arrives.** The ordering the
+  module documents — stop accepting, drain, *then* flush — is asserted only in its doc comment. A
+  regression that closed the store before the last response was written would pass every test here.
+  `SIGKILL` recovery was checked **by hand only**: a hard kill exits 137 and writes no
+  `store closed cleanly` line (so the assertion discriminates rather than always passing), and the
+  next start reopened the store and read its stamp back. That was a near-empty store with no write
+  in flight — the case that actually matters, a hard kill *during* a write, is unmeasured, and none
+  of it is a regression test.
+- **What would close it:** a test that opens a slow request, sends `SIGTERM` mid-flight, and asserts
+  the response completes before the process exits; and a `SIGKILL` test asserting the store reopens.
+- **Opened:** iteration 3
+
+### The lock classification depends on a RocksDB message string
+- **Kind:** partial-coverage
+- **What is proven:** both wordings RocksDB actually emits are pinned by tests — the same-process
+  one in `openbiz-store`, the cross-process one in `tests/graceful_shutdown.rs`. Discovering they
+  differ cost this iteration a red test, and a unit test alone would have shipped a classifier that
+  never fired in production.
+- **What is not:** `classify_open` matches on the substring `LOCK:`, and RocksDB's wording is not an
+  API. A version bump could change it. The mitigation is that the tests go red rather than the
+  classification degrading silently — but that is a promise about *noticing*, not about working, and
+  a user hitting the fallback branch gets a true but much less useful error.
+- **What would close it:** nothing available today; the backend exposes no typed lock error. Revisit
+  if Oxigraph gains one. Recorded so a future upgrade knows to look here first.
+- **Opened:** iteration 3
+
+### Shutdown is Unix-only in test, and by implication in practice
+- **Kind:** environment-limited
+- **What is proven:** on Unix, `SIGINT` and `SIGTERM` both stop the server gracefully.
+- **What is not:** `tests/graceful_shutdown.rs` is `#![cfg(unix)]` — `SIGTERM` does not exist
+  elsewhere, and on Windows the `Ctrl-C` branch is the entire contract, unexercised by any test.
+  Nothing has ever run this binary on Windows. We do not currently claim Windows support; this entry
+  exists so that claim is not made accidentally.
+- **What would close it:** a Windows CI runner exercising `Ctrl-C` shutdown, if and when Windows
+  becomes a supported target.
+- **Opened:** iteration 3
+
+### The store's build toolchain is unavailable on the loop machine without a workaround
+- **Kind:** environment-limited
+- **What is proven:** the workspace builds and its tests pass once `libclang` is present. CI
+  installs `clang` and `libclang-dev` explicitly rather than relying on the runner image.
+- **What is not:** this machine has no `clang`, no `libclang`, and no passwordless `sudo`, so
+  `cargo test --workspace` fails at `bindgen` on a clean checkout. The loop works around it by
+  extracting `libclang1-20` from a downloaded `.deb` into `~/.local/libclang` and exporting
+  `LIBCLANG_PATH`. **That workaround is not in the repo and does not survive a machine reset** — a
+  future iteration that starts with an unexplained `Unable to find libclang` panic should read this
+  entry rather than conclude the store is broken.
+- **What would close it:** a human running `sudo apt install clang libclang-dev` on the loop
+  machine. Out of loop scope (`CLAUDE.md` §8 — needs root).
+- **Opened:** iteration 3

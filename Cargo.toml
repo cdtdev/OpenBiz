@@ -26,6 +26,11 @@ anyhow = "1"
 axum = "0.8"
 http-body-util = "0.1"
 mime_guess = "2"
+# Embedded RDF store and SPARQL engine. `default-features = false` with only `rocksdb` enabled
+# keeps the `http-client` feature family out of the tree: an air-gapped deployment (CLAUDE.md §1.1)
+# must not carry a code path that can open an outbound connection. Building it requires a C++20
+# compiler and libclang — see docs/adr/0006 and README.md.
+oxigraph = { version = "0.5", default-features = false, features = ["rocksdb"] }
 # `debug-embed` makes debug builds embed rather than read `ui/dist` from disk, so the tests prove
 # the binary is self-contained instead of proving the filesystem works (CLAUDE.md §1). See ADR 0004.
 rust-embed = { version = "8", features = ["debug-embed", "include-exclude"] }

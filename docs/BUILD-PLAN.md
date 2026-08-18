@@ -3,15 +3,22 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** Phase 0 complete except for one blocked item — workspace, server, embedded UI, layered
+**Status:** Phase 1 has begun. The embedded store is real: `openbiz-store` opens, stamps, and
+closes an Oxigraph instance inside the binary, and `main.rs` opens it before it binds and closes it
+after a drained shutdown. 59 tests passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`,
+and the UI typecheck/build are green — and the Oxigraph tree needed **no** widening of the §5
+licence allow list. Phase 0 remains complete except for one blocked item — workspace, server, embedded UI, layered
 configuration, harness, and the design for the methodology engine, LLM integration, and enterprise
 awareness (ADRs 0001–0005). 45 tests passing; `cargo fmt`, `cargo clippy -D warnings`, `cargo deny`,
 and the UI typecheck/build are green. **The single binary is real:** the release binary serves the
 full interface with `ui/dist` deleted from disk, checked by CI.
 
-**Current position:** Phase 0 (Harness & ground). Every item is done except branch protection, which
-is blocked on a human decision (see `BLOCKED.md`) and will not clear inside the loop. **Phase 1
-(RDF core & store) starts next**, with `openbiz-store`'s Oxigraph lifecycle.
+**Current position:** Phase 1 (RDF core & store). The Oxigraph lifecycle and the promoted
+`Config::load` subprocess test are done. **Next: the named-graph model** — one graph per vocabulary
+plus the system graph — which must give `GraphId::is_directly_writable()` a real enforcement point,
+since today it is a rule with no caller (`UNTESTED.md`). Phase 0's only open item is branch
+protection, blocked on a human decision (see `BLOCKED.md`); a UI test runner was promoted into
+Phase 0 this iteration and is not yet done.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -74,6 +81,10 @@ the interface is a core differentiator, and building it late means retrofitting 
       a public repo. See `BLOCKED.md`. The loop watches checks itself as a workaround, which is a
       convention rather than an enforced rule
 - [x] Author the iteration driver prompt and the `/openbiz-status` + `/openbiz-control` skills
+- [ ] UI test runner (Vitest + Testing Library) with a test per `Probe` state, wired into CI
+      > Promoted from `PROPOSED.md` by the product owner. Today `npm test` is a no-op that passes
+      > silently, which reads as a green suite — worse than having no step. Must land before Phase 3
+      > builds a design system on top of an untested component tree.
 
 ---
 
@@ -82,7 +93,24 @@ the interface is a core differentiator, and building it late means retrofitting 
 > Enables: everything above it. This is the substrate; get it wrong and every later phase inherits
 > the mistake.
 
-- [ ] `openbiz-store`: embedded Oxigraph lifecycle — open, close, durable path, graceful shutdown
+- [x] `openbiz-store`: embedded Oxigraph lifecycle — open, close, durable path, graceful shutdown
+      > **Better, not parity:** every incumbent has a triplestore; what they do badly is that it
+      > sits in a *separate lifecycle from the application*. Four failure modes follow, and one
+      > lifecycle answers all four. The store opens **before** the listener binds, so a store that
+      > will not open is a process that never starts rather than one that is "up but useless". A
+      > second instance over one data directory is refused in our words — "already in use by another
+      > OpenBiz process", naming the configuration layer that chose the path — not a RocksDB `LOCK`
+      > errno. `SIGTERM` drains, *then* flushes, and logs `store closed cleanly`, so an operator can
+      > tell a graceful stop from a kill. A store from a newer build is refused, never misread.
+      > See `adr/0006`.
+- [x] Test `Config::load` against a real process environment via a subprocess
+      > Closed as a by-product of the store lifecycle item above, which needed a real-process
+      > harness anyway: `tests/graceful_shutdown.rs` spawns the binary with a controlled
+      > environment and asserts `data_dir` and `bind` both report `$OPENBIZ_*` as their source.
+      > No separate iteration was spent on it.
+      > Promoted from `PROPOSED.md` by the product owner. `Config::resolve` is tested with an
+      > injected environment because `std::env::set_var` is not thread-safe; that leaves the wiring
+      > to the real environment provable only from outside the process.
 - [ ] Named-graph model: one graph per vocabulary, plus a system graph for OpenBiz's own metadata
 - [ ] Transactional write API with rollback; concurrent-reader safety under test
 - [ ] Parse and serialise Turtle, N-Triples, N-Quads, TriG, RDF/XML, JSON-LD — round-trip tested
@@ -146,6 +174,9 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Graph visualisation of a concept neighbourhood — readable at 100+ nodes, not a hairball
 - [ ] Accessibility: WCAG 2.2 AA, full keyboard operation, screen-reader tested, focus management
 - [ ] Empty, loading, and error states designed rather than defaulted
+- [ ] Headless-browser smoke test (Playwright) loading `/` from the release binary
+      > Promoted from `PROPOSED.md` by the product owner. Transport tests prove the right bytes are
+      > served; they cannot prove the app mounts. Shares a harness with the accessibility item above.
 - [ ] Onboarding: a new user reaches their first correct edit without documentation
 
 ---
@@ -386,6 +417,10 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Upgrade path with tested store migrations across versions
 - [ ] Threat model documented; dependency and container scanning in CI
 - [ ] Admin console: users, roles, backups, system health
+- [ ] Show the effective configuration and its provenance in the admin console
+      > Promoted from `PROPOSED.md` by the product owner. Depends on Phase 6 authentication —
+      > effective configuration is not public. Must show a credential's *source* without its
+      > *value* (`CLAUDE.md` §6, secrets).
 - [ ] Secrets handling for LLM and connector credentials — never in the store, never in logs
 
 ---

@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The embedded store compiles RocksDB from source and generates its bindings with
+      # bindgen, which needs a C++ toolchain and libclang. Both happen to be on the current
+      # ubuntu-latest image, but a hard build dependency should not rest on what a runner image
+      # implicitly ships — a base-image change would read as "our store stopped compiling".
+      # See docs/adr/0006.
+      - name: Install the store's build toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+
       - name: Install toolchain
         run: rustup component add rustfmt clippy
 
@@ -88,6 +96,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # The embedded store compiles RocksDB from source and generates its bindings with
+      # bindgen, which needs a C++ toolchain and libclang. Both happen to be on the current
+      # ubuntu-latest image, but a hard build dependency should not rest on what a runner image
+      # implicitly ships — a base-image change would read as "our store stopped compiling".
+      # See docs/adr/0006.
+      - name: Install the store's build toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
 
       - uses: Swatinem/rust-cache@v2
 

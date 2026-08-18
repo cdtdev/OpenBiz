@@ -72,6 +72,16 @@ See [`CLAUDE.md`](CLAUDE.md) for the full charter and [`docs/`](docs/) for archi
 
 Requires a recent stable Rust toolchain and Node.js.
 
+The embedded store builds RocksDB from source, so the **first** build also needs a C++20 compiler
+and `libclang` (for `bindgen`). On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential clang libclang-dev
+```
+
+This is a *build*-time requirement only. The resulting binary is still a single self-contained
+executable with no external service — see [`docs/adr/0006`](docs/adr/0006-embedded-store.md).
+
 ```bash
 cargo test --workspace
 ```
