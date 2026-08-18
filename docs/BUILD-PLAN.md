@@ -18,7 +18,7 @@ format chooser read from the server, and the export carries none of OpenBiz's ow
 **And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
 four results formats and all six RDF syntaxes, over a default dataset that is the user's
 vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-231 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+260 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
 narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
 the published EBNF rather than against the library that wrote the bytes, which found two real
@@ -31,38 +31,40 @@ statements (see `adr/0014`). **And the engine is now measured rather than truste
 the charter's standing warning that Oxigraph's query evaluation is unoptimised has a number against
 it at 10k, 100k, and 1M concepts, taken through our own query entry point against the queries the
 interface will issue — navigation is flat and fast, the tree's *first* query is a 21-second cliff
-with a 0.6 ms fix, and label search does not scale (see `adr/0013`). **The single binary is real:**
+with a 0.6 ms fix, and label search does not scale (see `adr/0013`).
+**And a deployment can now be got out and put back:** `openbiz backup <file>` writes the whole
+store — every vocabulary and OpenBiz's own registry — as N-Quads rather than as a snapshot of the
+storage engine, and `openbiz restore <file>` rebuilds an empty store from one, refusing anything
+that would not open afterwards (see `adr/0015`), and its production caller is the command line
+rather than an unauthenticated endpoint. **The single binary is real:**
 a `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 9 of 12 items done (the serialisation item was
-split in two — see the split note below). **Iteration 13 took the literal-precision spike**, the
-second of Phase 1's two spikes, reached the same way iteration 11 reached the first — SPARQL 1.1
-Update and the Graph Store Protocol are still *refused* rather than skipped, for the reasons below.
-It measured where a typed literal stops being a value, found that the boundary is a cliff rather
-than a rounding, and found a defect on the way that the item did not ask about: the datatype IRI of
-a derived integer type is not preserved, so four distinct RDF terms written against one subject
-come back as two statements. See `adr/0014`. **Iteration 11 took the Oxigraph benchmark spike, and
-it reached it by refusing two items rather than by skipping them.** SPARQL 1.1 Update and the Graph
-Store Protocol both sit above the two things that do not exist yet — the candidate seam (§3) and
-the RDF parser — and an *applying* Update endpoint would additionally be an unauthenticated
-arbitrary-write path and a creation path that skips discovery (§1.7). Both carry a deferral note
-saying exactly what they wait on; neither is checked off and neither is claimed. The spike then
-found that the risk `CLAUDE.md` §3 names is real but is not where it was expected: bound-term
-navigation is 0.2–0.6 ms flat across two orders of magnitude, and the thing that falls over is the
-concept tree's own first query — 21.6 s at a million concepts, *served* rather than refused, with a
-0.6 ms alternative that is a **modelling** decision Phase 2 has to take rather than a tuning knob
-Phase 3 can turn. See `adr/0013`.
+**Current position:** Phase 1 (RDF core & store), 10 of 14 items done (the serialisation item was
+split in two — see the split note below). **Iteration 14 took backup and restore**, which is the
+first item since the two spikes that ships a capability rather than a measurement. A backup is a
+single N-Quads file carrying the whole store including the registry, so it is readable by any
+conforming tool and hand-authorable — the end-to-end test's fixture was written from the
+specification rather than produced by our own writer. A restore is one transaction that re-reads
+the registry it wrote, inside that transaction, and refuses to commit a store this build could not
+open. Its production caller is the command line, because a backup script needs an exit status and
+because an unauthenticated `POST /api/restore` would be the same defect SPARQL Update is deferred
+over. **This also gave the N-Quads parser its first production caller**, which is the condition
+`adr/0010` set — but the parsing item stays open, because one syntax of six reading a whole store
+into an empty one is not an import. **The three items above remain refused rather than skipped**,
+for the reasons iterations 11 and 12 recorded and this one re-checked.
 
-**Next: the literal-precision spike**, which is the second of Phase 1's two spikes and now has a
-concrete reason to exist: iteration 10 measured that the store rewrites the lexical form of every
-literal it can interpret, and that spike is where the boundary of that behaviour gets characterised
-and our documented answer decided. After it: backup and restore, then the store-format migration
-framework. **SPARQL Update and the Graph Store Protocol are deliberately not next** — see their
-deferral notes. Vocabulary *creation* over HTTP remains deliberately absent for the same §1.7
-reason, so `POST /api/graphs` answers 405. **There is still no SPARQL console in the interface**;
-the endpoint's caller is HTTP, and the console is an open §4.4 gap in `UNTESTED.md` and a proposal.
+**Next: the store-format migration framework**, which is the last unchecked item of Phase 1 and
+now has a concrete first customer: a restore reads a format stamp out of a file on a customer's
+disk and currently *refuses* an older one, because migrating it is not implemented. That refusal is
+honest and it is also a capability gap with a name. **SPARQL Update and the Graph Store Protocol
+are deliberately not next** — see their deferral notes. Vocabulary *creation* over HTTP remains
+deliberately absent for the same §1.7 reason, so `POST /api/graphs` answers 405. **There is still
+no SPARQL console in the interface**; the endpoint's caller is HTTP, and the console is an open
+§4.4 gap in `UNTESTED.md` and a proposal. **And there is no online backup** — both new commands
+need the store to themselves, so a backup means stopping the server; the authenticated endpoint
+that would remove that cost is in `PROPOSED.md`.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -249,6 +251,14 @@ the interface is a core differentiator, and building it late means retrofitting 
       > which is the exact failure §3 warns about. It lands with whichever comes first: backup and
       > restore below, which parses N-Quads and touches no vocabulary, or Phase 2's candidate seam.
       > Serialisation has no such dependency — an export is a read.
+      >
+      > **Half met at iteration 14.** Backup and restore landed, so the **N-Quads** parser now has
+      > a real production caller. This item stays open and the reason is not bookkeeping: restore
+      > reads *one* syntax of six, and it reads a **whole store** — registry included — into an
+      > empty one, which is not an import. An import lands statements in somebody's existing
+      > vocabulary, and that is the mutation still waiting on Phase 2's candidate seam. Checking
+      > this box now would claim five parsers we do not have and an import path we deliberately do
+      > not.
 - [x] SPARQL 1.1 Query endpoint with all four result formats (JSON, XML, CSV, TSV)
       > **Better, not parity.** Every tool in this market has a SPARQL endpoint, so the question is
       > not whether but what it answers with by default, what stops it, and what it refuses to
@@ -364,7 +374,37 @@ the interface is a core differentiator, and building it late means retrofitting 
       > the store telling a caller what it rewrote at the moment it rewrote it — is a user-facing
       > capability belonging to Phase 2's candidate seam, and it is in `PROPOSED.md` for a human
       > rather than self-authorised (`CLAUDE.md` §7).
-- [ ] Backup and restore to a single portable file; restore verified against a live store
+- [x] Backup and restore to a single portable file; restore verified against a live store
+      > **Better, not parity.** Every incumbent has a backup story and most of them have the same
+      > one: stop the app, snapshot the triplestore, hope the versions line up on the way back.
+      > Three things are different here. (1) **The file is RDF, not our storage engine's.** A
+      > backup is N-Quads — every vocabulary *and* OpenBiz's own registry, in a W3C
+      > Recommendation any conforming tool can read. A RocksDB checkpoint would have been three
+      > lines instead of four hundred, and it would have made the customer's disaster recovery a
+      > function of a dependency `CLAUDE.md` §3 explicitly reserves the right to replace. The
+      > end-to-end test's fixture is **hand-written from the specification**, not produced by
+      > `openbiz backup`, because a portability claim nothing but us can satisfy is not a claim.
+      > (2) **A restore checks that it is about to produce a store we can open** — it re-reads the
+      > registry it just wrote, through the same code `Store::open` uses, *inside the transaction
+      > that wrote it*, and rolls the whole thing back if the answer is no. Restoring an unopenable
+      > store is the worst outcome available, because the operator has already lost the original.
+      > The whole file is one transaction for the same reason: half-restored is the state nobody
+      > can reason about. (3) **The refusals name the operator's next action.** An *export* handed
+      > to restore is refused for having no format stamp — with a message saying it is not a
+      > backup — rather than by a syntax error in a file that is perfectly valid RDF; an older
+      > stamp says "this needs a migration"; a newer one says "upgrade"; a non-empty store says
+      > "restore into a fresh data directory". A backup never overwrites an existing file, because
+      > the file most likely to be in the way is the last good backup.
+      > **Its production caller is the command line**, not HTTP: `openbiz backup <file>` and
+      > `openbiz restore <file>`, which is what cron, a systemd timer, and a pre-stop hook can
+      > actually use — and what keeps an unauthenticated "replace the whole store" endpoint from
+      > existing while there is still no authentication. The end-to-end test restores a backup
+      > through the real binary, starts the real server on the result, and finds the vocabulary in
+      > `GET /api/graphs` and its statements in `GET /api/export`. See `adr/0015`.
+      > **Scope, honestly:** there is **no online backup** — both commands need the store to
+      > themselves, so taking one means stopping the server, and the authenticated endpoint that
+      > would fix that is proposed rather than built. The round trip is proven on small stores; the
+      > memory a large restore needs is unmeasured, and both are in `UNTESTED.md`.
 - [ ] Store-format migration framework — versioned, forward-only, tested on a populated store
 
 ---

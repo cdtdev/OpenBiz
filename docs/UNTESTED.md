@@ -29,6 +29,103 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### CI's toolchain install is bounded now, but the retry and the timeout have never fired
+- **Kind:** partial-coverage
+- **What is proven:** the `have_toolchain` detection was tested locally in all three states that
+  matter — no clang, clang present but `libclang` absent, and both present — and returns the right
+  answer in each without tripping `set -e`. The middle case is the load-bearing one: it is the state
+  that otherwise produces a `bindgen` panic several steps later with no named cause. Both jobs are
+  generated from an identical step (checked by `diff`), and the YAML parses.
+- **What is not:** on `ubuntu-latest` the detection short-circuits to "already present", so **the
+  apt branch does not execute in CI at all** — the three-attempt retry, the `::error::` after a
+  third failure, and the post-install assertion are all unexercised by any real run. Equally, no
+  build has yet hit the 6-minute step timeout or a 45-minute job timeout, so what a timeout actually
+  *reports* on the PR is inferred from GitHub's documented behaviour, not observed. The whole change
+  is a fix for a failure mode I can no longer reproduce on demand.
+- **What would close it:** a `workflow_dispatch` input that forces the apt branch (and one that
+  forces a sleep past the step timeout), run once deliberately to see both report red with a
+  readable cause. Worth doing the next time CI is touched for another reason.
+- **Opened:** iteration 15
+
+### A restore holds the whole file in the backend's write batch, and the ceiling is unmeasured
+- **Kind:** partial-coverage
+- **What is proven:** a restore is one transaction, so a failure anywhere rolls the whole thing
+  back — tested at 10 001 quads, which is deliberately more than the 10 000-quad batch our own
+  buffer flushes at, so the test proves rollback across *committed-to-the-backend-but-uncommitted*
+  batches rather than within a single one. `adr/0015` records why chunked commits were refused.
+- **What is not:** how much memory a large restore actually needs. The backend holds a
+  transaction's write batch in memory until commit, so a store of the size `adr/0013` measured —
+  a million concepts, ~6 GB on disk — may need an amount of RAM nobody has measured, and the
+  failure mode is an OOM kill part way through a disaster recovery. Note the asymmetry: **backup
+  streams and restore does not**, so a deployment can produce a file it cannot read back on the
+  same machine. That is the shape of the problem worth testing first.
+- **What would close it:** restore a generated 1M-concept backup — the `scale` module already
+  builds one — under a measured memory ceiling, and record the number in `adr/0015`. If it will
+  not fit, the decision to reopen is chunked commits *plus* a marker that makes a half-restored
+  store refuse to open, which is a different design rather than a weakening of this one.
+- **Opened:** iteration 14
+
+### There is no online backup: taking one means stopping the server
+- **Kind:** partial-coverage
+- **What is proven:** `openbiz backup` and `openbiz restore` work against a stopped deployment, and
+  the embedded store's exclusive lock makes that a refusal rather than a race — a backup attempted
+  while the server runs fails with "already in use by another OpenBiz process".
+- **What is not:** anything about backing up a *running* deployment, because there is no way to.
+  For a self-hosted product whose pitch is that it is one process, "stop the service to back it up"
+  is a real operational cost that the JVM incumbents, with their separate triplestore, do not all
+  pay. It is also the reason the backup's two snapshots (below) cannot yet bite.
+- **What would close it:** the authenticated `GET /api/backup` in `PROPOSED.md`, which needs the
+  authentication model that does not exist yet. Until then this is a documented limitation, and
+  `README.md` says so rather than leaving an operator to discover it from a lock error.
+- **Opened:** iteration 14
+
+### A backup's registry read and its scan are two snapshots
+- **Kind:** inspected-only
+- **What is proven:** the quad scan is a single backend snapshot, so the *statements* in a backup
+  are internally consistent. This is the same property `Store::export_graph` has, and it is read
+  from the backend's source rather than assumed.
+- **What is not:** that the graph count in `BackupReport` describes the same instant as the
+  statements, because the registry is read first, on its own snapshot. It cannot matter today —
+  the only process that can write is the one taking the backup, and it is not serving — but it
+  becomes real the moment an online backup exists, and by then the code will look correct.
+- **What would close it:** a read transaction spanning both, which the backend supports; do it in
+  the same change that adds an online backup, not before, because a read transaction held for the
+  length of a full scan has its own cost.
+- **Opened:** iteration 14
+
+### The backup round trip is proven only on content written through the crate's own transaction
+- **Kind:** partial-coverage
+- **What is proven:** a store holding two vocabularies with SKOS-shaped statements backs up,
+  restores into a fresh store, and comes back byte-identical line-for-line — checked through
+  `Store::export_graph` and, end to end, through a running server's `GET /api/export`. A
+  created-but-empty vocabulary survives too, which is the case a content-based backup could most
+  easily lose.
+- **What is not:** anything about content an *author* wrote, because there is no authoring path
+  yet (Phase 2). The statements in these tests are written through `Transaction::insert`, which is
+  crate-private. So the round trip is proven over the terms those tests chose: IRIs, a
+  language-tagged literal, a plain literal. **Not** proven: blank nodes (N-Quads labels are
+  preserved by the parser's default, which is inspected and not tested), RDF-star terms, hostile
+  Unicode in a label, a literal past the boundaries `adr/0014` measured, or a vocabulary large
+  enough to matter.
+- **What would close it:** a round-trip test over a hostile fixture — one deliberately built from
+  every term shape the store can hold — added when Phase 2 gives us a real authoring path to build
+  it through. A blind-spot iteration is the natural home for it.
+- **Opened:** iteration 14
+
+### Restore reads one syntax of six, and reads a store rather than importing into a vocabulary
+- **Kind:** partial-standard
+- **What is proven:** N-Quads *parsing* now has a real production caller, which is the condition
+  `adr/0010` set for the parser landing. Malformed input is refused with a one-based line number,
+  tested.
+- **What is not:** Turtle, N-Triples, TriG, RDF/XML, and JSON-LD are still write-only — we
+  serialise them and cannot read them back. Phase 1's parsing item stays unchecked for that reason
+  and because restore is not an import: it reconstructs a whole store into an empty one, where an
+  import lands statements in somebody's existing vocabulary and therefore waits on Phase 2's
+  candidate seam. Nothing should read the N-Quads caller as evidence the parsing item is nearly
+  done.
+- **What would close it:** the parsing item itself, behind the candidate seam.
+- **Opened:** iteration 14
+
 ### A SHACL `sh:datatype` constraint over a derived integer type can never be satisfied
 - **Kind:** partial-standard
 - **What is proven:** the store replaces the datatype IRI of every derived integer type — `xsd:int`,

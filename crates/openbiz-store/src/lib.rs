@@ -39,6 +39,7 @@ use oxigraph::model::{GraphName, Literal, NamedNode, NamedNodeRef, Quad, Term};
 use oxigraph::store::Store as Backend;
 use thiserror::Error;
 
+mod backup;
 mod graph;
 mod query;
 mod results;
@@ -62,6 +63,7 @@ mod scale;
 #[cfg(test)]
 mod literal_precision;
 
+pub use backup::{BackupReport, RestoreReport, BACKUP_SYNTAX};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;
@@ -190,6 +192,88 @@ pub enum StoreError {
         /// The underlying cause — usually the caller's writer failing, not the store.
         #[source]
         source: std::io::Error,
+    },
+    /// The backup could not be written.
+    #[error("the backup could not be written: {source}")]
+    Backup {
+        /// The underlying cause — usually the caller's writer failing, not the store.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The backup file could not be read.
+    #[error("the backup could not be read: {source}")]
+    RestoreRead {
+        /// The underlying cause.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The backup file is not well-formed in the syntax a backup is written in.
+    ///
+    /// Carries the position, because a backup is a file a human may have edited, concatenated, or
+    /// truncated, and "it is invalid somewhere" is not something an operator can act on.
+    #[error("the backup is not valid {BACKUP_SYNTAX}{}: {detail}", match line {
+        Some(line) => format!(" at line {line}"),
+        None => String::new(),
+    })]
+    RestoreSyntax {
+        /// One-based line the parser stopped at, when it reported one.
+        line: Option<u64>,
+        /// The parser's complaint, verbatim.
+        detail: String,
+    },
+    /// A restore was asked for into a store that already holds something.
+    ///
+    /// A restore replaces a whole store, so merging it into a populated one would interleave two
+    /// unrelated histories with no way to tell them apart afterwards. Refusing keeps the
+    /// destructive reading — "this overwrote my vocabulary" — impossible rather than merely
+    /// unlikely.
+    #[error(
+        "the store at {} is not empty, and a restore replaces a whole store rather than merging          into one; restore into a fresh data directory instead",
+        path.display()
+    )]
+    RestoreNotEmpty {
+        /// The store that was refused.
+        path: PathBuf,
+    },
+    /// The file offered as a backup is not one.
+    ///
+    /// Distinct from a syntax error on purpose: the file may be perfectly good RDF. It is an
+    /// *export* — a single vocabulary — being handed to a whole-store restore, and the difference
+    /// matters because restoring an export would produce a store with content and no registry.
+    #[error("that file is not an OpenBiz backup: {detail}")]
+    NotABackup {
+        /// What was missing or wrong.
+        detail: String,
+    },
+    /// The backup was written by a newer OpenBiz than this one.
+    #[error(
+        "the backup was written by a newer OpenBiz (format version {found}); this build reads up          to version {supported}. Restore it with that build, or upgrade this one"
+    )]
+    RestoreFormatTooNew {
+        /// The version found in the file.
+        found: u32,
+        /// The highest version this build understands.
+        supported: u32,
+    },
+    /// The backup predates this build's store format.
+    #[error(
+        "the backup is in store format version {found} and this build writes version          {supported}; migrating an older backup is not implemented yet, so restoring it would          produce a store this build reads incorrectly"
+    )]
+    RestoreNeedsMigration {
+        /// The version found in the file.
+        found: u32,
+        /// The version this build writes.
+        supported: u32,
+    },
+    /// The backup describes a store this build would refuse to open.
+    ///
+    /// Raised *before* the restore commits, so the refusal leaves the target store exactly as it
+    /// was. A backup that restores into an unopenable store is the worst outcome available here:
+    /// the operator has already lost the original, which is why they are restoring.
+    #[error("the backup would not restore into a store this build can open: {detail}")]
+    RestoreRefused {
+        /// What about the file was unreconstructable.
+        detail: String,
     },
     /// The text offered as a query is not valid SPARQL 1.1.
     ///
@@ -394,49 +478,7 @@ impl Store {
     /// A registry entry that does not satisfy the [`GraphId`] invariants is a [`StoreError::Corrupt`],
     /// never a silently skipped row. A graph we cannot describe is one we must not pretend is absent.
     pub fn graphs(&self) -> Result<Vec<GraphId>, StoreError> {
-        let mut graphs = Vec::new();
-
-        for quad in self
-            .backend
-            .system_quads(None, named_node(GRAPH_KIND_IRI))?
-        {
-            let iri = match quad.subject {
-                oxigraph::model::NamedOrBlankNode::NamedNode(node) => node.into_string(),
-                other => {
-                    return Err(self.corrupt(format!(
-                        "a registered graph is identified by {other}, which is not an IRI"
-                    )))
-                }
-            };
-            let Term::Literal(token) = quad.object else {
-                return Err(self.corrupt(format!("the kind of graph {iri} is not a literal")));
-            };
-            let Some(kind) = GraphKind::parse(token.value()) else {
-                return Err(self.corrupt(format!(
-                    "graph {iri} has kind {:?}, which this build does not recognise",
-                    token.value()
-                )));
-            };
-
-            graphs.push(
-                GraphId::from_registry(iri, kind).map_err(|error| {
-                    self.corrupt(format!("the registry is inconsistent: {error}"))
-                })?,
-            );
-        }
-
-        // Sorted so the order is a property of the data rather than of the backend's iteration
-        // order, which nothing upstream promises. A UI list that reshuffles between reloads reads
-        // as a bug even when the contents are identical.
-        graphs.sort();
-
-        if let Some(duplicate) = first_duplicate(&graphs) {
-            return Err(self.corrupt(format!(
-                "graph {duplicate} is registered more than once, with different kinds"
-            )));
-        }
-
-        Ok(graphs)
+        graphs_in(&self.backend, &self.path)
     }
 
     /// Whether a graph is registered at `iri`, whatever kind it was registered as.
@@ -897,6 +939,62 @@ impl RegistryReader for oxigraph::store::Transaction<'_> {
         .map(|quad| quad.map_err(|error| StoreError::Backend(error.to_string())))
         .collect()
     }
+}
+
+/// Every graph `source`'s registry knows about, ordered by IRI.
+///
+/// One implementation shared by [`Store::graphs`] and by the restore path, which has to read the
+/// registry it has just written *inside the transaction that wrote it*. Two copies of this would
+/// eventually disagree about what a valid registry is, and the restore path is precisely where
+/// that matters: it is the one place a registry arrives from outside this process.
+///
+/// A registry entry that does not satisfy the [`GraphId`] invariants is a [`StoreError::Corrupt`],
+/// never a silently skipped row. A graph we cannot describe is one we must not pretend is absent.
+fn graphs_in(source: &impl RegistryReader, path: &Path) -> Result<Vec<GraphId>, StoreError> {
+    let corrupt = |detail: String| StoreError::Corrupt {
+        path: path.to_path_buf(),
+        detail,
+    };
+
+    let mut graphs = Vec::new();
+
+    for quad in source.system_quads(None, named_node(GRAPH_KIND_IRI))? {
+        let iri = match quad.subject {
+            oxigraph::model::NamedOrBlankNode::NamedNode(node) => node.into_string(),
+            other => {
+                return Err(corrupt(format!(
+                    "a registered graph is identified by {other}, which is not an IRI"
+                )))
+            }
+        };
+        let Term::Literal(token) = quad.object else {
+            return Err(corrupt(format!("the kind of graph {iri} is not a literal")));
+        };
+        let Some(kind) = GraphKind::parse(token.value()) else {
+            return Err(corrupt(format!(
+                "graph {iri} has kind {:?}, which this build does not recognise",
+                token.value()
+            )));
+        };
+
+        graphs.push(
+            GraphId::from_registry(iri, kind)
+                .map_err(|error| corrupt(format!("the registry is inconsistent: {error}")))?,
+        );
+    }
+
+    // Sorted so the order is a property of the data rather than of the backend's iteration
+    // order, which nothing upstream promises. A UI list that reshuffles between reloads reads
+    // as a bug even when the contents are identical.
+    graphs.sort();
+
+    if let Some(duplicate) = first_duplicate(&graphs) {
+        return Err(corrupt(format!(
+            "graph {duplicate} is registered more than once, with different kinds"
+        )));
+    }
+
+    Ok(graphs)
 }
 
 /// Whether `iri` has a registry entry in `source`.

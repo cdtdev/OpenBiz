@@ -379,6 +379,56 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   a download at test time (§1.1, air-gapped).
 - **Suggested phase:** Phase 1.
 
+### Serve an authenticated online backup, so a deployment need not stop to be copied
+- **Status:** proposed.
+- **Gap:** `openbiz backup` needs the store to itself, because the embedded store takes an
+  exclusive lock. Backing up a deployment therefore means stopping it. For a product whose pitch is
+  "one binary, one process", that turns a routine nightly job into a service window — and it is the
+  one place where the incumbents' separate triplestore is genuinely an advantage, because theirs
+  can be snapshotted underneath the running app.
+- **Why load-bearing:** load-bearing for a production deployment, not for the build. A
+  data-governance team writes the disaster-recovery runbook before they sign, and "stop the service
+  nightly" is a real objection in a regulated shop. The store already supports what is needed —
+  the scan is a single snapshot — so the work is an authenticated `GET /api/backup` that streams
+  N-Quads, plus the read transaction spanning the registry read and the scan (`UNTESTED.md`).
+- **Cost & impact:** roughly one iteration for the endpoint once authentication exists, which it
+  does not. **Depends on Phase 6's authorisation model**; proposing it now so that model is
+  designed knowing a whole-store read is one of its subjects. Doing it *before* authentication
+  would ship an unauthenticated way to exfiltrate the entire customer's data, which is why the loop
+  did not.
+- **Suggested phase:** Phase 6.
+
+### Verify a backup without restoring it
+- **Status:** proposed.
+- **Gap:** the only way to find out whether a backup file is good is to restore it into a fresh
+  data directory, which needs disk and a stopped moment. An operator's nightly job can therefore
+  report "backup written" for months while writing something that will not restore — truncated by
+  a full disk, corrupted in transit to object storage, or an export somebody put in the wrong
+  place. Every refusal `Store::restore` makes is already computable from the file alone.
+- **Why load-bearing:** an untested backup is not a backup, and this is the cheapest way there is
+  to make "we test our backups" a true sentence in a runbook. It is a small feature — a
+  `openbiz verify <file>` that runs the parse, the stamp check, the graph classification, and the
+  registry read-back against an in-memory store, and prints what it would have restored.
+- **Cost & impact:** well under one iteration; the logic exists and needs the transaction swapped
+  for a dry run. Note the honest limit: verifying without writing proves the file is *acceptable*,
+  not that the target disk can hold it.
+- **Suggested phase:** Phase 1 or Phase 6.
+
+### Decide whether a backup should be compressed, and by what
+- **Status:** proposed.
+- **Gap:** a backup is uncompressed N-Quads, which is the most verbose sensible form of RDF — every
+  statement repeats its full IRIs. A million-concept vocabulary is a large text file, and nobody
+  measured how large. Operators will pipe it through `gzip` themselves, at which point the product
+  has an undocumented convention instead of a decision.
+- **Why load-bearing:** nice-to-have, and say so plainly. The reason to raise it as a decision
+  rather than just doing it is that compressing *inside* the product costs the property the format
+  was chosen for: a `.nq.gz` is no longer something an operator can `grep`, `head`, or eyeball, and
+  a compression dependency is a dependency in the `CLAUDE.md` §1.5 sense. The alternative — read a
+  `.gz` on restore but never write one — is a smaller commitment that solves the practical half.
+- **Cost & impact:** under one iteration either way. Wants the size measurement from the 1M-concept
+  restore in `UNTESTED.md` first, so the decision is taken against a number.
+- **Suggested phase:** Phase 1.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
@@ -597,3 +647,25 @@ itself, which is the whole of the correctness — an air-gapped deployment sees 
 literal and loses only the plain English. This is the **fifth** iteration to describe "explain a set
 of RDF changes in the vocabulary's own terms" from a different seat; at this point Phase 10 should
 treat it as one named agent with five callers rather than five notes._
+
+_Iteration 14 (backup and restore): **one, and it is narrow — a refusal that cannot say what is
+wrong.** When `openbiz restore` refuses a file, it names the rule that was broken exactly, because
+every one of those rules is computable and must be (`adr/0002`). But the operator is holding a file
+in a disaster, and the question they actually have is "what **is** this file, and where is my real
+backup?". Nothing in the product answers that. **The candidate:** given a refused file's shape —
+which graphs it names, whether it carries a registry, how many statements, what vocabularies the
+IRIs suggest, what stamp it has — draft the plain sentence that identifies it: "this looks like an
+export of the *Regions* vocabulary taken from a store, not a whole-store backup; a backup of that
+store would also contain `urn:openbiz:graph:system`." The manual path is the refusal message we
+already emit, which carries the whole of the correctness — an air-gapped deployment loses only the
+identification. Note the guard rails this one needs: the input is a file the operator handed us,
+so it is a **data-egress event** in the §1.6 sense and must be refusable, and the output must never
+be phrased as a recommendation to retry — a model that says "this is probably fine" over a
+restore is the one place its confidence is most expensive.
+
+_Also iteration 14, a **deliberate nil** on the tempting one: "generate the disaster-recovery
+runbook". It is tempting because it is prose, and it is wrong for the same reason as the others —
+the runbook's correctness is a property of the commands, the exit statuses, and the refusals, all
+of which we own and can document exactly. An LLM-written runbook is a plausible document that
+nobody verified against the binary, and it would be discovered wrong on the worst day the customer
+has. `README.md` is the right home for it and a human wrote it._

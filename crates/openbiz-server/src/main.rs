@@ -4,27 +4,68 @@ use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::Context;
-use openbiz_server::{app, shutdown_signal, AppState, Config};
+use openbiz_server::{app, shutdown_signal, AppState, Command, Config, USAGE};
 use openbiz_store::Store;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// Exit status for arguments we could not make sense of.
+///
+/// Distinct from the 1 that a failed operation returns, because a script that retries a failed
+/// backup should *not* retry a mistyped one.
+const EXIT_BAD_USAGE: i32 = 2;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Arguments first: `openbiz help` must work on a machine with no configuration, no data
+    // directory, and no permission to create one. Anything that reads the environment before
+    // knowing what was asked for turns "how do I use this?" into a configuration error.
+    let command = match Command::parse(std::env::args_os().skip(1)) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error}\n\n{USAGE}");
+            std::process::exit(EXIT_BAD_USAGE);
+        }
+    };
+
+    if command == Command::Help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+
+    // A one-shot command's *result* is its stdout, so its logs go to stderr — that is what lets a
+    // cron job capture the outcome without the provenance lines, and still keep both. The server
+    // has no such split to make: everything it emits is a log.
+    let serving = command == Command::Serve;
     // Colour only when a human is watching. Redirected to a file, a journald unit, or a container
     // log collector, ANSI escapes are noise that breaks `grep` and every log shipper's parser —
     // and the logs an operator most needs to read are exactly the ones nobody is watching live.
-    let ansi = std::io::stdout().is_terminal();
+    let ansi = if serving {
+        std::io::stdout().is_terminal()
+    } else {
+        std::io::stderr().is_terminal()
+    };
 
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_env("OPENBIZ_LOG").unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer().with_ansi(ansi))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(ansi)
+                .with_writer(move || -> Box<dyn std::io::Write> {
+                    if serving {
+                        Box::new(std::io::stdout())
+                    } else {
+                        Box::new(std::io::stderr())
+                    }
+                }),
+        )
         .init();
 
     let config = Config::load().context("failed to load configuration")?;
 
     // Log the provenance of every setting before doing anything with it. An operator debugging a
     // deployment should never have to guess which of the defaults, the file, and the environment
-    // won — that guess is most of the pain of configuring the incumbents.
+    // won — that guess is most of the pain of configuring the incumbents. It matters just as much
+    // for a backup, where the question is "which store did it actually copy?".
     for (key, setting) in config.settings() {
         tracing::info!(setting = key, value = %setting, source = %setting.source(), "configuration");
     }
@@ -34,6 +75,11 @@ async fn main() -> anyhow::Result<()> {
     // ambiguity the split app/triplestore deployments of the incumbents can never resolve. The
     // error names the configuration layer that chose the path, so the operator knows which file
     // or variable to edit rather than only which directory failed.
+    //
+    // The one-shot commands open it the same way and for the same reason, and the backend's
+    // exclusive lock is what makes "stop the server first" enforced rather than advised: a backup
+    // taken against a running deployment fails with `already in use` instead of copying a store
+    // that is being written underneath it.
     let store = Store::open(config.data_dir.value()).with_context(|| {
         format!(
             "failed to open the store in {}, from {}",
@@ -47,10 +93,40 @@ async fn main() -> anyhow::Result<()> {
         "store open"
     );
 
-    // Shared with the router, which clones the state per connection. `main` keeps a handle so it
-    // can still close the store — see the reclaim below, which is where that ordering is enforced.
-    let store = Arc::new(store);
+    match command {
+        Command::Backup { file } => one_shot(store, |store| openbiz_server::back_up(store, &file)),
+        Command::Restore { file } => one_shot(store, |store| openbiz_server::restore(store, &file)),
+        Command::Serve => serve(config, store).await,
+        // Answered above, before anything was configured or opened.
+        Command::Help => Ok(()),
+    }
+}
 
+/// Run a command that owns the store for its whole life, then close it.
+///
+/// The close is not optional and is not `Drop`'s job: a restore that is not flushed is a restore
+/// the next start may not find, and `Store::close` is the only thing that reports whether the
+/// flush worked. The result line goes to stdout only once that has succeeded, so a script that
+/// reads "restored 12 000 statements" is reading a statement about the disk.
+fn one_shot(
+    store: Store,
+    work: impl FnOnce(&Store) -> Result<String, openbiz_server::CommandError>,
+) -> anyhow::Result<()> {
+    let outcome = work(&store)?;
+
+    store
+        .close()
+        .context("the store did not close cleanly; the operation may not have reached disk")?;
+
+    // `println!` rather than `tracing`: this is the command's *output*, not a log of it. A backup
+    // script pipes stdout; timestamps and levels belong on the other stream (`CLAUDE.md` §6's rule
+    // is about logging, and this is not a log line).
+    println!("{outcome}");
+    Ok(())
+}
+
+/// Serve until a shutdown signal arrives, then close the store.
+async fn serve(config: Config, store: Store) -> anyhow::Result<()> {
     // Read the graph registry now rather than on first request. It is the store's own account of
     // what it holds, so a registry it cannot describe — an unknown graph kind, an entry that
     // breaks the namespace rule — is a store we would be guessing about, and guessing is how a
@@ -64,6 +140,10 @@ async fn main() -> anyhow::Result<()> {
         // Vocabulary IRIs are customer metadata, so they are named at debug and counted at info.
         tracing::debug!(graph = %graph, kind = %graph.kind(), "registered graph");
     }
+
+    // Shared with the router, which clones the state per connection. This keeps a handle so it
+    // can still close the store — see the reclaim below, which is where that ordering is enforced.
+    let store = Arc::new(store);
 
     let listener = tokio::net::TcpListener::bind(config.bind.value())
         .await
