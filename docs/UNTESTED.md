@@ -29,6 +29,52 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### The ISO 25964-1 revision date is second-hand — the ISO registry itself was never read
+- **Kind:** environment-limited
+- **What is proven:** nothing, by test. This is a research finding, and it is recorded here rather
+  than only in `docs/COMPETITIVE.md` because we are about to make a standards claim that rests on
+  it. Two independent secondary sources (a 2024 peer-reviewed article by the revision's own
+  participant, and NISO's ISO 25964 committee page) agree that ISO 25964-1 went to comment and vote
+  on 2024-07-30, that TC 46's work is complete, and that publication is expected in 2026.
+- **What is not:** the primary source. `https://www.iso.org/standard/53657.html` returns **HTTP 403**
+  to automated fetching, so the actual stage code, the new edition's number, and whether it has in
+  fact published are unverified. "Expected in 2026" is somebody else's forecast repeated by us.
+- **What would close it:** a human opening the ISO catalogue page in a browser and reading the
+  stage. One minute of work that this environment cannot do. Until then, no OpenBiz document may
+  say a 2026 edition of ISO 25964-1 exists — only that a revision is reported to be in progress.
+- **Opened:** iteration 25 (product-owner pass)
+
+### Every competitor-weakness claim we lean on comes from one source
+- **Kind:** partial-coverage
+- **What is proven:** the *structural* claims are well sourced — the Graphwise merger is confirmed by
+  all three parties' own announcements, and VocBench's deployment weight is confirmed by its own
+  release notes (RDF4J 4.3.15, GraphDB 10.6.2, an FTS plugin deployed by hand into `/lib/plugins`).
+  Those are facts about what the products *require*, and we can stand behind them.
+- **What is not:** the four PoolParty weaknesses in `docs/COMPETITIVE.md` — steep learning curve,
+  very high consulting fees, blocking bugs with incomplete responses, and no public roadmap — all
+  come from **Gartner Peer Insights practitioner reviews and nothing else.** The last of those is
+  the single most load-bearing claim in our positioning: the entire "the roadmap is the repo" wedge
+  row rests on it. One review aggregator is thin evidence for a permanent differentiator, and this
+  pass found no second source either confirming or contradicting it.
+- **What would close it:** a second independent practitioner source per claim — a G2 or TrustRadius
+  corpus, a public procurement evaluation, or a conference talk by a customer. Or, for the roadmap
+  claim specifically, the simpler and more direct check: does Graphwise publish a public roadmap or
+  changelog for PoolParty today? That is answerable from their own site and was not attempted.
+- **Opened:** iteration 25 (product-owner pass)
+
+### The dev LLM shim has never been compared against a real provider
+- **Kind:** environment-limited
+- **What is proven:** nothing. `adr/0002` §3 makes the shim's fidelity load-bearing by design —
+  development and production are meant to exercise the same `OpenAiCompatibleProvider` code path,
+  differing only in base URL — and the ADR names divergence as a risk in its own consequences
+  section. The shim is not yet built (Phase 10), so there is no code to be wrong.
+- **What is not:** the standing check the ADR implies. This pass reviewed `adr/0002`'s provider
+  *decisions* and confirmed they hold, but did not and could not exercise the shim.
+- **What would close it:** Phase 10 running the agent evaluation sets against a real provider as
+  well as the shim, and recording the diff. Recorded now so it is a known obligation entering the
+  phase rather than a discovery inside it.
+- **Opened:** iteration 25 (product-owner pass)
+
 ### S24 and S27 are not implemented, so `skos:broaderTransitive` is one step and §8.4 is unchecked
 - **Kind:** partial-standard
 - **What is proven:** S18–S23, S25 and S26 are applied and each has a test naming its number. A

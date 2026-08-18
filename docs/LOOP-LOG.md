@@ -1841,3 +1841,82 @@ look competent disables the one signal that catches a stuck loop.
   not take it this iteration because guessing at an architecture from an unmeasured fear is the
   other way to get it wrong, and one item per iteration means the measurement is its own item. If
   the next iteration starts S24 without a number in front of it, it should stop and get one first.
+
+## Iteration 25 — 2026-08-18
+- **Took:** the **product-owner pass** (every twenty-fifth iteration), so no plan item. Started
+  clean: `main` green on `e98db68`, working tree clean, both human inboxes empty. Confirmed the
+  pass was due by counting the log's own headers rather than assuming — 24 entries, so this is 25.
+- **The finding that matters: our named OWL 2 dependency is licensed LGPL-3.0.** `horned-owl` is
+  the crate `CLAUDE.md` §3 names for Phase 9 and the crate `CLAUDE.md` §5 offers as its example of
+  a licence that might be *merely unlisted*. It is not unlisted. It is LGPL, which §5 forbids in
+  the core in as many words. I verified it three independent ways before writing it down — the
+  crates.io metadata for every published version including `3.0.0`, the `license` field in
+  upstream's own `Cargo.toml`, and `COPYING` + `COPYING.lesser` (GPLv3 + LGPLv3) at the repository
+  root — because a claim this consequential taken from one API field is a claim I would deserve to
+  be wrong about.
+- **What made it a blocker rather than a swap.** The obvious reaction is "find a permissive
+  alternative", and I nearly wrote that. The reason it is wrong is the *second* collision: Rust
+  statically links, §1.2 commits us to one binary, and a statically-linked LGPL dependency puts the
+  relinking obligation on the whole executable — against §5's other requirement that the core stay
+  cleanly relicensable for an enterprise layer. So this touches two non-negotiables at once and it
+  is a commercial decision, which §8 puts out of loop scope. `BLOCKED.md` carries four options with
+  their costs and does not pick one. The Phase 9 plan line now says *do not start this, and do not
+  substitute a weaker dependency to get round it*, because that instruction is the one the loop
+  most needs and the one it is least likely to give itself.
+- **The good news in it, said plainly:** `cargo deny check licenses` passes and `horned-owl` does
+  not appear in `Cargo.lock`. Nothing we ship depends on it. Phase 9 is six phases away. This is a
+  decision found early, not a defect found late, and the only reason it was found at all is that
+  the pass checked a dependency nobody had installed yet.
+- **A second, smaller instance of the same shape.** Phase 5 names `whelk-rs` for OWL EL. It is MIT,
+  so no licence problem — but **it is not published to crates.io at all**, and our own `deny.toml`
+  sets `unknown-git = "deny"`. A plan item naming a dependency our policy will not accept, again.
+  Cheap to resolve, expensive to discover on the first day of Phase 5.
+- **Standards: three moved, one did not.** SHACL 1.2 exists in four parts, all Working Drafts —
+  Core (2026-08-03), Rules, User Interfaces (FPWD 2026-05-26) and Profiling. RDF 1.2 Concepts and
+  Semantics are at Candidate Recommendation. ISO 25964-1 is under revision with publication
+  reported as expected in 2026. Z39.19-2005 (R2010) is unchanged, so that pack's citation is fine.
+  **The one I would have missed is SHACL 1.2 UI**: it defines a `shui:` vocabulary for generating
+  forms from shapes, which is exactly the thing Phase 3 would otherwise invent privately, and §1.3
+  forbids inventing substitutes for what is already being standardised. The proposal is deliberately
+  narrow — *read it and borrow its terms*, not *build on a first public working draft*.
+- **A correction to our own file that was quietly embarrassing.** We call the open-source
+  competitor "VocBench 3". The product has been at **VocBench 14.0 / ShowVoc 5.0 since 2025-03-22**.
+  "3" is the generation, not the version, and using it as one makes our competitive research read
+  three years stale. Their release notes also handed us our own wedge row: GraphDB's FTS plugin now
+  ships separately and is deployed by hand into `/lib/plugins`. That is the zero-consultant-install
+  argument written by the competitor.
+- **Two deliberate nils, so they are not re-found.** `adr/0002`'s two-provider decision **holds** —
+  Anthropic still publishes no OpenAI-compatible endpoint, so one implementation cannot cover both.
+  What has moved is the request surface (`budget_tokens` removed and now a 400, prefill removed,
+  structured output moved to `output_config.format`, a new `refusal` stop reason), which is a note
+  for Phase 10 rather than a change to the ADR. And `adr/0003`'s connectors are not silently broken,
+  because none is built yet — but AGROVOC retiring SOAP surfaced something better than a fix:
+  **Skosmos is the shared REST front end for a whole class of public registries**, so one provider
+  covers many sources instead of one connector each.
+- **Recorded:** 180 lines of dated, sourced research appended to `COMPETITIVE.md`, including a
+  measured table of nine crates (version, licence, publish date, downloads) and two corrections to
+  that file's own earlier claims — "there is no OWL 2 DL reasoner in Rust" is now too strong as an
+  absolute, and the `whelk-rs` entry omitted that it is unpublished. One `BLOCKED.md` entry, eight
+  `PROPOSED.md` entries, three `UNTESTED.md` entries, and three plan lines annotated. **Nothing was
+  promoted.** `fmt`, `clippy -D warnings`, `cargo deny`, and 470 Rust tests green, unchanged.
+- **The `UNTESTED.md` entry I least wanted to write** is that every PoolParty weakness we lean on
+  comes from **one** source — Gartner Peer Insights — and the "no public roadmap" claim is the whole
+  foundation of the "roadmap is the repo" wedge. One review aggregator is thin evidence for a
+  differentiator we call permanent. It is also cheaply checkable and I did not check it.
+- **The date, again.** `currentDate` said 2026-08-19; `date -u` said 2026-08-18T23:40Z. Checked
+  before writing this header, per iterations 16–24.
+- **Still uncertain:** whether this pass would have found the `horned-owl` licence at all if the
+  crate had not happened to be on the list I was checking versions for. I found it while filling in
+  a table of publication dates, not by asking "is anything we plan to depend on forbidden?" — and
+  the charter's §5 wall only fires when `cargo deny` sees a crate in `Cargo.lock`, which means it
+  fires the moment someone adds the dependency and **never before**. Every future-phase dependency
+  named in `CLAUDE.md`, `BUILD-PLAN.md`, and the ADRs is unchecked by any automated gate until the
+  day it is adopted, which is the worst possible day to learn it is unusable. Two of the four
+  named engine candidates turned out to be unadoptable under our own policy — that is a 50% hit
+  rate on a sample of four, which is either bad luck or evidence that the plan's dependency names
+  were written from reputation rather than from a licence check. I do not know which, and the
+  difference matters: if it is the latter, the remaining named candidates in Phases 4, 10, 11 and
+  13 need the same audit, and that is a plan item rather than a curiosity. I did not open it as a
+  proposal because I have a sample of four and a strong prior, and a proposal argued from a strong
+  prior is how the loop talks itself into work. The next product-owner pass should check the rest
+  of the named dependencies first, before any market research, and settle it with a count.

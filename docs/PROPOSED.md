@@ -607,6 +607,164 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   commercial and support commitment, so it is a human's call (`CLAUDE.md` §8), not the loop's.
 - **Suggested phase:** Phase 1.
 
+### Decide the OWL 2 model dependency, and amend the charter text that names `horned-owl`
+- **Status:** proposed.
+- **Gap:** `horned-owl` is LGPL-3.0 (verified 2026-08-18, three ways — see `docs/BLOCKED.md`), which
+  `CLAUDE.md` §5 forbids in the core. Yet §3 names it as the OWL 2 candidate, §5 uses it as the
+  example of a licence that is *merely unlisted*, and `docs/BUILD-PLAN.md`'s Phase 9 item specifies
+  it by name. Three places in the standing brief now point at a dependency the standing brief bans.
+- **Why load-bearing:** §5's rule is that a copyleft dependency is a human's decision, and §8 puts
+  licensing decisions out of loop scope, so the loop **cannot** resolve this — but it also cannot
+  start Phase 9 without it resolved, and it cannot leave the charter saying two contradictory
+  things. The four options and their costs are enumerated in the `BLOCKED.md` entry; this proposal
+  is the request to pick one and to correct §3, §5, and the Phase 9 item in the same commit as the
+  ADR. It is not urgent — Phase 9 is six phases out and nothing depends on the crate today — but it
+  is the kind of decision that gets expensive the day someone has already written the plan against
+  the banned dependency.
+- **Cost & impact:** the decision itself is a human sitting with the four options for an hour, plus
+  possibly legal input on option 1. The *engineering* cost ranges from near-zero (option 1) to
+  several phases (option 2, writing our own OWL 2 structural model and IO). Whichever is chosen, an
+  ADR and a three-file charter amendment follow. No runtime impact today.
+- **Suggested phase:** Phase 9 — but the decision should be taken well before Phase 9 begins.
+
+### Say which SHACL version the Phase 4 spike is testing, and add two engines to its list
+- **Status:** proposed.
+- **Gap:** the Phase 4 spike item says "evaluate `oxirs-shacl` vs `shacl_validation` vs in-house
+  against the W3C SHACL test suite". It does not say **which SHACL**. SHACL 1.0 (2017) is the only
+  Recommendation, but the Data Shapes WG now has SHACL 1.2 Core in Working Draft (2026-08-03) with
+  node expressions, `sh:values`, `sh:defaultValue`, per-constraint severity via reification,
+  `sh:targetWhere` and list constraints — a materially larger surface. A spike that measures three
+  engines against an unnamed target produces a number nobody can interpret later. Separately, the
+  candidate list is now out of date: `purrdf-shapes` (MIT/Apache, 2026-08-02, claims native RDF 1.2
+  SHACL) did not exist when the item was written, and the adoption gap between the two named
+  engines is 20× (`shacl_validation` 44k downloads, `oxirs-shacl` 2.0k) which is a fact the spike
+  should weigh rather than discover.
+- **Why load-bearing:** SHACL is not one feature among many for us — `docs/METHODOLOGY.md` makes
+  **gate criteria SHACL shapes**, so the Methodology Engine, the rule packs, and validation-on-write
+  all sit on whichever engine this spike picks. Choosing it against a target we did not write down
+  is how we end up unable to say what we support. **This is emphatically not a proposal to chase a
+  Working Draft** — the recommendation is to conform to SHACL 1.0 and to record 1.2 divergence as a
+  known-forward-compatibility note, so that when 1.2 reaches Recommendation we know what we owe.
+- **Cost & impact:** amends an existing plan item rather than adding one; perhaps half an iteration
+  of extra spike work to run the fourth engine and to write the version statement.
+- **Suggested phase:** Phase 4.
+
+### Look at SHACL 1.2 UI (`shui:`) before Phase 3 invents a form-description vocabulary
+- **Status:** proposed.
+- **Gap:** Phase 3 will need to decide, for every property of a concept, what widget renders it,
+  in what order, under what group, with what label in which language. Every tool in this market
+  solves that, and TopBraid solves it by driving forms from shapes. W3C now has a standards-track
+  answer: **SHACL 1.2 User Interfaces**, First Public Working Draft 2026-05-26, defining a `shui:`
+  vocabulary with widget selection by scoring, grouping and ordering, cross-language label
+  resolution, property roles, and 16 built-in editors plus 10 viewers. Nothing in our plan mentions
+  it, so the default outcome is that Phase 3 invents a private vocabulary for the same job.
+- **Why load-bearing:** `CLAUDE.md` §1.3 says we implement standards rather than inventing
+  proprietary substitutes for things already standardised, and this is precisely a thing being
+  standardised. It also pays off twice — the same annotations that render our editor render a
+  customer's own rule pack's forms, which is the "custom organisation rule packs, authored in the UI
+  without hand-writing SHACL" item in Phase 4. **The honest caveat:** an FPWD is early, it will
+  change, and building the UI on it would be a mistake. The proposal is narrower — *read it, and
+  where we need a vocabulary for something it covers, use its terms rather than minting ours*, so
+  that a later migration is a version bump rather than a rewrite.
+- **Cost & impact:** roughly one iteration to read the FPWD and write an ADR mapping our Phase 3
+  form needs onto `shui:` terms, marking what it does not cover. Blocks nothing.
+- **Suggested phase:** Phase 3, before the concept-detail item.
+
+### Re-cite the ISO 25964 rule pack and methodology pack against the 2026 revision
+- **Status:** proposed.
+- **Gap:** **ISO 25964-1 is being revised and publication is expected in 2026.** The revision went
+  to comment and vote on 2024-07-30 and TC 46's work is reported complete; announced changes include
+  GUIDs, expanded non-Latin-script examples, DEI guideline references, the addition of "concept" and
+  "concept term", and substantial annexe updates. We cite the 2011 edition in `CLAUDE.md` §2, in
+  `docs/METHODOLOGY.md`'s `iso-25964-thesaurus` pack, and in the Phase 4 rule-pack item.
+  (ISO 25964-2:2013 was confirmed in 2023 and is unaffected.)
+- **Why load-bearing:** `CLAUDE.md` §7's review rule says in as many words that **a pack which
+  misrepresents its source methodology is worse than no pack**, and a rule pack sold as ISO 25964
+  conformance while checking a superseded edition is that failure exactly — in front of the buyer
+  who cares most, since ISO 25964 in a requirements document is why they are evaluating us. It is
+  also the one finding in this pass with a real deadline attached to somebody else's calendar.
+- **Cost & impact:** the standard is paywalled, so acquiring it is a purchase decision and therefore
+  a human's (`CLAUDE.md` §8). Until then the honest move is cheap and should happen regardless:
+  make every citation say **"ISO 25964-1:2011"** rather than "ISO 25964", so the edition we actually
+  implement is stated rather than implied. That part is an hour. Re-basing the pack on the new
+  edition is a separate, larger item that cannot start without the text.
+- **Suggested phase:** Phase 4 for the rule pack; the citation tightening could ride any iteration.
+
+### Use Oxigraph's RDFC 1.0 canonicalization for vocabulary-as-code diffs
+- **Status:** proposed.
+- **Gap:** Phase 8 promises reviewable diffs of vocabularies in git. Serialising a graph naively
+  gives a diff dominated by statement reordering and renamed blank nodes — noise that makes a PR
+  unreviewable, which would fail the wedge row it exists to deliver. Nothing in the Phase 8 items
+  addresses canonicalisation. Meanwhile **Oxigraph 0.5.4 added RDFC 1.0**, the W3C canonicalization
+  algorithm, and we already ship Oxigraph and are locked at 0.5.9.
+- **Why load-bearing:** "GitHub-native — vocabularies are code: branches, PRs, **reviewable diffs**"
+  is one of the seven wedge rows in `CLAUDE.md` §1. A diff a governance reviewer cannot read is the
+  feature not working. The unusual thing here is the cost: the capability is already inside a
+  dependency we ship, so this is closer to *noticing* than to building — which is exactly why it
+  would otherwise be missed until someone opened an ugly PR.
+- **Cost & impact:** needs a measurement first — RDFC 1.0's blank-node canonicalisation is
+  worst-case expensive on adversarial graphs, and a SKOS vocabulary's blank-node count is usually
+  near zero, so the honest guess is that it is nearly free for us and that guess should be checked
+  rather than assumed. Perhaps one iteration to measure and one to wire. Note it interacts with the
+  open question in "Decide where entailments live" above: canonicalising the *asserted* graph and
+  canonicalising the *entailed* one give different files, and Phase 8 must say which is committed.
+- **Suggested phase:** Phase 8.
+
+### Add a `SkosmosProvider`, because one connector covers a class of public registries
+- **Status:** proposed.
+- **Gap:** `adr/0003` lists public registries individually — EuroVoc, AGROVOC, LCSH, SNOMED CT,
+  schema.org, IPTC — which implies one connector, one auth story, and one breakage surface each.
+  But **Skosmos is the common front end for a large part of that class**: AGROVOC, Finto, and many
+  national and institutional thesauri all publish the same REST API. AGROVOC has now retired its
+  legacy SOAP services and states it will add no further web services, leaving SPARQL and the
+  Skosmos REST API as the only two machine routes.
+- **Why load-bearing:** `adr/0003`'s own consequences section names the risk — "each connector is an
+  integration with its own auth, rate limits, and breakage" — and a `SkosmosProvider` plus a base
+  URL collapses many of those into one implementation with one test. It also lets a customer point
+  at *their own* Skosmos instance, which is a real deployment pattern in the public sector. This is
+  a nice-to-have in the sense that nothing breaks without it; it is load-bearing in the sense that
+  the alternative is N connectors we will not all maintain, and an unmaintained connector reports
+  "nothing found", which reads as "nothing exists" — the anti-silo feature failing silently.
+- **Cost & impact:** one connector's work for several sources' coverage. Depends on the
+  `DiscoveryProvider` trait landing in Phase 2. No connector exists yet, so nothing is broken today.
+- **Suggested phase:** Phase 12, with the trait's Phase 2 hook unchanged.
+
+### Decide how `whelk-rs` can be a dependency at all, given it is not published
+- **Status:** proposed.
+- **Gap:** Phase 5 names `whelk-rs` as the OWL EL reasoner behind our `Reasoner` trait.
+  **`whelk-rs` is not on crates.io** (checked 2026-08-18; the repo is alive, MIT-licensed, last
+  pushed 2026-06-29, 20 stars). Our own `deny.toml` sets `unknown-git = "deny"`, so a git dependency
+  fails CI by policy. This is not a licence problem — MIT is fine — it is a supply problem, and it
+  is a *smaller* one than the `horned-owl` entry but it has the same shape: a plan item naming a
+  dependency the policy will not accept.
+- **Why load-bearing:** it is cheap to resolve and expensive to discover late. The options are ask
+  upstream to publish, vendor it with a recorded justification, carve a narrow `[sources]` exception
+  for one known git URL, or use one of the newer permissive EL implementations
+  (`owl-dl-saturation`, `ontologos-el`) — all of which are much less proven. Recording it now means
+  Phase 5 opens with the question already asked.
+- **Cost & impact:** the decision is minutes; the consequence is which crate Phase 5 spikes against.
+  Nothing depends on it today.
+- **Suggested phase:** Phase 5.
+
+### Record the catalog vendors as competitors, not only as discovery connectors
+- **Status:** proposed.
+- **Gap:** `docs/COMPETITIVE.md` covers PoolParty, metaphactory, TopBraid EDG, Protégé and VocBench
+  — the semantic-web-native tools. It says nothing about Collibra, Alation, Microsoft Purview,
+  data.world, and their business-glossary modules. `adr/0003` names them, but only as **discovery
+  connectors** — sources to read from. They are also where a data-governance buyer's budget usually
+  already sits, and "we already have a glossary in Collibra" is the objection our positioning most
+  has to answer.
+- **Why load-bearing:** it changes what the product has to prove. Against PoolParty we argue
+  deployment weight and price; against an incumbent catalog we argue that a glossary of flat terms
+  with no `broader`, no scheme, no SKOS export and no integrity conditions is not a vocabulary, and
+  that theirs and ours should be **connected** rather than one replacing the other — which is the
+  `adr/0003` posture and a genuinely stronger sales position than displacement. The research to
+  support that argument does not exist in our files, so today it is an assertion.
+- **Cost & impact:** research and writing, no code. Half an iteration. The risk of *not* doing it is
+  that a Phase 12 connector gets built on guesses about what those products actually expose.
+- **Suggested phase:** not a build phase — a research task for a future product-owner pass, listed
+  here so the next one does not have to rediscover the gap.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here
