@@ -63,6 +63,14 @@ property nobody writes — see `adr/0023`. What is **not** there is the transiti
 next item and `docs/UNTESTED.md` says exactly which of the specification's examples read as clean
 to us in the meantime.
 
+**Iteration 25 was the product-owner pass, so no plan item moved and the count above is unchanged.**
+It landed one thing that changes the shape of a later phase: **`horned-owl` is LGPL-3.0**, which
+`CLAUDE.md` §5 forbids, so the first Phase 9 item is now blocked on a licence decision a human has
+to take. Two other items — the Phase 4 SHACL spike and Phase 5's `whelk-rs` line — carry notes
+about assumptions in them that no longer hold. The research and its sources are in
+`docs/COMPETITIVE.md`; eight proposals are in `docs/PROPOSED.md` awaiting promotion, and none was
+promoted by the loop.
+
 `openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
 schemes, and collections — including the ones no statement typed, because SKOS itself entails
 them — and names the specification statement behind every fact it inferred. It separates a violated
@@ -784,6 +792,11 @@ the interface is a core differentiator, and building it late means retrofitting 
 
 - [ ] **Spike:** evaluate `oxirs-shacl` vs `shacl_validation` vs in-house against the W3C SHACL
       test suite. Record coverage, performance, and licence in an ADR before choosing
+      > Amended by iteration 25's research, and the amendment is **not** authorised into the item —
+      > it sits in `docs/PROPOSED.md` awaiting promotion. Two things changed: this line does not say
+      > **which SHACL** (1.0 is the only Recommendation; SHACL 1.2 Core has been in Working Draft
+      > since 2026-08-03 with a materially larger surface), and the engine list is now incomplete —
+      > `purrdf-shapes` is new, and `shacl_validation` has 20× `oxirs-shacl`'s adoption.
 - [ ] `Validator` trait owned by us; the chosen engine sits behind it (`CLAUDE.md` §3)
 - [ ] SHACL Core constraint components, conformance-tested
 - [ ] SHACL-SPARQL constraints
@@ -805,6 +818,10 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] RDFS entailment via forward-chaining materialisation
 - [ ] OWL 2 RL rule engine, incremental where possible
 - [ ] OWL 2 EL classification via `whelk-rs`, behind our trait
+      > Note from iteration 25: **`whelk-rs` is not published to crates.io.** MIT-licensed and the
+      > repo is alive, so this is a supply question rather than a licence one — but `deny.toml`
+      > sets `unknown-git = "deny"`, so a git dependency fails CI by policy today. The options are
+      > in `docs/PROPOSED.md`; the question should be settled before this item is picked up.
 - [ ] Consistency checking with a human-readable account of the inconsistency
 - [ ] **Explanation**: every inferred triple can produce its full derivation chain, rendered for a
       non-logician. No inference path may ship without this (`CLAUDE.md` §3)
@@ -891,6 +908,13 @@ the interface is a core differentiator, and building it late means retrofitting 
 > users arrive with.
 
 - [ ] OWL 2 model and IO via `horned-owl`, behind our own boundary
+      > **BLOCKED on a licence, since iteration 25.** `horned-owl` is **LGPL-3.0** (verified three
+      > ways on 2026-08-18), which `CLAUDE.md` §5 forbids in the core. §5 routes copyleft to
+      > `docs/BLOCKED.md` and stops, because it is a commercial decision a human takes — see that
+      > entry for the four options and their costs, and `docs/PROPOSED.md` for the request to pick
+      > one. **Do not start this item, and do not substitute a weaker dependency to get round it.**
+      > The dependency named in this line may not survive the decision, so the line itself is
+      > provisional.
 - [ ] Class hierarchy editor with inferred-vs-asserted clearly distinguished
 - [ ] Object, data, and annotation property editors with characteristics
 - [ ] Class expression builder usable without Manchester syntax fluency — but Manchester available

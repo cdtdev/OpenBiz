@@ -24,6 +24,50 @@ take the next item. Silently substituting a weaker implementation is how a chart
 
 ## Open
 
+### OWL 2 model and IO via `horned-owl` (Phase 9)
+- **Blocked on:** **`horned-owl` is LGPL-3.0**, and `CLAUDE.md` §5 forbids LGPL in the core without
+  qualification. There is no permissive dual-licence option. This is not a spike that failed and not
+  a maturity judgement — the crate is healthy and actively released. It is a licence wall, and §5
+  says a copyleft dependency is recorded here and **stopped on**, because it is a commercial
+  decision a human takes.
+- **Why it is worse than an ordinary licence mismatch, stated plainly:** LGPL's relinking obligation
+  is usually satisfied by dynamic linking. Rust statically links, and `CLAUDE.md` §1.2 commits us to
+  **one binary**. A statically-linked LGPL dependency puts the obligation on the whole executable —
+  the conventional discharge is shipping object files or an equivalent that lets a user relink
+  against a modified `horned-owl`. That collides with §5's other requirement, that the core stay
+  **cleanly relicensable** for a separately-licensed enterprise layer. So the two non-negotiables
+  this touches are §1.2 and §5 at the same time, which is exactly why the loop must not decide it.
+- **Unblocked by:** a human choosing one of four, and recording it in an ADR:
+  1. **Accept LGPL-3.0 for `openbiz-owl` only**, isolated in its own crate the way §5 already
+     permits for MPL-2.0, and accept the static-linking obligation for the shipped binary. Needs
+     legal input on whether the open-core plan survives it. This is the cheapest engineering path
+     and the most expensive commercial one.
+  2. **Write our own OWL 2 structural model and IO.** Large — the OWL 2 Structural Specification is
+     roughly 60 axiom types, plus RDF/XML and Functional-Syntax mapping in both directions — but it
+     is a *known* quantity, it is squarely inside §3's "engine dependencies sit behind our own
+     trait" discipline (there would be no engine), and Phase 9 needs the boundary anyway.
+  3. **Adopt `owlish`** (MIT OR Apache-2.0) as the model and accept it is three years stale
+     (last publish 2023-07-05), which in practice means adopting an unmaintained crate and
+     maintaining it ourselves. Permissive, and smaller than option 2, but the staleness is the whole
+     risk and it should be measured against a real ontology before anyone believes it.
+  4. **Ask upstream for a permissive relicence or a dual licence.** Free to ask, slow, and outside
+     our control; not a plan on its own, but it costs nothing to send alongside 1–3.
+- **Tried:** verification, not implementation — nothing was built. `horned-owl`'s licence was
+  confirmed three independent ways on 2026-08-18: crates.io metadata for `3.0.0`, the `license`
+  field in the upstream `Cargo.toml`, and `COPYING` + `COPYING.lesser` (GPLv3 + LGPLv3) at the
+  repository root. The permissive alternatives were then enumerated from a crates.io search and each
+  one's licence, publication date, and download count read from the API rather than recalled.
+- **Workaround in place:** none, and none is needed **yet** — Phase 9 is six phases away and nothing
+  in the tree depends on `horned-owl`. That is the good news in this entry and the reason it is a
+  decision rather than an emergency. It is filed now precisely so the decision is not discovered on
+  the first day of Phase 9 with an implementation plan already written against it.
+- **Also affects the charter text itself.** `CLAUDE.md` §3 lists `horned-owl` as the OWL 2
+  candidate, §5 offers it as the example of a dependency whose licence is "merely *unlisted* rather
+  than forbidden", and `docs/BUILD-PLAN.md` names it in the Phase 9 item. All three are now wrong
+  and cannot be corrected by the loop, because correcting them means choosing between the options
+  above. `docs/PROPOSED.md` carries the amendment.
+- **Opened:** iteration 25 (product-owner pass)
+
 ### Candidate seam, part 3 — over HTTP and in the interface (Phase 2)
 - **Blocked on:** there is no authentication. `POST /api/candidates` and an approve endpoint are
   an unauthenticated "apply this arbitrary change to a customer's vocabulary" until an identity
