@@ -56,6 +56,12 @@ mod syntax;
 #[cfg(test)]
 mod scale;
 
+/// Where a typed literal stops being a value: the ranges the backend interprets, what it does at
+/// the edge of each, and the datatype substitution found while measuring them. Test-only. See
+/// `docs/adr/0014-literal-precision-boundaries.md` for the decision.
+#[cfg(test)]
+mod literal_precision;
+
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
 pub use syntax::RdfSyntax;

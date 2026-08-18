@@ -308,6 +308,39 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   Option 1 is unbounded. Whichever is chosen, the disclosure work in option 3 is worth doing first
   because it is a prerequisite for being honest while the rest is decided.
 - **Suggested phase:** Phase 1. It is a property of the substrate and every later phase inherits it.
+- **Amended, iteration 13:** the spike below found a **larger** instance of the same loss — the
+  datatype IRI of a derived integer type is dropped, not just the lexical form — so whichever option
+  is chosen here has to cover that too. Read the two together; they are one decision.
+
+### Decide what to do about the store dropping derived integer datatypes
+- **Status:** proposed.
+- **Gap:** `"5"^^xsd:int` is stored, and returned, as `"5"^^xsd:integer`. So are `xsd:short`,
+  `xsd:byte`, `xsd:long`, `xsd:unsignedLong`, `xsd:nonNegativeInteger`, and `xsd:positiveInteger`
+  whenever the value fits `i64`. Under RDF 1.1 a literal is the pair (lexical form, datatype IRI),
+  so these are different terms being conflated: four distinct terms written against one subject and
+  one predicate come back as **two statements**. Measured and pinned in iteration 13 — see
+  `adr/0014` and `UNTESTED.md`.
+- **Why load-bearing:** this is strictly worse than the lexical rewriting above, for two reasons.
+  First, a datatype IRI is what every downstream constraint language *names*: a SHACL
+  `sh:datatype xsd:int` shape (Phase 4) can never be satisfied by data in this store, and an OWL 2
+  datatype range over a derived type (Phase 5) is untestable. Those are two whole phases inheriting
+  a defect from the substrate. Second, it loses **statements** rather than merely altering them, on
+  input a taxonomist would call unremarkable, with nothing anywhere reporting it — so a vocabulary
+  that went in with four assertions comes out with two and the diff a reviewer approves is against
+  the two. `CLAUDE.md` §1.3 requires an artefact to round-trip through a standards-compliant tool;
+  this does not round-trip through *ours*.
+- **The one thing to do before choosing:** `UNTESTED.md` records that **nobody has looked upstream**.
+  `adr/0014` argues the *range* boundary is expensive to move because it is a property of the value
+  representation, and that argument is sound — but it does not transfer to the datatype
+  substitution, which may be a `Literal` construction detail or an upstream bug and therefore cheap.
+  Half an iteration reading `oxigraph::model::Literal` and the upstream issue tracker would turn
+  this from a three-option commercial judgement into, possibly, a patch. **That reading should
+  happen before this proposal is ruled on**, and before the Phase 4 SHACL spike, which will
+  otherwise blame the SHACL engine for it.
+- **Cost & impact:** unknown until the reading above is done, which is why the reading is the
+  recommendation rather than an option. If it is not cheap, the options are the same three as the
+  proposal above and should be decided together.
+- **Suggested phase:** Phase 1, ahead of Phase 4.
 
 ### Write our own N-Triples serialiser, or get the escaped tab fixed upstream
 - **Status:** proposed.
@@ -371,6 +404,26 @@ and a hard error on an unrecognised key beat parity rather than matching it. See
   will not be on the first Phase 3 item. Recorded in `UNTESTED.md`. This is a parity finding in the
   strict sense: on accessibility we currently match the incumbents' *intentions* and have shipped
   nothing that beats them.
+
+### On raw numeric range the JVM incumbents beat us, and saying otherwise would be dishonest
+- **Iteration 13 (literal-precision spike).** PoolParty, GraphDB, TopBraid EDG, and VocBench all sit
+  on JVM stores that model `xsd:integer` as `BigInteger` and `xsd:decimal` as `BigDecimal`. They have
+  no range boundary to characterise. We have one at `i64` and another at a 128-bit fixed point, and
+  that is a direct, unwinnable consequence of `CLAUDE.md` §1.2 — the single-binary commitment picked
+  an embedded Rust store, and this is part of its bill. **We cannot beat them on range and should
+  never imply we do.**
+- **Where we *are* better, stated narrowly so it is not overclaiming:** none of them publish where
+  their edges are, what their store does to a lexical form, or which of their normalisations are
+  XSD-specified and which are theirs. We now do, in `adr/0014`, with a test suite that fails if the
+  claim drifts. That is a real difference in *kind* — the wedge row is "proprietary, opaque change
+  history" → "the roadmap is the repo" — but it is a difference in **disclosure**, not in
+  capability, and a customer with a 25-digit identifier is better served by an incumbent today.
+- **What would turn this from a parity finding into a wedge:** the disclosure proposal above, built
+  into the candidate seam so the product *tells* an author at the moment their literal will not
+  survive. An incumbent that quietly stores everything and an OpenBiz that quietly stores most
+  things are both opaque; an OpenBiz that says "this notation will not round-trip, here is why" is
+  the only one of the three a governance team can actually sign off. That is the thing worth
+  building, and it is a human's to authorise.
 
 ---
 
@@ -530,3 +583,17 @@ structural gaps the spike's fixture made vivid (a scheme that does not state its
 concepts with no `skos:inScheme`, orphans with no `skos:broader`) are **computable exactly** and
 must not be handed to a model: finding them is a SPARQL query, and `adr/0002`'s rule that a model
 never establishes a fact rules it out on its own._
+
+_Iteration 13 (literal-precision spike): **one, and it is a disclosure task rather than a
+generation one.** When the store will not preserve a literal — a padded notation, an out-of-range
+identifier, a derived datatype it substitutes — the *fact* is computable exactly and must be
+computed exactly (`adr/0002`: a model never establishes a fact). What is not computable is the
+**sentence a taxonomist needs**: not `"5"^^xsd:int → "5"^^xsd:integer`, which means nothing to a
+subject-matter expert, but "the code `007` will be stored as `7`; if the leading zeros are part of
+the code, record it as text instead". **The candidate:** at review time in the candidate seam,
+given the exact machine-computed list of literals that will not survive, draft the plain-language
+warning and the concrete remedy in the vocabulary's own terms. The manual path is the exact list
+itself, which is the whole of the correctness — an air-gapped deployment sees every affected
+literal and loses only the plain English. This is the **fifth** iteration to describe "explain a set
+of RDF changes in the vocabulary's own terms" from a different seat; at this point Phase 10 should
+treat it as one named agent with five callers rather than five notes._

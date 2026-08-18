@@ -18,11 +18,16 @@ format chooser read from the server, and the export carries none of OpenBiz's ow
 **And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
 four results formats and all six RDF syntaxes, over a default dataset that is the user's
 vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-224 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
+231 Rust tests and 29 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
 `cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
 narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
 the published EBNF rather than against the library that wrote the bytes, which found two real
-defects nobody had seen (see `adr/0012`). **And the engine is now measured rather than trusted:**
+defects nobody had seen (see `adr/0012`). **And the store's literal handling is characterised rather than assumed:** the boundaries at which
+`xsd:integer`, `xsd:decimal`, `xsd:double`, `xsd:dateTime`, and `xsd:duration` stop being
+interpreted are measured and pinned, and the finding is that a literal past the boundary
+round-trips perfectly while silently ceasing to be a value — so a filter over it omits rows rather
+than failing. A derived integer datatype is silently replaced by `xsd:integer`, which loses
+statements (see `adr/0014`). **And the engine is now measured rather than trusted:**
 the charter's standing warning that Oxigraph's query evaluation is unoptimised has a number against
 it at 10k, 100k, and 1M concepts, taken through our own query entry point against the queries the
 interface will issue — navigation is flat and fast, the tree's *first* query is a 21-second cliff
@@ -31,9 +36,15 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 1 (RDF core & store), 8 of 12 items done (the serialisation item was
-split in two — see the split note below). **Iteration 11 took the Oxigraph benchmark spike, and it
-reached it by refusing two items rather than by skipping them.** SPARQL 1.1 Update and the Graph
+**Current position:** Phase 1 (RDF core & store), 9 of 12 items done (the serialisation item was
+split in two — see the split note below). **Iteration 13 took the literal-precision spike**, the
+second of Phase 1's two spikes, reached the same way iteration 11 reached the first — SPARQL 1.1
+Update and the Graph Store Protocol are still *refused* rather than skipped, for the reasons below.
+It measured where a typed literal stops being a value, found that the boundary is a cliff rather
+than a rounding, and found a defect on the way that the item did not ask about: the datatype IRI of
+a derived integer type is not preserved, so four distinct RDF terms written against one subject
+come back as two statements. See `adr/0014`. **Iteration 11 took the Oxigraph benchmark spike, and
+it reached it by refusing two items rather than by skipping them.** SPARQL 1.1 Update and the Graph
 Store Protocol both sit above the two things that do not exist yet — the candidate seam (§3) and
 the RDF parser — and an *applying* Update endpoint would additionally be an unauthenticated
 arbitrary-write path and a creation path that skips discovery (§1.7). Both carry a deferral note
@@ -328,8 +339,31 @@ the interface is a core differentiator, and building it late means retrofitting 
       > and a million concepts loads through the transactional write path in five minutes and
       > occupies ~6 GB. See `adr/0013`, which also lists what it did **not** measure — concurrency,
       > memory, a cold cache, and a realistically lumpy vocabulary.
-- [ ] **Spike:** characterise Oxigraph's numeric/calendar/duration literal precision limits and
+- [x] **Spike:** characterise Oxigraph's numeric/calendar/duration literal precision limits and
       decide our documented behaviour at the boundary
+      > **Better, not parity.** Every store in this market has limits here; not one of them
+      > publishes where they are. The incumbents' JVM stores use `BigInteger`/`BigDecimal`, so on
+      > raw range they beat us and saying otherwise would be dishonest — that is written up as a
+      > parity finding rather than glossed. What none of them tell you is *what happens at the
+      > edge*, and that is where this spike went. The answer is not "large values round": it is
+      > that a literal outside the range the backend models **stops being a value** while still
+      > round-tripping byte-for-byte, so `FILTER(?value > 1000)` silently omits the rows that
+      > crossed the line and a short answer reads exactly like "there were no such rows". One digit
+      > separates `…105727` (a number) from `…105728` (not one), and nothing in the data
+      > distinguishes them. The boundaries for integer, decimal, float/double, calendar, and
+      > duration are now measured, pinned as tests that fail if either side moves, and published in
+      > `adr/0014` — which is the thing the incumbents do not do.
+      > **And it found a defect the item did not ask about**, which is worse than the boundary: the
+      > datatype IRI of a derived integer type is **not preserved**. `"5"^^xsd:int` is stored and
+      > returned as `"5"^^xsd:integer`, so four distinct RDF terms written against one subject come
+      > back as **two statements** — silent triple loss on ordinary input. It also means a SHACL
+      > `sh:datatype xsd:int` constraint (Phase 4) can never be satisfied and an OWL 2 datatype
+      > range over a derived type (Phase 5) is untestable. Both are recorded against those phases in
+      > `UNTESTED.md` rather than left to be met as a surprise.
+      > **Scope, honestly.** The spike *characterises and documents*; it does not fix. The remedy —
+      > the store telling a caller what it rewrote at the moment it rewrote it — is a user-facing
+      > capability belonging to Phase 2's candidate seam, and it is in `PROPOSED.md` for a human
+      > rather than self-authorised (`CLAUDE.md` §7).
 - [ ] Backup and restore to a single portable file; restore verified against a live store
 - [ ] Store-format migration framework — versioned, forward-only, tested on a populated store
 

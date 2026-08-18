@@ -29,6 +29,68 @@ Do not delete it — the record of what took how long to close is the signal.
 - **Opened:** iteration N
 ```
 
+### A SHACL `sh:datatype` constraint over a derived integer type can never be satisfied
+- **Kind:** partial-standard
+- **What is proven:** the store replaces the datatype IRI of every derived integer type — `xsd:int`,
+  `xsd:short`, `xsd:byte`, `xsd:long`, `xsd:unsignedLong`, `xsd:nonNegativeInteger`,
+  `xsd:positiveInteger` — with `xsd:integer` whenever the value fits `i64`. Measured through both
+  `export_graph` and `DATATYPE()` over `Store::query`, so it is the stored term and not a
+  serialisation artefact. Pinned by
+  `literal_precision::tests::a_derived_integer_datatype_is_replaced_by_xsd_integer`.
+- **What is not:** the consequence for Phase 4. A SHACL shape asserting `sh:datatype xsd:int`
+  cannot match anything in this store, because the datatype the shape names is not the datatype the
+  store returns. Nothing has been built that would notice, because the SHACL engine does not exist
+  yet. The same applies to an OWL 2 datatype range over a derived type in Phase 5.
+- **What would close it:** the Phase 4 spike evaluating SHACL engines must include a
+  `sh:datatype xsd:int` case against real stored data, and record the answer rather than assume the
+  engine is at fault. If the substitution is still present then, the rule packs must be written in
+  terms of datatypes the store preserves, and that constraint must be *stated* rather than silently
+  worked around.
+- **Opened:** iteration 13
+
+### Nobody has looked upstream at whether the datatype substitution is fixable
+- **Kind:** inspected-only
+- **What is proven:** that the substitution happens, and that it happens in the term encoding rather
+  than in the serialiser.
+- **What is not:** *why*. `adr/0014` reasons that arbitrary-precision integers are a property of the
+  value representation and therefore expensive to change, and that reasoning is sound for the
+  **range** boundary. It does not follow for the **datatype substitution**, which may be a much
+  cheaper thing — a `Literal` construction detail, a configuration, or an upstream bug — and no one
+  has read Oxigraph's source or issue tracker to find out. The ADR records it as unexamined rather
+  than as hard, deliberately, because assuming it is hard is how a cheap fix goes unfound.
+- **What would close it:** half an iteration reading `oxigraph::model::Literal` and the term encoder,
+  and searching upstream issues for the derived-datatype case. That is a bounded, concrete task and
+  it should happen before the Phase 4 spike, not after.
+- **Opened:** iteration 13
+
+### The literal boundaries are measured on this backend version only
+- **Kind:** partial-coverage
+- **What is proven:** the exact thresholds for `xsd:integer` (`i64`), `xsd:decimal` (128-bit fixed
+  point, 18 fraction digits), `xsd:float`/`xsd:double` (IEEE 754 saturation), and the XSD-validity
+  test for calendar and duration types, against the pinned Oxigraph version.
+- **What is not:** that these are *stable*. They are properties of an internal representation that
+  upstream has never documented as a contract, so a patch release could move them. The tests fail if
+  that happens, which is the mitigation, but the failure will read as "our test broke" rather than
+  "the store's numeric range changed" unless the reader gets to `adr/0014`. The assertion messages
+  name the ADR for that reason.
+- **What would close it:** nothing available to the loop — it is a dependency-stability question, not
+  a coverage one. Recorded so a version bump is met with a re-read rather than a re-baseline.
+- **Opened:** iteration 13
+
+### What an import should do with a literal that will not survive is undecided
+- **Kind:** partial-coverage
+- **What is proven:** that some literals lose their value, some lose their datatype, and some
+  collapse into an existing statement — all silently, on the write path that already exists.
+- **What is not:** what the *parser* should do about it, because the parser is deliberately deferred
+  behind the candidate seam. Refuse the literal, accept it with a recorded warning, or accept it
+  silently are three different products, and the current answer is the third by default rather than
+  by decision.
+- **What would close it:** the Phase 2 candidate seam item must answer it explicitly. A candidate
+  already carries provenance and is already reviewed by a human, so "this literal will be stored
+  differently from how you wrote it" is a fact the seam is shaped to carry — but only if someone
+  puts it there.
+- **Opened:** iteration 13
+
 ---
 
 ### The service-defined default dataset is believed spec-permitted, not verified against the text
