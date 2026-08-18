@@ -8,9 +8,11 @@ use axum::{routing::get, Json, Router};
 use openbiz_api::Health;
 
 mod config;
+mod shutdown;
 mod ui;
 
 pub use config::{Config, ConfigError, Setting, Source};
+pub use shutdown::shutdown_signal;
 
 /// Build the application router.
 ///

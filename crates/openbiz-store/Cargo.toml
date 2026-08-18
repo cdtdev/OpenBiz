@@ -9,4 +9,11 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The embedded RDF store. `default-features = false` plus an explicit `rocksdb` drops the optional
+# `http-client` feature family: nothing in the product may open an outbound connection by default
+# (CLAUDE.md §1.1, air-gapped operation). See docs/adr/0006.
+oxigraph = { workspace = true }
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

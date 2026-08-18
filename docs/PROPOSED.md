@@ -29,7 +29,7 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 ## Open proposals
 
 ### Add a UI test runner before Phase 3 begins
-- **Status:** proposed.
+- **Status:** promoted (→ Phase 0).
 - **Gap:** `ui/package.json` has no `test` script, so there is no UI test runner at all. The
   iteration driver's `npm test` step is a no-op that passes silently, which is worse than having no
   step — it reads as a green suite. `App.tsx` has three `Probe` states (loading, ok, error) and none
@@ -44,7 +44,7 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Suggested phase:** Phase 0, or as the first item of Phase 3.
 
 ### Headless-browser smoke test against the release binary
-- **Status:** proposed.
+- **Status:** promoted (→ Phase 3).
 - **Gap:** nothing has ever executed the bundle in a browser. `adr/0004` proves the right bytes are
   served; it cannot prove the app mounts. The gap will widen once Phase 3 adds routing, and the
   failure mode — binary serves 200, page is blank — is exactly the one transport tests cannot see.
@@ -57,7 +57,7 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Suggested phase:** Phase 3, alongside the accessibility item it would share a harness with.
 
 ### Test `Config::load` against a real process environment via a subprocess
-- **Status:** proposed.
+- **Status:** promoted (→ Phase 1).
 - **Gap:** `Config::resolve` is tested exhaustively with an injected environment, but `Config::load`
   — the wiring that supplies `std::env::var` and the default path — has no automated test, because
   `std::env::set_var` mutates state shared across the test binary's threads. A typo in a variable
@@ -73,7 +73,7 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Suggested phase:** Phase 0, or folded into the first Phase 1 item that makes `data_dir` real.
 
 ### Show the effective configuration and its provenance in the admin console
-- **Status:** proposed.
+- **Status:** promoted (→ Phase 14).
 - **Gap:** `Setting`/`Source` know where every value came from, but that answer is only reachable in
   the startup log and in error messages. An operator debugging a running server has to find the log
   from process start, which in a container may be long gone.

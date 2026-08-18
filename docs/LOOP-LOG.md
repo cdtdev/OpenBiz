@@ -130,3 +130,74 @@ look competent disables the one signal that catches a stuck loop.
   of the same doubt: this iteration decided per-setting validation is "more machinery than the
   problem" at two settings, and I do not know where that stops being true — Phase 1's `data_dir`
   alone wants an is-this-a-writable-directory check, so it may be one item away rather than ten.
+
+## Iteration 3 — 2026-08-18
+- **Took:** Phase 1 — "`openbiz-store`: embedded Oxigraph lifecycle — open, close, durable path,
+  graceful shutdown". **The tree was dirty at the start:** a previous iteration had built this item
+  essentially to completion and was interrupted before landing it. I inspected it rather than
+  building on it blind, found it complete and charter-compliant, and finished it — the ADR it
+  referenced three times did not exist, the README carried no build prerequisite, CI had no clang
+  step, and none of it had ever compiled. So the honest description of this iteration is: *verify,
+  complete, and land someone else's interrupted work*, not "write a store".
+- **Did:** the store is now real and load-bearing. `Store::open` creates the directory, takes the
+  backend's exclusive lock, and stamps or checks a `FORMAT_VERSION`; `close()` consumes the store,
+  flushes, and reports whether that worked. `main.rs` opens it **before** `TcpListener::bind` and
+  closes it **after** `axum`'s graceful shutdown has drained, so the ordering is stop-accepting →
+  drain → flush → log `store closed cleanly`. `shutdown_signal()` handles `SIGINT` and `SIGTERM`;
+  `SIGTERM` is the one that matters, because `docker stop`, a Kubernetes eviction, and `systemctl
+  stop` all send it and a `Ctrl-C`-only service is hard-killed on every routine restart. Applied
+  "parity is failure" before building: every incumbent has a triplestore, and what they do badly is
+  keep it in a *separate lifecycle from the application* — from which "up but useless", two
+  instances on one directory, unordered shutdown, and silent version downgrade all follow. One
+  lifecycle answers all four, and each answer is a test.
+- **Tests:** 45 → 59, all green, plus `cargo fmt`, `clippy -D warnings`, and `cargo deny check
+  licenses bans sources`. Twelve in `openbiz-store` (fresh open, stamp survives close/reopen,
+  nested paths created, second open refused, store-from-the-future refused, two stamps refused,
+  non-numeric stamp refused, close releases the lock, data dir that is a file, unwritable parent);
+  three in `crates/openbiz-server/tests/graceful_shutdown.rs`, which spawns **real binaries** —
+  `SIGTERM` exits zero and leaves a reusable directory, a second instance refuses to share the data
+  directory, and the process environment reaches `Config::load` with its provenance intact. Beyond
+  the suite I checked the load-bearing assertion *discriminates*: a `SIGKILL` exits 137 and writes
+  **no** `store closed cleanly` line, while `SIGTERM` writes exactly one — and the next start
+  reopened the store after the hard kill. Recorded as a hand check, not a test.
+- **Learned:** three things. (1) **The pipe masked the failure.** My first `cargo test --workspace |
+  tail -40` reported exit 0 while the build had panicked in `bindgen` — the driver warns about this
+  for `gh pr checks` and it bit here instead, in the same shape. I now redirect to a file and test
+  `$?`. Had I trusted it, I would have pushed an unbuilt branch and called it green. (2) **This
+  machine cannot build the store from a clean checkout** — no `clang`, no `libclang`, no
+  passwordless `sudo`. Rather than substitute Oxigraph's in-memory backend (which would have been
+  exactly the "silently substituting a weaker implementation" the charter forbids), I extracted
+  `libclang1-20` and `libclang-common-20-dev` from downloaded `.deb`s into `~/.local/libclang`. It
+  works, it is outside the repo, and it will not survive a machine reset — recorded in `UNTESTED.md`
+  so a future iteration reads the entry instead of concluding the store is broken. (3) **The §5
+  licence escalation was not needed.** `CLAUDE.md` anticipated Oxigraph's tree as the first case
+  forcing an allow-list decision; it resolves entirely within the existing list and `cargo deny`
+  passes unchanged. Worth stating plainly so nobody later reads `adr/0006` as having used that path.
+- **Recorded:** `adr/0006` (adopting Oxigraph as load-bearing; the four incumbent failure modes; why
+  `default-features = false` keeps `http-client` out of an air-gapped build; why `len()` is O(n) and
+  there is deliberately no public `quad_count()`; why `trait RdfStore` is deferred rather than
+  guessed at with one implementation). Closed two `UNTESTED.md` entries — `data_dir` has a consumer
+  for the first time, and `Config::load` now has a real-process regression test. Opened **six**
+  narrower ones, and the largest is the honest one: **the named-graph model has no production
+  caller** — `GraphId`, `GraphKind`, and `is_directly_writable()` are unit-tested rules that nothing
+  invokes, and `StoreError::NotWritable` is a variant never returned. The store has held exactly one
+  quad, ever. Also opened: durability proven for one quad not a vocabulary, shutdown proven to exit
+  cleanly but never with a request in flight, the lock classifier's dependence on a RocksDB message
+  string, Unix-only shutdown coverage, and the libclang gap above. Drained both human inboxes
+  first: `feedback.md` was empty (nothing to log), and `promote-queue.json` held four entries, all
+  applied — a UI test runner into Phase 0, the `Config::load` subprocess test into Phase 1, a
+  headless-browser smoke test into Phase 3, and the effective-configuration screen into Phase 14 —
+  with each proposal marked `promoted (→ Phase N)` and the queue emptied to `[]`. The Phase 1 one
+  was closed by this item's own harness, so it is checked off with a note saying so rather than
+  claimed as separate work. Nil LLM assistance opportunity, and not for lack of looking: process
+  lifecycle and lock arbitration are exactly the kind of thing that must be deterministic and
+  explainable, and an LLM in that path would be a liability rather than a help.
+- **Still uncertain:** whether opening the store before binding is right when the store is *large*.
+  It is unambiguously right today — a store that will not open should never become a server that
+  accepts requests — but `Store::open` is currently a few milliseconds on an empty directory and I
+  have measured nothing else. If RocksDB recovery after an unclean stop takes tens of seconds on a
+  1M-concept store, then "cold start under a few seconds" (§1.5) and "never up but useless" become
+  a genuine conflict rather than a happy coincidence, and I do not know which way to resolve it —
+  a readiness endpoint that reports "opening" is the obvious answer and is also precisely the
+  "up but useless" ambiguity I just congratulated us for eliminating. The Phase 1 benchmark spike
+  should measure open and close times, not only query evaluation, and it currently says neither.
