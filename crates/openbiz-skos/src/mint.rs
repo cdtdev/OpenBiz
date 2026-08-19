@@ -359,8 +359,14 @@ impl Slug {
 /// A character is kept when it is alphanumeric **and** `iunreserved`; whitespace and everything
 /// else become a single `-`; apostrophes are elided rather than split on, so `Müller's cheese`
 /// is `müllers-cheese` and not `müller-s-cheese`. Case is lowered with Rust's Unicode-aware
-/// `to_lowercase`, which is a *mapping* and not a full case fold — see `docs/UNTESTED.md`, where
-/// the same gap is recorded for label search.
+/// `to_lowercase`, which is a *mapping* and not a full case fold — and unlike label matching,
+/// which moved to folding at iteration 60, that is the right operation here. A slug becomes a
+/// local name in an IRI that is then published, cited, and compared byte for byte; folding would
+/// mint `strasse` for `Straße`, silently changing the identifier a German cataloguer typed into a
+/// different word. Folding is for deciding whether two strings are the same term ([`fold`]);
+/// lowercasing is for deriving a stable identifier from one of them.
+///
+/// [`fold`]: crate::fold
 pub fn slug(label: &str, bound: SlugBound) -> Result<Slug, SlugError> {
     let mut out = String::new();
     let mut pending_boundary = false;

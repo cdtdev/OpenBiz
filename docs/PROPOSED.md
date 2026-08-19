@@ -1866,3 +1866,40 @@ worth nothing if they did not write it._
   file? Or marked so it stops counting? That interacts directly with the `openbiz split` item, and
   taking it in passing would settle it by accident.
 - **Suggested phase:** Phase 2, immediately after the `openbiz split` half lands.
+
+### A supported way to create a vocabulary, because today there is none
+
+- **Status:** proposed, unpromoted. Raised at iteration 60 (blind-spot pass).
+- **Found by running the binary**, not by a test. `openbiz import <graph> <file>` is the first step
+  the CLI's own help describes, and against a fresh data directory it answers
+  `no graph is registered at https://example.org/…`. Nothing registers one. There is no
+  `openbiz create`, and `/api/graphs` is `get` only. `Store::create_vocabulary_graph` exists, is
+  tested nine ways, and is called **exclusively from test code**.
+- **Gap:** a new deployment cannot be given its first vocabulary by any supported means. The
+  product's whole documented workflow — import, inspect, search, mint, propose, approve — sits
+  behind a step the product does not offer. Every fixture in this repo reaches past the product and
+  calls the store directly, which is exactly why 1215 passing tests do not notice, and why
+  `CAPABILITIES.md` reads as though the workflow is reachable.
+- **Why it was deliberate, and why that has expired.** `UNTESTED.md` has carried this since
+  iteration 5, and the reasoning was right at the time: `CLAUDE.md` §1.7 requires discovery to run
+  *before* creation, and `DiscoveryProvider` did not exist until Phase 2, so a create endpoint would
+  have been a charter violation dressed up as progress. That entry's own unblocking condition was
+  "the Phase 2 authoring path with its local discovery hook". **Phase 2 is now 33 of 34.**
+  `DiscoveryProvider`, `LocalVocabularies`, the STOP report and the recorded justification
+  (`adr/0046`, `adr/0049`, `adr/0050`) all exist and are wired into `openbiz mint`. The condition
+  was met around iteration 46 and the gap has outlived its justification by roughly fourteen
+  iterations, because nothing re-reads a deferral to ask whether the thing it waited for arrived.
+- **Why load-bearing:** it is the difference between a product and a library with a CLI attached.
+  It also makes several of our own claims untestable end to end — "zero-consultant install" is a
+  charter pillar, and today the install cannot be used without writing Rust.
+- **The interesting part is not the endpoint.** §1.7 applies at *vocabulary* level and the ladder we
+  built is concept-level: before creating a vocabulary the question is whether an existing one
+  should be extended, or a published one adopted, and "create anyway" wants the same recorded
+  justification `adr/0049` gives a concept. That is a design decision about what discovery means
+  when the thing being created is the container, and it should not be settled in passing by whoever
+  adds a route.
+- **Cost & impact:** the mechanism is small — one command, one route, one existing store method.
+  The §1.7 ladder at vocabulary level is the real work, and the reason this is proposed rather than
+  taken.
+- **Suggested phase:** Phase 3, ahead of the remaining interface items — the vocabulary list has
+  nothing to list until this exists.

@@ -25,6 +25,13 @@ openbiz-validate = { path = "crates/openbiz-validate" }
 
 anyhow = "1"
 axum = "0.8"
+# Unicode default case folding, for label matching. `str::to_lowercase` is a case *mapping*, so
+# `Straße` lowercases to itself and a search for `STRASSE` finds nothing — the miss that sends a
+# curator off to create a duplicate concept (CLAUDE.md §1.7). Case folding is the operation the
+# Unicode Standard defines for caseless matching and the standard library has none. From
+# `unicode-rs`, the same maintainers as `unicode-normalization` below, carrying
+# CaseFolding-16.0.0. MIT. See docs/adr/0052.
+caseless = "0.2"
 http-body-util = "0.1"
 mime_guess = "2"
 # Embedded RDF store and SPARQL engine. `default-features = false` with only `rocksdb` enabled
@@ -61,6 +68,13 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Unicode normalisation (UAX #15), the other half of caseless matching: a composed `é` (U+00E9)
+# and a decomposed `e` + U+0301 render identically and are different strings, and both occur in
+# the multilingual thesauri this product is for. Canonical caseless matching (Unicode Standard
+# §3.13, D145) is defined as fold-with-normalisation, so the two arrive together. `caseless`
+# already depends on it; naming it here is the manifest line for the NFD half we call directly.
+# MIT OR Apache-2.0. See docs/adr/0052.
+unicode-normalization = "0.1"
 
 [profile.release]
 lto = "thin"

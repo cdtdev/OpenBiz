@@ -1147,7 +1147,20 @@ Do not delete it — the record of what took how long to close is the signal.
   concurrency defect sat in a method with nine passing tests. The `transaction` API this method now
   delegates to *does* have a production caller (store startup), so the seam is exercised on every
   start even though this method is not.
-- **Opened:** iteration 5 · **Amended:** iteration 7
+- **Amended, iteration 60 — the condition this entry waits on has been met, and nobody noticed.**
+  Found by running the binary during a blind-spot pass: `openbiz import` is the documented first
+  step for a new user and it answers `no graph is registered at <iri>`. There is no CLI command and
+  no HTTP route that registers one — `/api/graphs` is `get` only — so **a new deployment cannot be
+  given its first vocabulary by any supported means**. Every fixture in this repo reaches past the
+  product into `Store::create_vocabulary_graph`, which is why 1215 passing tests do not notice.
+  The entry's own unblocking condition was "the Phase 2 authoring path with its local discovery
+  hook". Phase 2 is 33 of 34; `DiscoveryProvider`, `LocalVocabularies`, the STOP report and the
+  recorded justification (`adr/0046`, `adr/0049`, `adr/0050`) all exist and are wired into
+  `openbiz mint`. The charter objection that made this gap *deliberate* in iteration 5 no longer
+  applies, and the gap has outlived it by fourteen iterations. It is not this iteration's item —
+  creating a vocabulary is plan-sized work and needs the §1.7 ladder applied at vocabulary level,
+  not concept level — so it goes to `PROPOSED.md` for a human, unpromoted.
+- **Opened:** iteration 5 · **Amended:** iterations 7, 60
 
 ### A corrupt registry is proven to stop the store, not proven to stop the server
 - **Kind:** partial-coverage
@@ -2024,7 +2037,13 @@ module's own tests and end to end against the real binary reading a store off di
   a route through a transitive-only step survives the JSON round trip.
 - **Opened:** iteration 36
 
-### Label matching neither case-folds nor normalises, so real thesaurus labels are unfindable
+### ~~Label matching neither case-folds nor normalises, so real thesaurus labels are unfindable~~ — CLOSED, iteration 60
+- **Closed by** `adr/0052`: matching now goes through `openbiz_skos::fold`, the Unicode §3.13
+  canonical caseless form (D145). `STRASSE` finds `Straße`, `οδόσ` finds `ΟΔΌΣ`, and the two
+  encodings of an accented character find each other. The two tests that asserted the miss are
+  inverted and a third pins the line matching must *not* cross. What remains — accent stripping,
+  transliteration, stemming — is deliberate and recorded below as its own entry, not as a residue
+  of this one.
 - **Kind:** partial-standard
 - **What is proven:** matching is full Unicode lowercasing on both sides (`str::to_lowercase`), not
   ASCII, and tests cover French, Greek, and the context-sensitive final sigma. Both gaps are pinned
@@ -2761,7 +2780,14 @@ module's own tests and end to end against the real binary reading a store off di
   public registry and reports what the trait made awkward.
 - **Opened:** iteration 54
 
-### Discovery matches lexically, so a differently spelled or accented term is still invisible
+### ~~Discovery matches lexically, so a differently spelled or accented term is still invisible~~ — half closed, iteration 60
+- **Closed by** `adr/0052` for the two halves this entry named as fixable: case folding and
+  normalisation. The proof is at the level the entry said mattered — `openbiz mint` itself, not the
+  matcher underneath it — in `a_term_typed_without_its_sharp_s_still_stops_the_mint` and
+  `a_term_typed_with_the_other_encoding_of_its_accent_still_stops_the_mint`.
+- **Still open, and deliberately so:** transliteration, stemming, and `adr/0003` §6's structural and
+  near-duplicate matching. The first two are now recorded as a decision rather than a gap (below);
+  the third is still a Phase 12 item and a larger question.
 - **Kind:** partial-standard
 - **What is proven:** that matching is case-insensitive over Unicode, covers all three SKOS label
   kinds and every language, and matches anywhere inside a label — and that the report states each
@@ -3097,3 +3123,77 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** a human opening the page, or a Playwright screenshot for a human to look
   at later.
 - **Opened:** iteration 59
+
+### D145's outer normalisation pass has no test that fails without it
+- **Kind:** partial-coverage
+- **What is proven:** that `fold` implements the Unicode Standard §3.13 D145 form as written —
+  NFD, then case fold, then NFD — and that the first two passes are load-bearing: a mutation
+  replacing either kills tests immediately.
+- **What is not:** that the **third** pass does anything. Iteration 60 deleted it and the entire
+  suite still passed. A search for a distinguishing input then ran over all 1,112,064 Unicode
+  scalar values alone, and over each of them followed by a combining mark drawn from ten combining
+  classes — 11M sequences — and found **zero** counterexamples.
+- **Why it is still there:** the search was over one- and two-character sequences, not a proof, and
+  the standard defines the form with that pass. Removing a specification's step because a bounded
+  search could not distinguish it is how a subtle bug arrives. The honest state is "kept for
+  conformance, unexercised", not "verified".
+- **What would close it:** either a constructed three-or-more-character input where fold-then-NFD
+  differs from fold alone — most plausibly a fold expansion whose trailing combining mark must
+  reorder against two following marks — or a citation from the standard explaining which case the
+  outer pass exists for, at which point that case becomes the test.
+- **Opened:** iteration 60
+
+### Folding made the unindexed search scan materially more expensive, and only for the vocabularies it was built for
+- **Kind:** partial-coverage
+- **What is proven:** the cost, measured in release by `fold_cost_against_lowercasing` in
+  `fold.rs`. ASCII labels are **free** — 21.5 ns against `to_lowercase`'s 23.4 ns, because the
+  ASCII fast path beats the Unicode-aware mapping it replaced. Accented Latin costs **11.5×**
+  (1419.3 ns against 123.7 ns); Greek **3.05×** (1515.6 ns against 497.6 ns).
+- **What is not:** anything about the effect at vocabulary scale, which is where it bites. Search
+  is already a linear scan of a model rebuilt per request (recorded at iteration 38, still open),
+  and every label read is now folded. At 1419 ns a scan of AGROVOC's measured 1.25M labels spends
+  roughly **1.8 seconds folding alone**, per search. That number is arithmetic over a microbenchmark,
+  not a measurement of a real scan — nothing has run a search over a large multilingual vocabulary.
+- **The shape of it is the uncomfortable part.** The cost falls entirely on non-ASCII labels, which
+  are exactly the corpora this change exists to serve. An English-only deployment pays nothing; a
+  multilingual thesaurus pays for the feature that fixed its matching.
+- **What would close it:** folding each label once when the model is built rather than once per
+  query, which is an indexing change and belongs with the indexing work already recorded; and a
+  measured scan over a large multilingual fixture, which `UNTESTED.md` separately records we do not
+  have (no fixture here is a real extended thesaurus).
+- **Opened:** iteration 60
+
+### Matching's remaining misses are now a decision, and only their happy path is tested
+- **Kind:** partial-standard
+- **What is proven:** that `ecole` does not find `École`, `okologie` does not find `Ökologie`,
+  `color` does not find `colour`, and `schools` does not find `School` — each asserted, and each
+  the deliberate line of `adr/0052` §4 rather than an oversight. Also that `Energie` does not stop
+  a mint for a store holding `Énergie`, so the boundary holds where a false positive would cost a
+  merge.
+- **What is not:** that the decision is right for a real cataloguer. It rests on an argument —
+  that a false positive on the creation path is worse than a false negative, because a merge is
+  harder to undo than a duplicate — and nobody has watched a curator hit it. The competing reading
+  is that a French or German user typing without diacritics is *the* common case on a QWERTY
+  keyboard, and that they will conclude the term does not exist. The product's answer is
+  `skos:hiddenLabel`, which requires the cataloguer to have anticipated the spelling; nothing
+  measures how often they do.
+- **What would close it:** a person using discovery against an accented vocabulary, which is the
+  fourth distinct question now stacked behind "one human, one session, one look".
+- **Opened:** iteration 60
+
+### The fold seam is enforced for this crate's own source and nothing else
+- **Kind:** partial-coverage
+- **What is proven:** `nothing_outside_this_module_reaches_for_unicode_case_or_normalisation` reads
+  `openbiz-skos/src` and fails if `caseless::`, `unicode_normalization`, `default_case_fold` or an
+  `.nfd()`-family call appears outside `fold.rs`. A mutation adding one elsewhere in the crate is
+  caught. This is the guard this file proposed for the wall-clock seam, written for the first time.
+- **What is not:** anything outside `openbiz-skos`. Another crate may add `unicode-normalization`
+  to its own manifest and fold differently, and this test will not see it — it reads one directory
+  and it is not recursive, so a future `src/` subdirectory is invisible to it too. It also cannot
+  catch the more likely drift, which is not a second folding call but a comparison that skips
+  folding entirely and uses `==` or `to_lowercase` on label text.
+- **What would close it:** a workspace-wide check, most naturally in `deny.toml`'s `[bans]` with
+  `caseless` and `unicode-normalization` permitted only for `openbiz-skos`; and, for the second
+  half, making `LexicalLabel`'s text unavailable for direct comparison rather than merely
+  discouraged.
+- **Opened:** iteration 60

@@ -4479,3 +4479,102 @@ look competent disables the one signal that catches a stuck loop.
   page, which is the third distinct thing this loop has now stacked up behind "one human, one
   session, one look" — the other two being whether a curator shown "STOP" acts on it, and whether
   the reuse ladder reads as a mechanism.
+
+## Iteration 60 — 2026-08-20 (NZST, UTC+12)
+- **Clean start, verified rather than assumed.** `main` at `5f96380`, tree clean, and the CI run for
+  that exact SHA was `success` — read from `gh run list --branch main`, not from iteration 59's
+  claim. Both human inboxes empty: `promote-queue.json` is `[]` and `feedback.md` is zero bytes.
+  Iteration 37's LCGFT fixture is unpromoted for the twenty-fourth iteration.
+- **Every tenth iteration is a blind-spot pass, so no plan item was taken.** The target was the
+  oldest load-bearing entry in `UNTESTED.md`: label matching neither case-folded nor normalised,
+  recorded at iteration 38 for `openbiz search` and again at iteration 54 for discovery. Both had
+  sat for twenty-two iterations behind the same sentence — *"a dependency decision, which is why it
+  was not taken inside a feature"* — which is exactly the kind of blocker a blind-spot pass exists
+  to break, because no feature item will ever be the right moment for it.
+- **Why this one and not a prettier one.** `str::to_lowercase` is a case *mapping*: `ß` lowercases
+  to itself, so `STRASSE` did not find `Straße` — and `ss` is the ASCII convention German authoring
+  uses, so it is the *likelier* spelling to be typed. The same matcher backs `openbiz mint`'s
+  discovery pass, where a miss is not an empty result the user retries. It is the report saying
+  "nothing discovery reached is called this", followed immediately by a fresh IRI. The anti-silo
+  feature was generating silos, in the one language whose convention guarantees it.
+- **The dependency decision, with what was measured.** `caseless` 0.2.2 (MIT) and
+  `unicode-normalization` 0.1.25 (MIT OR Apache-2.0), both from `unicode-rs`: **four crates total**
+  including `tinyvec`, both licences **already on the allow list** so `deny.toml` is untouched, and
+  the fold table is **CaseFolding-16.0.0**, checked rather than assumed via `caseless::UNICODE_VERSION`
+  — a stale table was the specific risk in a crate sitting at 0.2.x. **ICU4X was rejected on §1.5**:
+  it is the standards-native answer and the Unicode Consortium's own, and it brings six-plus crates
+  and baked data for one string operation. Recorded as reopenable the day we need collation or
+  segmentation. `adr/0052`.
+- **One seam, and this time enforced rather than intended.** Everything goes through
+  `openbiz_skos::fold`. A test reads the crate's own `src` and fails if `caseless::`,
+  `unicode_normalization` or an `.nfd()`-family call appears in any file but `fold.rs` — the guard
+  `UNTESTED.md` proposed for the wall-clock seam at iteration 55 and nobody had written. Not
+  hypothetical: this crate already ships two correct spellings of case-insensitivity
+  (`to_lowercase` for matching, `to_ascii_lowercase` for BCP 47 tags), and a third added casually is
+  a matcher that disagrees with the first about whether two labels are the same term.
+- **The pinning tests were inverted, and a third was added pointing the other way.** With folding
+  in, the risk has flipped direction: the next plausible improvement is stripping accents, which
+  would tell a curator that `Energie` and `Énergie` are the same term and invite a merge nobody
+  asked for. `ecole` must keep not finding `École`, and now a test says so — including at the mint
+  level, where a false STOP is more expensive than the false miss it replaces.
+- **I destroyed my own uncommitted work mid-iteration and had to redo it.** The mutation harness
+  restored with `git checkout -- crates/`, which reverted the mutation *and* every tracked edit of
+  this iteration. Only the untracked `fold.rs` survived. The tell was a mutation "surviving" that
+  could not possibly survive; the diagnosis was `git status` showing a clean `crates/`. Redone from
+  the same scripts, then the harness switched to a `tar` snapshot. Worth recording because the
+  failure mode is a *false green*, not a lost file: had the reverted mutation been the last step,
+  the iteration would have reported a passing suite for code it had thrown away.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1215 Rust tests, 0 failed**, up from 1202: thirteen new — nine in the new
+  `fold` module including the seam guard, one net in `search`, three end to end in `openbiz-server`.
+  UI untouched, so no npm run. Four crates added, nothing vendored, no build artefact.
+- **Mutation-checked, and one survived.** Six reversions: lowercasing the query side, lowercasing
+  the label side, compatibility folding instead of canonical, an ASCII fast path that stops
+  lowercasing, and a second folding call site elsewhere in the crate — all killed. **Dropping
+  D145's outer NFD pass survived the entire suite.** A search then ran for an input that would
+  distinguish it: all 1,112,064 Unicode scalar values alone and each followed by a combining mark
+  from ten combining classes, 11M sequences, **zero counterexamples**. It is kept because it is the
+  specification's definition, and recorded as unexercised rather than as covered.
+- **What it cost, measured rather than asserted.** ASCII is **free** — 21.5 ns a label against
+  `to_lowercase`'s 23.4, because the fast path beats the Unicode-aware mapping it replaced, and its
+  equivalence to the general path is checked character by character across the whole range rather
+  than argued. Accented Latin costs **11.5×** and Greek **3.05×**. The shape is the uncomfortable
+  part: the entire cost falls on non-ASCII labels, which are exactly the corpora the change exists
+  to serve. An English-only deployment pays nothing; a multilingual thesaurus pays for the fix to
+  its own matching, on a scan already recorded as linear and unindexed.
+- **And the pass found something larger by running the binary, which is the third time that has
+  paid.** I built `openbiz` to check the new report wording against a German fixture and never got
+  that far: `openbiz import` — the first step the CLI's own help describes — answers `no graph is
+  registered at <iri>`, and **nothing in the product registers one.** No `openbiz create`, and
+  `/api/graphs` is `get` only. `Store::create_vocabulary_graph` is called exclusively from tests, so
+  a new deployment cannot be given its first vocabulary by any supported means. This is recorded —
+  `UNTESTED.md` has carried it since iteration 5 — but the entry's reasoning has expired without
+  anyone noticing: it was deliberate because §1.7 needs discovery before creation and
+  `DiscoveryProvider` did not exist, and its stated unblocking condition was "the Phase 2 authoring
+  path with its local discovery hook". Phase 2 is 33 of 34 and that hook has existed since roughly
+  iteration 46. The gap has outlived its own justification by fourteen iterations. Amended in place
+  and written to `PROPOSED.md` unpromoted, because the real work is §1.7 at *vocabulary* level
+  rather than the route, and that should not be settled by whoever adds the endpoint.
+- **Recorded:** `adr/0052`. Two `UNTESTED.md` entries **closed** (iteration 38's, and iteration 54's
+  down to its deliberate remainder) and four opened, which is the honest half: the unexercised outer
+  NFD; the folding cost against an unindexed scan, where the 1.8 s figure for a 1.25M-label corpus
+  is arithmetic over a microbenchmark and not a measured scan; the remaining misses being a decision
+  no cataloguer has been watched hitting; and the seam guard covering one crate, one directory,
+  non-recursively, and not catching the likelier drift of a comparison that skips folding entirely.
+  `BUILD-PLAN.md` and `CAPABILITIES.md` updated; three report texts that overstated our reach were
+  rewritten. No plan item checked off — a blind-spot pass takes none. Nothing self-promoted.
+- **Still uncertain:** whether closing the gap in the matcher closes it for the user, because the
+  fix and the remaining miss have opposite audiences. A German cataloguer typing `Strasse` is now
+  served. A French one typing `ecole` still gets "nothing matched", and my argument for why that is
+  correct — a false positive on the creation path invites an irreversible merge — is an argument
+  about which error is cheaper for the *organisation*, made without ever having watched the person
+  who eats the other one. The product's answer is `skos:hiddenLabel`, which requires the cataloguer
+  to have anticipated the spelling, and nothing measures how often they do. I am also newly unsure
+  whether this loop can tell a load-bearing gap from a tractable one: this entry sat twenty-two
+  iterations not because it was hard — it was a day's work behind a dependency decision — but
+  because it never belonged to any item, and I have no reason to believe it is the only one of
+  those — and the registration finding above is the proof rather than the worry, since it is a
+  deferral whose condition was met fourteen iterations ago in a file I read at the start of every
+  run. Nothing re-reads a deferral to ask whether the thing it waited for has arrived. That is now
+  the fourth question stacked behind "one human, one session, one look".

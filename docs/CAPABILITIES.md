@@ -168,8 +168,11 @@ Three distinctions the reports keep that most tools blur:
 holds. It matches preferred, alternative **and hidden** labels — the last because SKOS §5.1 justifies
 that property in terms of text search — with RFC 4647 basic language filtering, and every default set
 to the forgiving one: a search that finds nothing is precisely how a duplicate concept gets created.
-Narrowing is explicit, and two options that narrow the same thing are refused rather than resolved
-last-wins ([`adr/0034`](adr/0034-searching-labels-is-forgiving-by-default-and-says-what-it-did-not-do.md)).
+Text is compared as the Unicode Standard defines caseless matching, not by lowercasing — so
+`STRASSE` finds `Straße`, `οδόσ` finds `ΟΔΌΣ`, and the two ways of encoding an accented character
+find each other ([`adr/0052`](adr/0052-matching-folds-case-and-normalises.md)). Narrowing is
+explicit, and two options that narrow the same thing are refused rather than resolved last-wins
+([`adr/0034`](adr/0034-searching-labels-is-forgiving-by-default-and-says-what-it-did-not-do.md)).
 
 **A retired concept reads as retired everywhere** — `tree`, `ancestors`, `paths`, `search` and
 `inspect` all know what `owl:deprecated` means. The decision is **show and mark, never hide**:
@@ -422,8 +425,11 @@ summarised into comfort. The ones that would most affect an evaluation:
   polyhierarchy peaked at **8.2 GiB**. That is measured, recorded, and not yet fixed.
 - **Search does not scale.** Every search is a linear scan of a model rebuilt per request. Nothing
   indexes anything.
-- **Label matching ignores case but not accents, spelling, or Unicode normalisation**, so real
-  thesaurus labels can be unfindable.
+- **Label matching folds case and normalises Unicode** (Unicode §3.13 canonical caseless, so
+  `STRASSE` finds `Straße`), but **does not strip accents or correct spelling** — `ecole` does not
+  find `École`. That last is a decision, not a gap: on the creation path a false match invites a
+  merge nobody asked for. It is also the miss a French or German user typing without diacritics
+  will hit, and nobody has watched one hit it.
 - **Several bounds are judgements, not measurements.** The constants that stop a walk, a search, or
   a slug search are named in `UNTESTED.md` with what has and has not been measured against each.
 - **No fixture here is a real extended thesaurus.** Everything is generated or hand-written.
