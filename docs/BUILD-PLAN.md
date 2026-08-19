@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), **19 of 23 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **And the pattern is now a recorded decision rather than a reading of the vocabulary that moves as the vocabulary does**: `openbiz policy` writes one down, attributed, in the system graph and never in the vocabulary, and `openbiz mint` takes the first of `--pattern`, the record, then inference — refusing a recorded pattern it cannot parse rather than falling back to a namespace nobody chose (`adr/0036`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **20 of 26 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). 26 is 23 plus the three items iteration 42 split the bulk-operations line into; the numerator went up by one because that iteration closed the first of the four. **And a vocabulary's hierarchy can now be changed, not only read**: `openbiz move` re-parents a concept and everything below it as **one** candidate that both removes and adds, because approving half of a move would leave a branch hanging off nothing — the first producer of a two-halved candidate, and what closes the "no production caller" entry the seam has carried since iteration 18 (`adr/0037`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **And the pattern is now a recorded decision rather than a reading of the vocabulary that moves as the vocabulary does**: `openbiz policy` writes one down, attributed, in the system graph and never in the vocabulary, and `openbiz mint` takes the first of `--pattern`, the record, then inference — refusing a recorded pattern it cannot parse rather than falling back to a namespace nobody chose (`adr/0036`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -1205,7 +1205,39 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > exactly one producer today, because nothing else mints yet; a replaced policy is not kept,
       > so there is no history of the decision; and the policy does not travel with a
       > single-vocabulary export, only with a whole-store backup, which is tested.
-- [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement
+- [x] **Bulk operations, part 1 — move a subtree:** re-parent a concept, and everything below it,
+      as one candidate that both removes and adds
+      > Split in place at iteration 42: the original item named four operations — merge, split,
+      > move, deprecate — which share a producer and share nothing else. Move is first because it
+      > is the smallest of the four that needs **both** halves of the candidate seam, so it is what
+      > builds and proves the producer the other three then use.
+      >
+      > `openbiz move <graph> <concept> <to> [--from <parent>]` computes the change and stages it
+      > as one candidate; `openbiz approve` applies both halves in one transaction. The concepts
+      > below the moved one are not rewritten — they are below it by their own links — so a
+      > two-statement diff moves a whole branch, and the report says how many concepts that is
+      > before it shows the diff. The direction each link is stated in is preserved (S25), so a
+      > vocabulary authored in `skos:narrower` stays that way. `Store::propose_edit` is the store
+      > half: computed statements rather than a parsed stream, distinct-counted, with a literal
+      > subject refused rather than mapped. See `adr/0037`.
+      >
+      > **Refuses**, each because the result would be consistent SKOS that nobody wanted: a move
+      > into the concept itself or into anything below it (§8.6.8 says a cycle is consistent, so
+      > nothing else catches it); a polyhierarchic concept with no `--from` to say which link is
+      > being replaced; a concept with no broader concept at all, which is a different operation;
+      > a directly-stated `skos:broaderTransitive` link to the parent being left, which a move does
+      > not remove; and a subtree too large to walk, because an incomplete walk cannot prove there
+      > is no cycle.
+      >
+      > **Scope, honestly:** three `UNTESTED.md` entries — a move cannot give a concept its *first*
+      > parent and so cannot demote a top concept; a directly-stated transitive link to a
+      > non-adjacent ancestor is not looked at; and the subtree count is measured on nothing
+      > larger than a handful of concepts.
+- [ ] Bulk operations, part 2 — merge two concepts into one, with every reference repointed
+- [ ] Bulk operations, part 3 — split one concept into several
+- [ ] Bulk operations, part 4 — deprecate with replacement
+      > Overlaps the deprecation-lifecycle item below and should be taken with it or folded into
+      > it; recorded separately here because the original item named it.
 - [ ] Deprecation lifecycle preserving history rather than deleting — auditors need the trail
 - [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation
       > The hook lands here so the creation path is **built around discovery** rather than

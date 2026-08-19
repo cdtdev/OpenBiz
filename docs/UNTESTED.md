@@ -248,24 +248,18 @@ Do not delete it — the record of what took how long to close is the signal.
   since. See `adr/0018`. The narrower gap that remains — nothing raises a candidate carrying *both*
   halves — is its own entry below.
 
-### Nothing produces a candidate that both adds and removes
+### ~~Nothing produces a candidate that both adds and removes~~ — CLOSED, iteration 42
 - **Kind:** no-production-caller
-- **What is proven:** each half on its own, end to end through the real binary. `openbiz import`
-  raises additions; `openbiz retract` raises removals; both are staged, reviewed, applied, and
-  refused where they should be. `apply_payload` handles the two halves independently, so neither
-  branch is dead — each runs on every candidate of its kind.
-- **What is not:** a candidate holding **both**, which is what a merge, a move, or a deprecation
-  actually is: "these statements go, those arrive", as one decision a reviewer takes once. The
-  record carries both counts and both graphs, and `read_record` enforces the invariants for both,
-  but no producer makes one, so the *combination* has never existed. Specifically untested: that
-  applying a candidate with both halves does both, and the removals-before-additions order that
-  `apply_payload` documents — which is only observable for a statement staged in both halves, so
-  nothing today can observe it.
-- **Why it was not built anyway:** a producer with no caller is the failure `CLAUDE.md` §4 names,
-  and the callers are real items — the bulk operations later in Phase 2. The interface shape is
-  what had to exist first, and it does.
-- **What would close it:** the first bulk operation (merge, deprecate, or move a subtree), which
-  should arrive with a test that both halves land and that a statement in both survives.
+- **Closed by the first bulk operation.** `openbiz move` raises a candidate with both halves
+  through `Store::propose_edit`, and it is proven the way this entry asked. Both halves land:
+  asserted end to end against the real binary, by taking a backup after the approval and reading
+  the two statements off it rather than out of the code that wrote them. The
+  removals-before-additions order `apply_payload` documents is pinned by a store test staging **one
+  statement in both halves** — the only shape that can observe the order, and one no producer in
+  this build computes, so it is a promise the record makes rather than a path anything walks.
+  See `adr/0037`.
+- **What replaced it, and it is not nothing:** the three entries below on what `openbiz move` does
+  not do. The seam is exercised; the *operation* has a bounded scope.
 - **Opened:** iteration 18
 
 ### The addition and removal counts count parsed statements, not distinct ones
@@ -2215,3 +2209,63 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** either that export mode, or a warning on import that the arriving
   vocabulary has no recorded policy — the second being cheap and worth considering first.
 - **Opened:** iteration 41
+
+### `openbiz move` cannot give a concept its first parent, so it cannot demote a top concept
+- **Kind:** known-absence
+- **What is proven:** the move refuses a concept with no broader concept, in as many words, and
+  points at `openbiz import` as the way to do it today. A concept that is *both* a top concept and
+  has a broader concept is moved and the report names the schemes it is a top concept of, asserted
+  in `relocate.rs`'s own tests.
+- **What is not:** there is no operation that gives a concept its first broader concept, and
+  therefore no place where "and it stops being a top concept" could be implemented. A curator
+  building a hierarchy out of a flat imported vocabulary — which is the ordinary way a first
+  thesaurus arrives — cannot use `openbiz move` for the first level at all.
+- **Why it was not built here:** two reasons, and the second is the harder one. It is a different
+  operation with different refusals, and the item was already split four ways. And the core model
+  closes S8 into both `Resource::top_concept_of` and `Resource::has_top_concept` **without
+  recording which direction the graph asserted**, so a demotion cannot compute a removal that is
+  guaranteed to be present — `propose_retraction`'s presence check would refuse half of them. That
+  is a model gap, not a command gap, and fixing it touches every report that reads top concepts.
+- **What would close it:** origin tracking on the top-concept sets, the way `RelationOrigin` does
+  it for semantic relations, and then a "set the broader concept" operation that removes the
+  top-concept statements the graph actually carries.
+- **Opened:** iteration 42
+
+### A directly-stated transitive link to a *non-adjacent* ancestor survives a move unexamined
+- **Kind:** partial-coverage
+- **What is proven:** a `skos:broaderTransitive` or `skos:narrowerTransitive` link stated directly
+  between the concept and the parent it is leaving is refused, in both directions, and the entailed
+  transitive link S22 lifts from `skos:broader` is correctly *not* refused — all three asserted.
+- **What is not:** a graph stating `<concept> skos:broaderTransitive <grandparent>` directly. The
+  move does not look at it, does not remove it, and does not mention it; after the move the concept
+  is still under its old grandparent by S24 while the report says it moved. This is the same defect
+  the adjacent-link refusal exists to prevent, one step further up, and nothing tests either way.
+- **Why it was not handled:** it is genuinely ambiguous what the author meant. A direct transitive
+  link to a distant ancestor may be a deliberate assertion about a relationship the one-step links
+  do not carry, in which case removing it is wrong; or it may be stale, in which case leaving it is
+  wrong. The adjacent case has no such ambiguity, which is why that one is refused.
+- **What would close it:** a decision on what a direct transitive link to a non-adjacent ancestor
+  means, and then either a refusal or a line in the report naming the ones that will survive.
+  Reporting them is the cheaper half and would close the *silence*, which is the worse part.
+- **Opened:** iteration 42
+
+### The subtree count a move quotes has never been run against a large subtree
+- **Kind:** unproven-at-scale
+- **What is proven:** the count is the length of the same bounded downward walk that does the cycle
+  check, so the two cannot disagree; that the walk stopping at its bound refuses the move rather
+  than reporting an unchecked one, asserted with a bound of one node; and the count itself on
+  subtrees of nought and one concept.
+- **What is not:** the number in the sentence a reviewer actually reads before approving. Every
+  fixture here has a handful of concepts. `WalkBound::DEFAULT` going down is a ceiling an ordinary
+  large vocabulary *reaches* — `tree.rs`'s own module note says so, and there is a separate entry
+  above about exactly that — so a move of a top concept in a 100 000-concept thesaurus is likely to
+  be **refused** by decision 6 of `adr/0037` rather than reported. That is the honest behaviour and
+  it may also be a product limit nobody has measured: the operator most likely to want a subtree
+  move is the one with the largest subtree.
+- **Why it was not measured here:** `openbiz-skos`'s scale harness generates hierarchies and would
+  answer this, and the item was already at its size. The measurement is a separate, cheap piece of
+  work.
+- **What would close it:** running the existing generator at 10k/100k/1M and recording where the
+  refusal starts, then deciding whether the downward bound a move uses should be its own number
+  rather than `WalkBound::DEFAULT`.
+- **Opened:** iteration 42

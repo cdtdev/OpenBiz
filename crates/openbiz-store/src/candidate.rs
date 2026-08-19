@@ -52,29 +52,30 @@
 //!
 //! # Scope of this build
 //!
-//! Every candidate today has exactly one of its two halves: `openbiz import` raises additions and
-//! `openbiz retract` raises removals. A candidate carrying *both* — which a move or a deprecation
-//! wants — is expressible in the record and in the apply path, and nothing produces one yet; the
-//! producers are the bulk operations later in `docs/BUILD-PLAN.md`. That gap is recorded in
-//! `docs/UNTESTED.md` rather than papered over.
+//! A candidate raised from a *file* has exactly one of its two halves, because a file is one half:
+//! `openbiz import` raises additions and `openbiz retract` raises removals. A candidate carrying
+//! **both** is what a bulk operation raises, through [`Store::propose_edit`], which takes computed
+//! statements rather than a stream — `openbiz move` is its first producer and the rest of the bulk
+//! operations in `docs/BUILD-PLAN.md` are the others. Everything a producer is allowed to compute
+//! is checked here rather than trusted, because a computed statement has had no parser look at it.
 //!
 //! Approval applies immediately, so the terminal states are [`CandidateState::Applied`] and
 //! [`CandidateState::Rejected`] rather than an "approved but not yet applied" limbo. When Phase 6
 //! gives approval a workflow of its own, that limbo becomes real and gets its own state; naming a
 //! state today that nothing can produce would be a claim about a capability we do not have.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 
 use oxigraph::io::RdfParser;
 use oxigraph::model::vocab::{rdf, xsd};
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
+use oxigraph::model::{BlankNode, GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term};
 use oxsdatatypes::DateTime;
 use thiserror::Error;
 
 use crate::{
-    named_node, CandidatePart, GraphId, GraphKind, RdfSyntax, RegistryReader, Store, StoreError,
-    Transaction,
+    named_node, CandidatePart, GraphId, GraphKind, RdfSyntax, RegistryReader, StatementRef,
+    StatementTerm, Store, StoreError, Transaction,
 };
 
 /// The class every candidate's record is typed with, in the system graph.
@@ -658,6 +659,155 @@ impl Store {
         })
     }
 
+    /// Propose a change that both adds and removes, computed rather than read from a file.
+    ///
+    /// The half of the seam a *bulk operation* needs. `openbiz import` and `openbiz retract` each
+    /// carry one half because a file is one half; a move, a merge, a split, and a deprecation are
+    /// each "these statements go, those arrive" — **one decision a reviewer takes once**, not two
+    /// candidates that must be approved in the right order and that leave the vocabulary in a
+    /// state nobody proposed if only the first one lands.
+    ///
+    /// The statements arrive already computed, in [`StatementRef`], because the producer is an
+    /// operation over the vocabulary's own model rather than a stream of bytes. Nothing is parsed
+    /// here and no base IRI applies: the caller has already decided exactly which statements it
+    /// means.
+    ///
+    /// # What it refuses
+    ///
+    /// - **A target that is not a registered vocabulary**, for the reason
+    ///   [`Store::propose_import`] gives: a proposal is not a way to create a vocabulary behind
+    ///   `CLAUDE.md` §1.7's back.
+    /// - **A removal the vocabulary does not hold**, for the reason [`Store::propose_retraction`]
+    ///   gives, and by the same check — a proposal whose reviewed effect and actual effect differ
+    ///   is worse than no proposal.
+    /// - **A change that neither adds nor removes anything.** An operation that computed no
+    ///   statements decided nothing, and [`read_record`] treats such a record as corrupt, so it
+    ///   must not be writable in the first place.
+    /// - **A literal in subject position**, which RDF does not have. Unreachable through this
+    ///   crate's own reads, and refused rather than mapped to something adjacent because a caller
+    ///   that computed one has a bug the store should not smooth over.
+    ///
+    /// Blank nodes are taken exactly as given, in **both** halves — the removals for the reason
+    /// [`Store::propose_retraction`] gives, and the additions because a computed change refers to
+    /// the graph it was computed from, so renaming them would break the reference an import's
+    /// renaming exists to protect.
+    pub fn propose_edit(
+        &self,
+        target: &GraphId,
+        additions: &[StatementRef<'_>],
+        removals: &[StatementRef<'_>],
+        provenance: &Provenance,
+    ) -> Result<Candidate, StoreError> {
+        provenance.validate()?;
+
+        if target.kind() != GraphKind::Vocabulary {
+            return Err(StoreError::CandidateTargetNotVocabulary {
+                iri: target.iri().to_owned(),
+                kind: target.kind(),
+            });
+        }
+        if additions.is_empty() && removals.is_empty() {
+            return Err(StoreError::CandidateEmpty);
+        }
+
+        self.transaction(|txn| {
+            if !txn.contains_graph(target.iri())? {
+                return Err(StoreError::NoSuchGraph {
+                    iri: target.iri().to_owned(),
+                });
+            }
+
+            let id = next_candidate_id(txn)?;
+            let target_name: GraphName = NamedNode::new_unchecked(target.iri()).into();
+
+            // Removals first, so a stale one is refused before any addition has been staged. The
+            // transaction would roll the staging back either way; doing it in this order means the
+            // *reason* the caller gets back is the interesting one rather than whichever check
+            // happened to run first.
+            let mut absent: u64 = 0;
+            let mut example: Option<String> = None;
+            let removal_graph = GraphId::candidate(&id, CandidatePart::Removals);
+            // The counts are of *distinct* statements, because a computed change is a set: an
+            // operation that named the same statement twice would otherwise report a number one
+            // greater than the diff a reviewer reads. The file paths cannot do this cheaply and
+            // say so in `docs/UNTESTED.md`; here the whole change is already in memory, so the
+            // seen-set costs nothing and the order the producer chose is kept for the diff.
+            let mut seen: HashSet<Quad> = HashSet::new();
+            let mut distinct_removals: Vec<Quad> = Vec::with_capacity(removals.len());
+            for statement in removals {
+                let quad = quad_of(statement, &target_name)?;
+                if !txn.contains_quad(&quad)? {
+                    absent += 1;
+                    example.get_or_insert_with(|| quad.to_string());
+                    continue;
+                }
+                let staged = restage(&quad, &removal_graph);
+                if seen.insert(staged.clone()) {
+                    distinct_removals.push(staged);
+                }
+            }
+            if absent > 0 {
+                return Err(StoreError::RetractionNotPresent {
+                    target: target.iri().to_owned(),
+                    absent,
+                    example: example.unwrap_or_default(),
+                });
+            }
+
+            let addition_graph = GraphId::candidate(&id, CandidatePart::Additions);
+            let mut seen: HashSet<Quad> = HashSet::new();
+            let mut distinct_additions: Vec<Quad> = Vec::with_capacity(additions.len());
+            for statement in additions {
+                let quad = quad_of(statement, &target_name)?;
+                let staged = restage(&quad, &addition_graph);
+                if seen.insert(staged.clone()) {
+                    distinct_additions.push(staged);
+                }
+            }
+
+            let additions_count = distinct_additions.len() as u64;
+            let removals_count = distinct_removals.len() as u64;
+
+            // A half with no statements gets no graph and no count, because `read_record` holds
+            // "names a graph" and "has a non-zero count" to be one fact written twice.
+            let payload = if distinct_additions.is_empty() {
+                None
+            } else {
+                for batch in distinct_additions.chunks(STAGE_BATCH) {
+                    txn.extend_graph(&addition_graph, batch)?;
+                }
+                txn.register(&addition_graph)?;
+                Some(addition_graph)
+            };
+            let removal_payload = if distinct_removals.is_empty() {
+                None
+            } else {
+                for batch in distinct_removals.chunks(STAGE_BATCH) {
+                    txn.extend_graph(&removal_graph, batch)?;
+                }
+                txn.register(&removal_graph)?;
+                Some(removal_graph)
+            };
+
+            let candidate = Candidate {
+                id,
+                target: target.clone(),
+                payload,
+                removal_payload,
+                provenance: provenance.clone(),
+                proposed_at: DateTime::now().to_string(),
+                additions: additions_count,
+                removals: removals_count,
+                state: CandidateState::Proposed,
+                decided_by: None,
+                decided_at: None,
+            };
+            write_record(txn, &candidate)?;
+
+            Ok(candidate)
+        })
+    }
+
     /// Every candidate the store holds, oldest first.
     pub fn candidates(&self) -> Result<Vec<Candidate>, StoreError> {
         let mut ids = Vec::new();
@@ -827,6 +977,91 @@ fn apply_payload(txn: &mut Transaction<'_>, candidate: &Candidate) -> Result<(),
     }
 
     Ok(())
+}
+
+/// One computed statement as a quad in `graph`.
+///
+/// The only thing that can go wrong is a literal in subject position, which RDF does not have and
+/// which no read out of this store can produce — [`StatementRef`] carries the same term type in
+/// both positions because it is the shape a *scan* hands back, where the impossibility is the
+/// backend's to enforce. A caller computing statements has no such guarantee, so it is checked
+/// here and refused rather than mapped to a blank node that would silently be about something
+/// else.
+fn quad_of(statement: &StatementRef<'_>, graph: &GraphName) -> Result<Quad, StoreError> {
+    let subject: NamedOrBlankNode = match statement.subject {
+        StatementTerm::Iri(iri) => NamedNode::new(iri)
+            .map_err(|error| StoreError::CandidateStatementInvalid {
+                detail: format!("{iri} is not a usable IRI in subject position: {error}"),
+            })?
+            .into(),
+        StatementTerm::Blank(label) => BlankNode::new(label)
+            .map_err(|error| StoreError::CandidateStatementInvalid {
+                detail: format!("_:{label} is not a usable blank node label: {error}"),
+            })?
+            .into(),
+        StatementTerm::Literal { value, .. } => {
+            return Err(StoreError::CandidateStatementInvalid {
+                detail: format!(
+                    "{value:?} is a literal in subject position, which RDF does not have"
+                ),
+            })
+        }
+    };
+    let predicate = NamedNode::new(statement.predicate).map_err(|error| {
+        StoreError::CandidateStatementInvalid {
+            detail: format!(
+                "{} is not a usable IRI in predicate position: {error}",
+                statement.predicate
+            ),
+        }
+    })?;
+    let object: Term = match statement.object {
+        StatementTerm::Iri(iri) => NamedNode::new(iri)
+            .map_err(|error| StoreError::CandidateStatementInvalid {
+                detail: format!("{iri} is not a usable IRI in object position: {error}"),
+            })?
+            .into(),
+        StatementTerm::Blank(label) => BlankNode::new(label)
+            .map_err(|error| StoreError::CandidateStatementInvalid {
+                detail: format!("_:{label} is not a usable blank node label: {error}"),
+            })?
+            .into(),
+        StatementTerm::Literal {
+            value,
+            language: Some(language),
+            ..
+        } => Literal::new_language_tagged_literal(value, language)
+            .map_err(|error| StoreError::CandidateStatementInvalid {
+                detail: format!("{language:?} is not a usable language tag: {error}"),
+            })?
+            .into(),
+        StatementTerm::Literal {
+            value,
+            language: None,
+            datatype,
+        } => Literal::new_typed_literal(
+            value,
+            NamedNode::new(datatype).map_err(|error| StoreError::CandidateStatementInvalid {
+                detail: format!("{datatype} is not a usable datatype IRI: {error}"),
+            })?,
+        )
+        .into(),
+    };
+    Ok(Quad::new(subject, predicate, object, graph.clone()))
+}
+
+/// The same statement, in a staging graph instead of the vocabulary.
+///
+/// A removal is checked against the vocabulary and then staged, so it exists twice with two graph
+/// names; building it once and moving it means the thing checked and the thing staged cannot drift
+/// apart.
+fn restage(quad: &Quad, graph: &GraphId) -> Quad {
+    Quad::new(
+        quad.subject.clone(),
+        quad.predicate.clone(),
+        quad.object.clone(),
+        NamedNode::new_unchecked(graph.iri()),
+    )
 }
 
 /// The next identifier to mint, one past the highest the store holds.
@@ -2515,5 +2750,247 @@ mod tests {
             .decide(candidate.id(), Decision::Approve, "ada@example.org")
             .expect("approve after a restore");
         assert_eq!(statements(&restored, &graph).len(), 4);
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Both halves at once: what a bulk operation raises, through `propose_edit`.
+    // ----------------------------------------------------------------------------------------
+
+    fn edit_provenance() -> Provenance {
+        Provenance {
+            source: CandidateSource::BulkEdit,
+            agent: "ada@example.org (openbiz move)".to_owned(),
+            note: "moved the cat under carnivore".to_owned(),
+            confidence: None,
+        }
+    }
+
+    const CAT: &str = "https://example.org/animals/cat";
+    const MAMMAL: &str = "https://example.org/animals/mammal";
+    const CARNIVORE: &str = "https://example.org/animals/carnivore";
+    const BROADER: &str = "http://www.w3.org/2004/02/skos/core#broader";
+
+    /// `<subject> <predicate> <object>`, all three IRIs, which is every statement a move computes.
+    fn link<'a>(subject: &'a str, predicate: &'a str, object: &'a str) -> StatementRef<'a> {
+        StatementRef {
+            subject: StatementTerm::Iri(subject),
+            predicate,
+            object: StatementTerm::Iri(object),
+        }
+    }
+
+    /// The shape of the whole feature: one candidate, two halves, applied as one decision.
+    #[test]
+    fn a_computed_change_stages_both_halves_and_applies_both() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let candidate = store
+            .propose_edit(
+                &graph,
+                &[link(CAT, BROADER, CARNIVORE)],
+                &[link(CAT, BROADER, MAMMAL)],
+                &edit_provenance(),
+            )
+            .expect("a move is proposable");
+
+        assert_eq!(candidate.additions(), 1);
+        assert_eq!(candidate.removals(), 1);
+        assert_eq!(statements(&store, additions_graph(&candidate)).len(), 1);
+        assert_eq!(statements(&store, removals_graph(&candidate)).len(), 1);
+
+        // Nothing has reached the vocabulary: the old link is still there and the new one is not.
+        let before = statements(&store, &graph);
+        assert!(before.iter().any(|line| line.contains(MAMMAL)));
+        assert!(!before.iter().any(|line| line.contains(CARNIVORE)));
+
+        store
+            .decide(candidate.id(), Decision::Approve, "a reviewer")
+            .expect("approve");
+
+        let after = statements(&store, &graph);
+        assert!(
+            !after.iter().any(|line| line.contains(MAMMAL)),
+            "the removal half must have been applied: {after:?}"
+        );
+        assert!(
+            after.iter().any(|line| line.contains(CARNIVORE)),
+            "the addition half must have been applied: {after:?}"
+        );
+        assert_eq!(
+            after.len(),
+            before.len(),
+            "one statement out and one in leaves the count where it was"
+        );
+    }
+
+    /// The order `apply_payload` documents, and the only shape that can observe it.
+    ///
+    /// A statement in **both** halves is removed and then added back, so it survives. If the two
+    /// halves ever ran the other way round it would be added and then removed, and the vocabulary
+    /// would silently lose a statement the reviewer was told would stay. No producer in this build
+    /// computes such a change; the order is still a promise the record makes, so it is pinned here
+    /// rather than left to the next producer to discover.
+    #[test]
+    fn a_statement_in_both_halves_survives_because_removals_run_first() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let candidate = store
+            .propose_edit(
+                &graph,
+                &[link(CAT, BROADER, MAMMAL)],
+                &[link(CAT, BROADER, MAMMAL)],
+                &edit_provenance(),
+            )
+            .expect("a change that removes and re-adds one statement is expressible");
+        store
+            .decide(candidate.id(), Decision::Approve, "a reviewer")
+            .expect("approve");
+
+        assert!(
+            statements(&store, &graph)
+                .iter()
+                .any(|line| line.contains(MAMMAL)),
+            "removals run before additions, so a statement in both halves stays"
+        );
+    }
+
+    /// A removal the vocabulary does not hold is refused here for the same reason a file's is.
+    #[test]
+    fn a_computed_removal_the_vocabulary_does_not_hold_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let error = store
+            .propose_edit(
+                &graph,
+                &[link(CAT, BROADER, CARNIVORE)],
+                &[link(CAT, BROADER, CARNIVORE)],
+                &edit_provenance(),
+            )
+            .expect_err("a removal of a statement that is not there is refused");
+        assert!(
+            matches!(error, StoreError::RetractionNotPresent { absent: 1, .. }),
+            "{error}"
+        );
+        assert!(
+            store.candidates().expect("readable").len() == 1,
+            "the refusal rolled the whole proposal back, including its identifier"
+        );
+    }
+
+    /// A half with nothing in it gets no graph and no count, because `read_record` pairs them.
+    #[test]
+    fn a_change_that_only_adds_is_a_candidate_with_one_half() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let candidate = store
+            .propose_edit(
+                &graph,
+                &[link(CAT, BROADER, CARNIVORE)],
+                &[],
+                &edit_provenance(),
+            )
+            .expect("proposable");
+        assert_eq!(candidate.removals(), 0);
+        assert!(candidate.removal_payload().is_none());
+        assert_eq!(
+            store.candidate(candidate.id()).expect("readable"),
+            candidate,
+            "the record round-trips, which is what the count-and-graph invariant guards"
+        );
+    }
+
+    /// A proposal to do nothing is refused at the door rather than written and refused on read.
+    #[test]
+    fn a_change_that_neither_adds_nor_removes_is_refused() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let error = store
+            .propose_edit(&graph, &[], &[], &edit_provenance())
+            .expect_err("nothing is not a decision");
+        assert!(matches!(error, StoreError::CandidateEmpty), "{error}");
+        assert_eq!(
+            store.candidates().expect("readable").len(),
+            1,
+            "only the import that seeded the vocabulary; no identifier was burned"
+        );
+    }
+
+    /// The counts are of distinct statements, which is the thing the file paths cannot do cheaply.
+    #[test]
+    fn a_statement_computed_twice_is_counted_once() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let candidate = store
+            .propose_edit(
+                &graph,
+                &[link(CAT, BROADER, CARNIVORE), link(CAT, BROADER, CARNIVORE)],
+                &[link(CAT, BROADER, MAMMAL), link(CAT, BROADER, MAMMAL)],
+                &edit_provenance(),
+            )
+            .expect("proposable");
+        assert_eq!(
+            (candidate.additions(), candidate.removals()),
+            (1, 1),
+            "an RDF graph is a set, so the count a reviewer reads must be of distinct statements"
+        );
+    }
+
+    /// A producer computing statements has had no parser check them, so the store checks.
+    #[test]
+    fn a_statement_rdf_cannot_express_is_refused_rather_than_mapped() {
+        let dir = temp_dir();
+        let (store, graph) = store_with_content(&dir);
+
+        let literal_subject = StatementRef {
+            subject: StatementTerm::Literal {
+                value: "Cat",
+                language: Some("en"),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+            },
+            predicate: BROADER,
+            object: StatementTerm::Iri(CARNIVORE),
+        };
+        let error = store
+            .propose_edit(&graph, &[literal_subject], &[], &edit_provenance())
+            .expect_err("a literal in subject position is not RDF");
+        assert!(
+            matches!(error, StoreError::CandidateStatementInvalid { .. }),
+            "{error}"
+        );
+
+        let not_an_iri = link(CAT, "not a predicate IRI", CARNIVORE);
+        let error = store
+            .propose_edit(&graph, &[not_an_iri], &[], &edit_provenance())
+            .expect_err("a predicate that is not an IRI is refused");
+        assert!(
+            matches!(error, StoreError::CandidateStatementInvalid { .. }),
+            "{error}"
+        );
+    }
+
+    /// The same refusal `propose_import` gives, because a computed change is not a way around it.
+    #[test]
+    fn a_computed_change_against_a_graph_that_is_not_a_vocabulary_is_refused() {
+        let dir = temp_dir();
+        let (store, _) = store_with_content(&dir);
+
+        let error = store
+            .propose_edit(
+                &GraphId::system(),
+                &[link(CAT, BROADER, CARNIVORE)],
+                &[],
+                &edit_provenance(),
+            )
+            .expect_err("OpenBiz's own graphs are not authored");
+        assert!(
+            matches!(error, StoreError::CandidateTargetNotVocabulary { .. }),
+            "{error}"
+        );
     }
 }

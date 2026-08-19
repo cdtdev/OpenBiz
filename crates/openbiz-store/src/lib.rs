@@ -521,6 +521,30 @@ pub enum StoreError {
         state: CandidateState,
     },
 
+    /// A computed change proposed neither an addition nor a removal.
+    ///
+    /// An operation that computed no statements decided nothing, and a record saying so is one
+    /// [`Store::candidate`] refuses to read back. The likeliest cause is an operation whose
+    /// preconditions were all met and whose effect was already in the vocabulary — which the
+    /// operation itself should say, in its own words, rather than raising an empty proposal.
+    #[error(
+        "the change proposes neither an addition nor a removal, and a proposal to do nothing is \
+         not a decision anyone can take"
+    )]
+    CandidateEmpty,
+
+    /// A computed change contained a statement RDF cannot express.
+    ///
+    /// Not reachable from a file — a parser refuses these long before the store sees them — so it
+    /// means a producer computing statements built one wrong. Refused with the detail rather than
+    /// coerced into something adjacent, because the adjacent statement would be about a different
+    /// resource and would land in a vocabulary looking deliberate.
+    #[error("that change contains a statement that is not well-formed RDF: {detail}")]
+    CandidateStatementInvalid {
+        /// Which term was wrong, and why.
+        detail: String,
+    },
+
     /// The backend failed.
     #[error("store backend failed: {0}")]
     Backend(String),

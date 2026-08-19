@@ -3098,3 +3098,83 @@ look competent disables the one signal that catches a stuck loop.
   have been scope this item could not carry — but the argument that I should simply have refused to
   overwrite, and made the second recording an error until history exists, is not one I can dismiss.
   It is in `UNTESTED.md` because I do not think I got it right, only that I got it recorded.
+
+## Iteration 42 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `b4ccfb1`, tree clean, the CI run for
+  that commit already `completed success`, and both human inboxes empty (`promote-queue.json` is
+  `[]`, `feedback.md` is zero bytes). Nothing to drain, so nothing was truncated.
+- **Split the next item in place, and took the first piece.** Phase 2's next unchecked line above
+  it — the candidate seam over HTTP — is recorded in `BLOCKED.md` on authentication and was not
+  re-attempted. The one after it read "Bulk operations: merge concepts, split a concept, move a
+  subtree, deprecate with replacement": four operations that share a producer and share nothing
+  else. Split into four `- [ ]` items; **move a subtree** is first, because it is the smallest of
+  them that needs *both* halves of the candidate seam, so it is what builds and proves the producer
+  the other three will use.
+- **This closes the oldest no-production-caller entry in the ledger.** `UNTESTED.md` has said since
+  iteration 18 that nothing raises a candidate carrying both halves — the record carried both
+  counts and both graphs, `read_record` enforced the invariants for both, `apply_payload` had a
+  branch for each, and the *combination* had never once existed. It is closed the way the entry
+  asked: both halves land, asserted by taking a backup after the approval and reading the two
+  statements off disk, and the removals-before-additions order is pinned by a store test staging
+  **one statement in both halves**, which is the only shape that can observe the order and one no
+  producer here computes.
+- **What shipped.** `openbiz move <graph> <concept> <to> [--from <parent>]` computes the change,
+  stages it as one candidate, and writes nothing to the vocabulary; `openbiz approve` applies both
+  halves in one transaction as it does for everything else. `Store::propose_edit` is the store
+  half — computed `StatementRef`s rather than a parsed stream, distinct-counted, with a literal
+  subject and a malformed IRI refused rather than mapped, because a computed statement has had no
+  parser look at it. `CoreModel::relocate` is the domain half and is pure.
+- **The two decisions I would defend hardest are both about what a move *doesn't* rewrite.** First,
+  **moving a subtree is re-parenting its root**: everything below is below by its own
+  `skos:broader` links, none of which mention the parent being left, so forty thousand concepts
+  move on two statements. That makes the report's job the opposite of a diff viewer's — the count
+  of what moves is printed *before* the diff, because a report showing only the diff would be
+  accurate and useless. Second, **the direction the vocabulary states a link in is preserved**:
+  S25 makes broader and narrower inverses, so a move that always wrote `skos:broader` would
+  silently convert a vocabulary authored in `skos:narrower` and an export would come back different
+  from what went in. `RelationOrigin::Asserted` is what makes that answerable at all — an entailed
+  link is not a statement, and proposing to remove one would name something that is not there.
+- **Everything it refuses is consistent SKOS, which is the whole reason the checks exist.** §8.6.8
+  says a cyclic hierarchy is *consistent*, so a move into the concept's own descendant produces a
+  vocabulary that passes every condition `openbiz integrity` checks and has a branch with no route
+  to a root. Nothing downstream catches it. The cycle check is the **same walk** that counts the
+  subtree, so the number the report quotes cannot disagree with the check that let the move
+  through, and an incomplete walk refuses rather than proceeding on a check that did not run.
+- **Two things were wrong until I ran the command by hand, for the twelfth iteration running.**
+  The refusal printed its whole sentence **twice** — once as the message and once as `anyhow`'s
+  cause — because `#[from]` on the wrapped error makes it `source()`; the fix is to wrap without
+  `#[from]`, which is what the neighbouring `NoConvention` variant already did and I had not
+  noticed. And the subtree line read "N concepts are below it and move with *them*".
+- **I dropped a refusal I had designed, on reading what it would actually refuse.** I had intended
+  to refuse moving a concept that is a `skos:topConceptOf` some scheme, on the grounds that a top
+  concept with a broader concept is a half-move that lies. It is not: this operation *requires* an
+  existing broader concept, so any concept it can move was already both — the oddity predates the
+  move and is neither created nor worsened by it. It is **reported** instead. The real gap is that
+  there is no operation giving a concept its *first* parent, and that one cannot be built until the
+  core model records which direction of S8 the graph asserted, which it does not.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **869 Rust tests, up from 840**: 11 in `openbiz-skos` for the computation
+  and every refusal, 8 in `openbiz-store` for the two-halved candidate, 4 in argument parsing, 2
+  against the report, and 6 against the real binary on disk in separate processes, which is where
+  the item's actual claim lives. No new dependency. UI untouched: Phase 2 is the model and the
+  command line, which is the basis every item in this phase was closed on.
+- **Recorded:** `adr/0037`. `UNTESTED.md` — **one entry closed**, the iteration-18 both-halves
+  entry, and three opened: no first-parent operation and therefore no top-concept demotion (with
+  the model gap that blocks it named); a directly-stated transitive link to a *non-adjacent*
+  ancestor survives a move unexamined and unmentioned; and the subtree count has never been run
+  against a large subtree. No proposals: iteration 37's LCGFT fixture still sits unpromoted for the
+  sixth iteration and a second would be noise.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T08:27Z at branch creation.
+- **Still uncertain:** whether refusing a move whose downward walk hit its bound is a correct
+  refusal or a product limit I have dressed up as one. The logic is sound — an incomplete walk
+  cannot prove the new parent is not below the concept — but `tree.rs`'s own module note says
+  `WalkBound::DEFAULT` going down is a ceiling an *ordinary large* vocabulary reaches, because
+  everything below a top concept is most of the vocabulary. So the operator most likely to want a
+  subtree move, the one reorganising the top of a 100 000-concept thesaurus, is the one most likely
+  to be told the tool cannot check it. I have not measured where that boundary actually falls, and
+  I chose the refusal without knowing whether it fires on the second real vocabulary anyone loads
+  or the two-hundredth. If it is the former, the honest fix is not a bigger bound — it is a cycle
+  check that does not need the whole subtree, which is a different algorithm and one I did not
+  look for because the refusal was easy to write and easy to justify. That is exactly the shape of
+  reasoning that has pointed the wrong way three times in this module's history.

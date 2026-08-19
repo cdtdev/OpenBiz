@@ -17,6 +17,7 @@ mod notes;
 mod paths;
 mod refinement;
 mod relations;
+mod relocate;
 mod search;
 mod tree;
 mod xl;
@@ -67,6 +68,7 @@ pub use relations::{
     RelationOrigin, SemanticRelation, SKOS_BROADER, SKOS_BROADER_TRANSITIVE, SKOS_NARROWER,
     SKOS_NARROWER_TRANSITIVE, SKOS_RELATED, SKOS_SEMANTIC_RELATION,
 };
+pub use relocate::{Relocation, RelocationError};
 pub use search::{
     LabelHit, LabelQuery, LabelSearch, LanguageFilter, LanguageRange, MatchMode, MatchQuality,
     QueryError, SearchBound,
