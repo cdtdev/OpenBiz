@@ -35,6 +35,8 @@
 //! the second answer off the first is exactly how a validator reports "consistent" for a graph it
 //! never finished checking. Every caller in this crate branches on it.
 
+use std::collections::BTreeSet;
+
 use crate::hierarchy::{Walk, WalkBound};
 use crate::model::{CoreModel, Derivation, Node};
 use crate::relations::SemanticRelation;
@@ -113,6 +115,112 @@ impl Ancestry {
     pub fn derivation_to(&self, node: &Node) -> Option<Derivation> {
         self.0
             .derivation_to(node, SemanticRelation::BroaderTransitive)
+    }
+
+    /// Which ancestors survive when the caller wants none of `skip`, and which of `skip` are still
+    /// printed because they lie on a survivor's path.
+    ///
+    /// The walk itself is **not** narrowed and this takes no part in it: a concept in `skip` may
+    /// be the only route to ancestors the caller does want, so it has to be walked *through*
+    /// whatever the caller thinks of it. This is a decision about rendering a finished walk.
+    ///
+    /// The rule differs from [`Descent::excluding`](crate::Descent::excluding) and the difference
+    /// is the whole point of having two. Downwards, dropping a concept takes its subtree with it,
+    /// so a concept in `skip` is *kept* when survivors hang off it. Upwards nothing hangs off
+    /// anything: an ancestor is in the list on its own account, so every member of `skip` leaves
+    /// the list. What it cannot leave is the **path**, which is the derivation — editing a concept
+    /// out of the middle of `A → B → C` would make the report state that `C` is directly above
+    /// `A`, which the graph does not say. So the paths are untouched and
+    /// [`Above::on_the_way`] names what stayed in them.
+    ///
+    /// As everywhere else in this crate, the set is of *nodes*: this is told which resources to
+    /// leave out and never why.
+    pub fn excluding<'a>(&'a self, skip: &BTreeSet<Node>) -> Above<'a> {
+        let mut listed: Vec<&Node> = Vec::new();
+        let mut dropped = 0usize;
+        for ancestor in self.ancestors() {
+            if skip.contains(ancestor) {
+                dropped += 1;
+                continue;
+            }
+            listed.push(ancestor);
+        }
+
+        // Only the paths of the ancestors that survived: a concept in `skip` reached solely by way
+        // of another concept in `skip` is gone from the report entirely, and naming it as "on the
+        // way" to something the report does not show would be naming it for no reason.
+        let mut on_the_way: BTreeSet<Node> = BTreeSet::new();
+        for ancestor in &listed {
+            let Some(path) = self.path_to(ancestor) else {
+                continue;
+            };
+            for node in path {
+                // Never the origin. It is the start of every path rather than a concept between
+                // two others, so it neither can be edited out nor is one of the ancestors this
+                // narrowing is about — and a caller that named it here would be contradicting its
+                // own statement that the concept asked about is exempt.
+                if &node != self.origin() && skip.contains(&node) {
+                    on_the_way.insert(node);
+                }
+            }
+        }
+
+        Above {
+            listed,
+            on_the_way,
+            dropped,
+        }
+    }
+}
+
+/// What an [`Ancestry`] lists once a set of concepts is asked to be left out of it.
+///
+/// Two counts and they are the point: [`Above::dropped`] is what a report has to state so that a
+/// narrowed list of ancestors never reads as a concept with nothing above it, and
+/// [`Above::on_the_way`] is what it has to state so that an excluded concept appearing in a
+/// printed derivation does not read as a bug in the narrowing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Above<'a> {
+    listed: Vec<&'a Node>,
+    on_the_way: BTreeSet<Node>,
+    dropped: usize,
+}
+
+impl Above<'_> {
+    /// The surviving ancestors, in the order the walk reached them.
+    pub fn listed(&self) -> impl Iterator<Item = &Node> {
+        self.listed.iter().copied()
+    }
+
+    /// How many ancestors were not in the excluded set. The size of the answer asked for.
+    pub fn len(&self) -> usize {
+        self.listed.len()
+    }
+
+    /// Whether nothing above the origin survived the exclusion.
+    ///
+    /// **Not** the same as having no ancestors, and a report that confuses the two says a concept
+    /// is a root of the hierarchy when the vocabulary puts concepts above it. Ask
+    /// [`Above::dropped`] which of the two it is.
+    pub fn is_empty(&self) -> bool {
+        self.listed.is_empty()
+    }
+
+    /// How many ancestors were in the excluded set and are therefore not listed.
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// The excluded concepts still printed, because a listed ancestor's path runs through them.
+    ///
+    /// A caller must name these. Under a flag that says the excluded concepts are out, one turning
+    /// up unremarked in a derivation reads as the flag not working.
+    ///
+    /// Always a subset of what [`Above::dropped`] counted, and never the origin — so a caller may
+    /// state these as *part of* the concepts it withheld rather than as a second set, which would
+    /// tell a reader there are more retired concepts above than there are.
+    pub fn on_the_way(&self) -> impl Iterator<Item = &Node> {
+        self.on_the_way.iter()
     }
 }
 
@@ -318,5 +426,109 @@ mod tests {
             CoreModel::from_statements([s(&a, &skos("related"), &b), s(&b, &skos("related"), &c)]);
 
         assert!(model.ancestry(&a, WalkBound::DEFAULT).is_empty());
+    }
+
+    /// `docs/adr/0045` §1. The excluded concept leaves the *list* — nothing hangs off an ancestor,
+    /// so taking it out costs nothing — but the ancestors above it stay, because a deprecation
+    /// removed no link and they are still above the origin.
+    #[test]
+    fn excluding_drops_the_ancestor_and_keeps_what_is_above_it() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
+
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
+        let narrowed = above.excluding(&BTreeSet::from([b.clone()]));
+
+        assert_eq!(narrowed.len(), 1);
+        assert_eq!(narrowed.listed().collect::<Vec<_>>(), vec![&c]);
+        assert_eq!(narrowed.dropped(), 1);
+    }
+
+    /// The other half of the same rule, and the reason `on_the_way` exists: the derivation for the
+    /// surviving ancestor still runs through the excluded one, and the caller has to be able to
+    /// say so. Editing `B` out of `A → B → C` would state that `C` is directly above `A`.
+    #[test]
+    fn excluding_never_edits_a_path_and_names_what_stayed_in_one() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
+
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
+        let narrowed = above.excluding(&BTreeSet::from([b.clone()]));
+
+        assert_eq!(narrowed.on_the_way().collect::<Vec<_>>(), vec![&b]);
+        assert_eq!(
+            above.path_to(&c),
+            Some(vec![a.clone(), b.clone(), c.clone()]),
+            "the walk's own paths are untouched by the exclusion"
+        );
+    }
+
+    /// An excluded concept reached only by way of another excluded concept is gone from the report
+    /// entirely, so naming it as "on the way" to something nothing shows would be noise.
+    #[test]
+    fn an_excluded_concept_on_no_surviving_path_is_not_named() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
+
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
+        let narrowed = above.excluding(&BTreeSet::from([b.clone(), c.clone()]));
+
+        assert!(narrowed.is_empty());
+        assert_eq!(narrowed.dropped(), 2);
+        assert_eq!(narrowed.on_the_way().count(), 0);
+    }
+
+    /// The case the counts exist for. Empty is not the same answer as "nothing is above it", and
+    /// only `dropped` tells the two apart.
+    #[test]
+    fn an_emptied_list_is_not_a_concept_with_nothing_above_it() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        let above_a = model.ancestry(&a, WalkBound::DEFAULT);
+        let emptied = above_a.excluding(&BTreeSet::from([b.clone()]));
+        assert!(emptied.is_empty() && emptied.dropped() == 1);
+
+        let above_b = model.ancestry(&b, WalkBound::DEFAULT);
+        let root = above_b.excluding(&BTreeSet::from([b.clone()]));
+        assert!(root.is_empty() && root.dropped() == 0);
+    }
+
+    /// Excluding nothing is the unnarrowed answer, which is what makes one code path serve both.
+    #[test]
+    fn excluding_nothing_lists_every_ancestor() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
+
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
+        let narrowed = above.excluding(&BTreeSet::new());
+
+        assert_eq!(narrowed.len(), above.len());
+        assert_eq!(narrowed.dropped(), 0);
+        assert_eq!(narrowed.on_the_way().count(), 0);
+    }
+
+    /// The origin is never "on the way" to anything. It is the start of every path, not a concept
+    /// between two others, and a caller naming it as an excluded concept still turning up in a
+    /// derivation would contradict its own statement that the concept asked about is exempt.
+    #[test]
+    fn the_origin_is_never_reported_as_on_the_way() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
+        let narrowed = above.excluding(&BTreeSet::from([a.clone()]));
+
+        assert_eq!(narrowed.len(), 1, "excluding the origin lists B as before");
+        assert_eq!(narrowed.dropped(), 0);
+        assert_eq!(
+            narrowed.on_the_way().count(),
+            0,
+            "the origin is the start of the path, not a concept in the middle of one"
+        );
     }
 }

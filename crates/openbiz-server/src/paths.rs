@@ -35,8 +35,11 @@
 //! objection: this only reads. The interface's breadcrumb is Phase 3's item, and an endpoint now
 //! would be a caller with nothing behind it.
 
+use std::collections::BTreeSet;
+
 use openbiz_skos::{
-    CoreModel, Node, PathBound, Resource, Retirements, RootPath, RootPaths, RouteStep, SkosRule,
+    CoreModel, Node, Offered, PathBound, Resource, Retirements, RootPath, RootPaths, RouteStep,
+    SkosRule,
 };
 use openbiz_store::Store;
 
@@ -51,7 +54,12 @@ use crate::status;
 /// `openbiz tree` refuse one. Here the confusion it prevents is sharper than elsewhere: a concept
 /// the graph has never heard of has no broader concept, so it would otherwise be reported as its
 /// own root — a confident answer about a typo.
-pub fn paths(store: &Store, graph: &str, concept: &str) -> Result<String, CommandError> {
+pub fn paths(
+    store: &Store,
+    graph: &str,
+    concept: &str,
+    current_only: bool,
+) -> Result<String, CommandError> {
     let (model, retirements) = crate::inspect::read_with_retirements(store, graph)?;
 
     let node = Node::iri(concept);
@@ -63,7 +71,14 @@ pub fn paths(store: &Store, graph: &str, concept: &str) -> Result<String, Comman
     }
 
     let found = model.paths_to_root(&node, PathBound::DEFAULT);
-    Ok(report(graph, &node, &model, &retirements, &found))
+    Ok(report(
+        graph,
+        &node,
+        &model,
+        &retirements,
+        &found,
+        current_only,
+    ))
 }
 
 /// The report itself, kept apart from the store so it can be tested against a model in hand.
@@ -73,6 +88,7 @@ fn report(
     model: &CoreModel,
     retirements: &Retirements,
     found: &RootPaths,
+    current_only: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -81,12 +97,45 @@ fn report(
         status::mark(retirements, concept)
     ));
     out.push_str(&format!("in {graph}\n"));
+    // Said before any count, because every number under it is a number about a narrowed report.
+    // The second sentence is this flag's whole rule: a route is atomic, so it is offered whole or
+    // withheld whole and never repaired (`docs/adr/0045` §2).
+    if current_only {
+        out.push_str(
+            "current concepts only: a route is offered only if every concept on it is current. A \
+             route through a retired concept is withheld entire and counted — no route is \
+             shortened past one, because a shortened route would claim its two neighbours are \
+             directly linked and this vocabulary does not say that.\n",
+        );
+    }
     status::explain(&mut out, "", retirements, model, concept);
+    // The concept the report is *about* is never the thing being filtered: the reader named it.
+    if current_only && retirements.is_retired(concept) {
+        out.push_str(
+            "it is shown whatever its status because you asked about it by name; --current \
+             applies to the routes above it.\n",
+        );
+    }
 
-    routes_section(&mut out, model, found);
-    retired_on_routes(&mut out, model, retirements, found);
-    summits_section(&mut out, model, retirements, found);
-    cycles_section(&mut out, model, found);
+    // Built here and handed over as a set of nodes: `owl:deprecated` is not SKOS, so which
+    // resources to leave out is a status question answered beside the model (`docs/adr/0041`).
+    // Empty when the flag is off, which makes the narrowing offer everything.
+    let skip = match current_only {
+        true => status::retired_in(retirements),
+        false => BTreeSet::new(),
+    };
+    let offered = found.excluding(&skip);
+
+    routes_section(&mut out, model, found, &offered, current_only);
+    match current_only {
+        // Vacuous by construction: no offered route touches a retired concept. What replaces it
+        // is the count of the routes that do, which is the thing a narrowed report owes its
+        // reader.
+        true => withheld_note(&mut out, &offered),
+        false => retired_on_routes(&mut out, model, retirements, found),
+    }
+    summits_section(&mut out, model, retirements, &offered);
+    cycles_section(&mut out, model, found, current_only);
 
     if !found.is_complete() {
         out.push_str(
@@ -100,8 +149,34 @@ fn report(
 }
 
 /// Every route, as an arrow chain, with the two things a chain alone would not say.
-fn routes_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
-    if found.is_empty() {
+fn routes_section(
+    out: &mut String,
+    model: &CoreModel,
+    found: &RootPaths,
+    offered: &Offered<'_>,
+    current_only: bool,
+) {
+    if offered.is_empty() {
+        // The case `--current` has to be safe in, and the reason `Offered` counts what it
+        // withheld rather than letting a caller subtract. Unsaid, an emptied list prints the
+        // sentence reserved for a hierarchy whose every way up runs into a loop — blaming a cycle
+        // that need not exist, about a vocabulary whose routes are all intact and all obsolete.
+        if offered.withheld() > 0 {
+            out.push_str(&format!(
+                "\nno route from it is current the whole way up: all {} route(s) it has run \
+                 through a retired concept, and --current was asked for. Those routes still hold \
+                 — retiring a concept removes no link — so run the same command without --current \
+                 to see them and what each retired concept says to use instead.\n",
+                offered.withheld()
+            ));
+            if !found.is_complete() {
+                out.push_str(
+                    "\nthe enumeration also stopped at its bound, so a route that is current the \
+                     whole way up may simply not have been built.\n",
+                );
+            }
+            return;
+        }
         out.push_str(if found.is_complete() {
             "\nno route from it reaches a concept with no broader concept: every way up runs into \
              a cycle. The cycles are below, and they are the answer rather than a failure to find \
@@ -114,14 +189,18 @@ fn routes_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
     }
 
     out.push_str(&format!(
-        "\n{} route(s) up to a concept with no broader concept, by {} link(s) followed:\n",
-        found.len(),
+        "\n{} {}route(s) up to a concept with no broader concept, by {} link(s) followed:\n",
+        offered.len(),
+        match current_only {
+            true => "current ",
+            false => "",
+        },
         found.steps_walked()
     ));
 
     let mut any_transitive = false;
     let mut any_inferred = false;
-    for (index, route) in found.paths().enumerate() {
+    for (index, route) in offered.routes().enumerate() {
         let mut line = format!("  {}. {}", index + 1, chain(model, route));
         if route.steps().len() > 1 {
             any_inferred = true;
@@ -194,6 +273,27 @@ fn retired_on_routes(
     );
 }
 
+/// What `--current` withheld, always said, and never said as nothing.
+///
+/// The rule `docs/adr/0043` set for `openbiz search` and every browse command has inherited:
+/// **the routes go, the fact that there were routes stays.** A reader asking for the routes above
+/// a concept is drawing a breadcrumb or deciding where a new concept belongs, and a list that
+/// quietly lost every obsolete way up reads as a vocabulary with fewer ways up than it has.
+///
+/// Nothing is printed when nothing was withheld, which is every enumeration in the overwhelming
+/// majority of vocabularies: they retire nothing.
+fn withheld_note(out: &mut String, offered: &Offered<'_>) {
+    if offered.withheld() == 0 {
+        return;
+    }
+    out.push_str(&format!(
+        "\n{} more route(s) up from it run through a retired concept and are not shown because \
+         --current was asked for. They still hold — retiring a concept removes no link — so run \
+         the same command without --current to see them and which concepts on them are obsolete.\n",
+        offered.withheld()
+    ));
+}
+
 /// One route as `A → B ⇢ C`, with each concept's label and the arrow that says what licensed it.
 fn chain(model: &CoreModel, route: &RootPath) -> String {
     let mut out = format!("{}{}", route.origin(), named_in(model, route.origin()));
@@ -214,9 +314,9 @@ fn summits_section(
     out: &mut String,
     model: &CoreModel,
     retirements: &Retirements,
-    found: &RootPaths,
+    offered: &Offered<'_>,
 ) {
-    let summits = found.summits();
+    let summits = offered.summits();
     if summits.is_empty() {
         return;
     }
@@ -251,7 +351,7 @@ fn summits_section(
     // looking for their scheme's top concept at the end of a route needs to be told it is
     // half-way up rather than left to conclude the vocabulary lost it.
     let mut midway: Vec<String> = Vec::new();
-    for route in found.paths() {
+    for route in offered.routes() {
         for (concept, schemes) in route.top_concepts() {
             if summits.contains(concept) {
                 continue;
@@ -288,7 +388,7 @@ fn summits_section(
 }
 
 /// The loops, named — including the ones no walk from this concept would ever come back through.
-fn cycles_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
+fn cycles_section(out: &mut String, model: &CoreModel, found: &RootPaths, current_only: bool) {
     if found.cycle_count() == 0 {
         return;
     }
@@ -298,6 +398,18 @@ fn cycles_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
          summit:\n",
         found.cycle_count()
     ));
+    // `docs/adr/0045` §3. A cycle is not a route offered to anyone; it is why a route reaches no
+    // summit, and §8.6.8 makes it consistent SKOS rather than a defect. Withholding one because a
+    // retired concept is in it would leave an empty route list with its explanation deleted, so
+    // this section is never narrowed — and under the flag it says so, because a reader told the
+    // retired concepts are out would otherwise read a retired concept here as the flag failing.
+    if current_only {
+        out.push_str(
+            "  --current does not narrow this list. A cycle is not a route on offer, it is why a \
+             route reaches no summit, and leaving one out because a retired concept lies in it \
+             would remove the explanation and not the problem.\n",
+        );
+    }
     for cycle in found.cycles() {
         let round: Vec<String> = cycle
             .concepts()
@@ -398,7 +510,7 @@ mod tests {
     #[test]
     fn a_diamond_prints_both_routes_to_one_summit() {
         let (_directory, store) = store_with(DIAMOND);
-        let report = paths(&store, VOCABULARY, "http://example.org/poodles")
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles", false)
             .expect("poodles is in the vocabulary");
 
         assert!(report.contains("2 route(s) up to a concept"), "{report}");
@@ -434,7 +546,7 @@ mod tests {
     #[test]
     fn a_concept_the_vocabulary_does_not_hold_is_refused() {
         let (_directory, store) = store_with(DIAMOND);
-        let error = paths(&store, VOCABULARY, "http://example.org/poodlez")
+        let error = paths(&store, VOCABULARY, "http://example.org/poodlez", false)
             .expect_err("poodlez is not in the vocabulary");
 
         assert!(
@@ -451,6 +563,7 @@ mod tests {
             &store,
             "http://example.org/nope",
             "http://example.org/poodles",
+            false,
         )
         .expect_err("that vocabulary is not registered");
 
@@ -468,8 +581,8 @@ mod tests {
             ex:b a skos:Concept .
             "#,
         );
-        let report =
-            paths(&store, VOCABULARY, "http://example.org/a").expect("a is in the vocabulary");
+        let report = paths(&store, VOCABULARY, "http://example.org/a", false)
+            .expect("a is in the vocabulary");
 
         assert!(report.contains("1 route(s) up to a concept"), "{report}");
         assert!(
@@ -496,8 +609,8 @@ mod tests {
             ex:c a skos:Concept ; skos:broader ex:b .
             "#,
         );
-        let report =
-            paths(&store, VOCABULARY, "http://example.org/leaf").expect("leaf is in the store");
+        let report = paths(&store, VOCABULARY, "http://example.org/leaf", false)
+            .expect("leaf is in the store");
 
         assert!(
             report.contains("no route from it reaches a concept with no broader concept"),
@@ -525,7 +638,7 @@ mod tests {
         );
 
         // And the upward walk, from the same store, has nothing to say about the loop.
-        let walk = crate::ancestors(&store, VOCABULARY, "http://example.org/leaf")
+        let walk = crate::ancestors(&store, VOCABULARY, "http://example.org/leaf", false)
             .expect("leaf is in the store");
         assert!(
             !walk.contains(
@@ -549,8 +662,8 @@ mod tests {
             ex:top a skos:Concept .
             "#,
         );
-        let report =
-            paths(&store, VOCABULARY, "http://example.org/leaf").expect("leaf is in the store");
+        let report = paths(&store, VOCABULARY, "http://example.org/leaf", false)
+            .expect("leaf is in the store");
 
         assert!(
             report.contains("<http://example.org/leaf> ⇢ <http://example.org/top>"),
@@ -581,8 +694,8 @@ mod tests {
             ex:above a skos:Concept .
             "#,
         );
-        let report =
-            paths(&store, VOCABULARY, "http://example.org/leaf").expect("leaf is in the store");
+        let report = paths(&store, VOCABULARY, "http://example.org/leaf", false)
+            .expect("leaf is in the store");
 
         assert!(
             report.contains(
@@ -628,7 +741,7 @@ mod tests {
     #[test]
     fn a_retired_concept_on_a_route_is_named_once_and_not_marked_in_the_chain() {
         let (_directory, store) = store_with(RETIRED_ROUTE);
-        let report = paths(&store, VOCABULARY, "http://example.org/poodles")
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles", false)
             .expect("poodles is in the vocabulary");
 
         assert!(report.contains("2 route(s) up to a concept"), "{report}");
@@ -658,7 +771,7 @@ mod tests {
     #[test]
     fn a_retired_concept_asked_about_is_marked_and_explained() {
         let (_directory, store) = store_with(RETIRED_ROUTE);
-        let report = paths(&store, VOCABULARY, "http://example.org/dogs")
+        let report = paths(&store, VOCABULARY, "http://example.org/dogs", false)
             .expect("dogs is in the vocabulary");
 
         assert!(report.contains("[retired]"), "{report}");
@@ -672,9 +785,183 @@ mod tests {
     #[test]
     fn a_vocabulary_with_no_retirements_says_nothing_about_them() {
         let (_directory, store) = store_with(DIAMOND);
-        let report = paths(&store, VOCABULARY, "http://example.org/poodles")
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles", false)
             .expect("poodles is in the vocabulary");
 
         assert!(!report.contains("retired"), "{report}");
+    }
+
+    /// `docs/adr/0045` §2, and the decision the item turned on. One route runs through retired
+    /// `Dogs` and goes whole; the other is untouched. Neither is repaired into the other.
+    #[test]
+    fn current_only_withholds_the_whole_route_and_shortens_none() {
+        let (_directory, store) = store_with(RETIRED_ROUTE);
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles", true)
+            .expect("poodles is in the vocabulary");
+
+        assert!(
+            report.contains("1 current route(s) up to a concept"),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "<http://example.org/poodles>  (\"Poodles\"@en) → <http://example.org/pets>  \
+                 (\"Pets\"@en) → <http://example.org/animals>  (\"Animals\"@en)"
+            ),
+            "the current route is offered whole: {report}"
+        );
+        assert!(
+            !report.contains("<http://example.org/dogs>"),
+            "the withheld route is not printed, in whole or in part: {report}"
+        );
+        // The failure the rule exists to prevent: `Poodles → Animals` is not a link this
+        // vocabulary states, so no repaired route may appear.
+        assert!(
+            !report.contains(
+                "<http://example.org/poodles>  (\"Poodles\"@en) → <http://example.org/animals>"
+            ),
+            "a route is never shortened past the concept that was left out: {report}"
+        );
+    }
+
+    /// The narrowing says what it cost, which `docs/adr/0043` made the whole safety of the flag.
+    #[test]
+    fn current_only_says_how_many_routes_it_withheld() {
+        let (_directory, store) = store_with(RETIRED_ROUTE);
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles", true)
+            .expect("poodles is in the vocabulary");
+
+        assert!(
+            report.contains(
+                "1 more route(s) up from it run through a retired concept and are not shown"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains("without --current to see them"),
+            "the sentence that gets them back: {report}"
+        );
+        // The unnarrowed report's own section counts the retired concepts *on the routes shown*,
+        // and under the flag no shown route has one, so it must not also be printed.
+        assert!(
+            !report.contains("concept(s) on these routes are retired:"),
+            "{report}"
+        );
+    }
+
+    /// A diamond whose every way up runs through a retired concept.
+    const EVERY_ROUTE_RETIRED: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix ex: <http://example.org/> .
+        ex:poodles a skos:Concept ; skos:prefLabel "Poodles"@en ;
+            skos:broader ex:dogs, ex:pets .
+        ex:dogs a skos:Concept ; skos:prefLabel "Dogs"@en ; skos:broader ex:animals ;
+            owl:deprecated true .
+        ex:pets a skos:Concept ; skos:prefLabel "Pets"@en ; skos:broader ex:animals ;
+            owl:deprecated true .
+        ex:animals a skos:Concept ; skos:prefLabel "Animals"@en .
+    "#;
+
+    /// **The case the counts exist for** (`docs/adr/0045` §4). Every route is withheld, so the
+    /// list is empty — and the sentence an empty list otherwise gets blames a cycle. There is no
+    /// cycle in this vocabulary; every way up is intact and obsolete, which is the opposite
+    /// diagnosis and the opposite remedy.
+    #[test]
+    fn paths_current_only_never_blames_a_cycle_for_a_withheld_route() {
+        let (_directory, store) = store_with(EVERY_ROUTE_RETIRED);
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles", true)
+            .expect("poodles is in the vocabulary");
+
+        assert!(
+            report.contains("no route from it is current the whole way up: all 2 route(s)"),
+            "{report}"
+        );
+        assert!(
+            !report.contains("every way up runs into a cycle"),
+            "there is no cycle here and the report must not invent one: {report}"
+        );
+        assert!(report.contains("without --current to see them"), "{report}");
+        assert!(
+            !report.contains("concept(s) the routes stop at"),
+            "no route is offered, so nothing is where one stops: {report}"
+        );
+    }
+
+    /// A hierarchy whose only way up is a loop, with a retired concept in the loop.
+    const RETIRED_IN_A_CYCLE: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix ex: <http://example.org/> .
+        ex:leaf a skos:Concept ; skos:prefLabel "Leaf"@en ; skos:broader ex:a .
+        ex:a a skos:Concept ; skos:prefLabel "A"@en ; skos:broader ex:b ; owl:deprecated true .
+        ex:b a skos:Concept ; skos:prefLabel "B"@en ; skos:broader ex:a .
+    "#;
+
+    /// `docs/adr/0045` §3. A cycle is not a route on offer; it is why a route reaches no summit.
+    /// Withholding it because a retired concept lies in it would delete the explanation and leave
+    /// the problem, so the section is never narrowed — and says so, because a reader told the
+    /// retired concepts are out would otherwise read one here as the flag failing.
+    #[test]
+    fn current_only_never_narrows_the_cycles() {
+        let (_directory, store) = store_with(RETIRED_IN_A_CYCLE);
+        let report = paths(&store, VOCABULARY, "http://example.org/leaf", true)
+            .expect("leaf is in the vocabulary");
+
+        assert!(report.contains("1 cycle(s) in the hierarchy"), "{report}");
+        assert!(
+            report.contains("<http://example.org/a>"),
+            "the retired concept in the loop is named, because the loop runs through it: {report}"
+        );
+        assert!(
+            report.contains("--current does not narrow this list"),
+            "{report}"
+        );
+    }
+
+    /// The concept the report is *about* is never filtered — the reader named it — and its own
+    /// status says nothing about the routes above it.
+    #[test]
+    fn the_concept_asked_about_is_shown_whatever_its_status() {
+        let (_directory, store) = store_with(RETIRED_ROUTE);
+        let report = paths(&store, VOCABULARY, "http://example.org/dogs", true)
+            .expect("dogs is in the vocabulary");
+
+        assert!(
+            report.contains("it is shown whatever its status because you asked about it by name"),
+            "{report}"
+        );
+        assert!(
+            report.contains("1 current route(s) up to a concept"),
+            "its own retirement withholds no route above it: {report}"
+        );
+    }
+
+    /// A vocabulary that retires nothing reads the same either way, so nobody pays for a feature
+    /// their vocabulary does not use.
+    ///
+    /// Asserted as *the whole report below the banner*, not as the absence of a phrase: the
+    /// banner is printed whenever the flag is typed, and nothing else may move.
+    #[test]
+    fn current_only_on_a_vocabulary_with_no_retirements_reads_identically() {
+        let (_directory, store) = store_with(DIAMOND);
+        let narrowed = paths(&store, VOCABULARY, "http://example.org/poodles", true)
+            .expect("poodles is in the vocabulary");
+        let full = paths(&store, VOCABULARY, "http://example.org/poodles", false)
+            .expect("poodles is in the vocabulary");
+
+        let banner = narrowed
+            .lines()
+            .find(|line| line.starts_with("current concepts only:"))
+            .expect("the flag announces itself");
+        assert_eq!(
+            narrowed.replace(&format!("{banner}\n"), ""),
+            full.replace(
+                "route(s) up to a concept",
+                "current route(s) up to a concept"
+            ),
+            "when nothing is retired only the banner and the word in the count may differ"
+        );
+        assert!(!narrowed.contains("not shown"), "{narrowed}");
     }
 }

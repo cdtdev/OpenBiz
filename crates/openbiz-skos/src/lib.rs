@@ -34,7 +34,7 @@ mod xl;
 #[cfg(test)]
 mod scale;
 
-pub use ancestry::Ancestry;
+pub use ancestry::{Above, Ancestry};
 pub use deprecate::{
     Deprecation, DeprecationError, DeprecationScan, DeprecationScanBuilder, StatusBound, Stranded,
     DCTERMS_IS_REPLACED_BY, OWL_DEPRECATED, XSD_BOOLEAN,
@@ -70,7 +70,7 @@ pub use notes::{
     DocumentationCoverage, NoteKind, NoteOrigin, SKOS_CHANGE_NOTE, SKOS_DEFINITION,
     SKOS_EDITORIAL_NOTE, SKOS_EXAMPLE, SKOS_HISTORY_NOTE, SKOS_NOTE, SKOS_SCOPE_NOTE,
 };
-pub use paths::{HierarchyCycle, PathBound, RootPath, RootPaths, RouteStep};
+pub use paths::{HierarchyCycle, Offered, PathBound, RootPath, RootPaths, RouteStep};
 pub use refinement::{
     PropertyRefinements, PropertyRefinementsBuilder, RefinementBound, RefinementExhaustion,
     RDFS_SUB_PROPERTY_OF,

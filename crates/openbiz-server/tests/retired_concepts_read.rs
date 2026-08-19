@@ -322,3 +322,94 @@ fn tree_current_only_still_admits_that_a_retired_subtree_is_there() {
     let shown = read(dir.path(), &["tree", THESAURUS, WIRELESS]);
     assert!(shown.contains(MORSE), "{shown}");
 }
+
+/// The upward half of `docs/adr/0045`, end to end and against the real binary. `Morse` sits under
+/// retired `Wireless`, which sits under current `Telegraphy` — the commonest outcome of a
+/// retirement seen from underneath. The retired concept leaves the *list*, `Telegraphy` stays
+/// because it is still above `Morse`, and the path that proves it keeps `Wireless` in it.
+#[test]
+fn ancestors_current_only_drops_the_retired_parent_and_keeps_what_is_above_it() {
+    let dir = retired();
+
+    let report = read(dir.path(), &["ancestors", THESAURUS, MORSE, "--current"]);
+    assert!(
+        report.contains("1 current concept(s) are above it"),
+        "{report}"
+    );
+    assert!(
+        report.contains(TELEGRAPHY),
+        "the concept above the retired one is still above this one: {report}"
+    );
+    assert!(
+        report.contains("1 concept(s) above it are retired and not listed"),
+        "{report}"
+    );
+    assert!(
+        report.contains("1 of them appear in the paths above"),
+        "a retired concept left in a printed path is named as one of the concepts already \
+         counted, rather than as a second one: {report}"
+    );
+
+    // The path itself is the one the unnarrowed report printed. Cutting `Wireless` out of it
+    // would state that `Telegraphy` is directly above `Morse`, which this vocabulary does not say.
+    let shown = read(dir.path(), &["ancestors", THESAURUS, MORSE]);
+    let path = |report: &str| -> String {
+        report
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("<{MORSE}> →")))
+            .unwrap_or_else(|| panic!("a path from Morse is in the report:\n{report}"))
+            .to_owned()
+    };
+    assert_eq!(path(&report), path(&shown), "{report}");
+    assert!(path(&report).contains(WIRELESS), "{report}");
+}
+
+/// **The failure the flag would otherwise reintroduce**, in the routes rather than the tree. Every
+/// way up from `Morse` runs through retired `Wireless`, so the narrowed list is empty — and the
+/// sentence an empty list otherwise gets blames a cycle. There is no cycle here: the routes are
+/// intact and obsolete, which is the opposite diagnosis and the opposite remedy.
+#[test]
+fn paths_current_only_never_blames_a_cycle_for_a_withheld_route() {
+    let dir = retired();
+
+    let report = read(dir.path(), &["paths", THESAURUS, MORSE, "--current"]);
+    assert!(
+        report.contains("no route from it is current the whole way up: all 1 route(s)"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("every way up runs into a cycle"),
+        "there is no cycle in this vocabulary and the report must not invent one: {report}"
+    );
+    assert!(
+        report.contains("without --current to see them"),
+        "the way to see them is in the report, not in the manual: {report}"
+    );
+
+    // And the way back works, from this same store, without any other change — showing the whole
+    // route rather than a repaired one.
+    let shown = read(dir.path(), &["paths", THESAURUS, MORSE]);
+    assert!(shown.contains(WIRELESS), "{shown}");
+    assert!(shown.contains("1 route(s) up to a concept"), "{shown}");
+}
+
+/// The flag reaches every browse command, which is the point of the item: a curator who learned
+/// `--current` on one does not meet an unknown-option error on another.
+#[test]
+fn current_is_accepted_by_every_browse_and_search_command() {
+    let dir = retired();
+    for args in [
+        vec!["search", THESAURUS, "telegraphy", "--current"],
+        vec!["tree", THESAURUS, TELEGRAPHY, "--current"],
+        vec!["ancestors", THESAURUS, MORSE, "--current"],
+        vec!["paths", THESAURUS, MORSE, "--current"],
+    ] {
+        let output = run(dir.path(), &args);
+        assert!(
+            output.status.success(),
+            "`openbiz {}` was refused: {}",
+            args.join(" "),
+            stderr(&output)
+        );
+    }
+}
