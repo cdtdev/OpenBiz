@@ -29,11 +29,10 @@
 //! beside the label it belongs to is Phase 3's item, and shipping an endpoint now with no
 //! interface behind it would be a caller with nothing behind it.
 
-use openbiz_skos::{CoreModel, Node, NoteKind, NoteOrigin, Resource, Term};
+use openbiz_skos::{Node, NoteKind, NoteOrigin, RdfsRule, Resource, Term};
 use openbiz_store::Store;
 
 use crate::cli::CommandError;
-use crate::inspect::convert;
 
 /// Report what the vocabulary at `graph` documents `resource` with, and why.
 ///
@@ -44,9 +43,7 @@ use crate::inspect::convert;
 /// has got round to defining, the other is a mistyped IRI — and at a command line the second is
 /// the likelier.
 pub fn notes(store: &Store, graph: &str, resource: &str) -> Result<String, CommandError> {
-    let mut builder = CoreModel::builder();
-    store.for_each_statement(graph, |statement| builder.push(convert(statement)))?;
-    let model = builder.build();
+    let model = crate::inspect::read(store, graph)?;
 
     let node = Node::iri(resource);
     let Some(held) = model.resource(&node) else {
@@ -93,10 +90,23 @@ fn report(graph: &str, node: &Node, resource: &Resource) -> String {
             // Only the entailed ones explain themselves. An asserted note needs no derivation —
             // the graph says it — and printing "asserted" against every line would bury the S17
             // entailments this command exists to make visible.
-            if let Some(NoteOrigin::Entailed(rule)) = resource.note_origin(value, kind) {
-                out.push_str(&format!("    inferred, not stated under {kind}\n"));
-                out.push_str(&format!("    because {}\n", stated_under(resource, value)));
-                out.push_str(&format!("    and {rule}\n"));
+            match resource.note_origin(value, kind) {
+                Some(NoteOrigin::Entailed(rule)) => {
+                    out.push_str(&format!("    inferred, not stated under {kind}\n"));
+                    out.push_str(&format!("    because {}\n", stated_under(resource, value)));
+                    out.push_str(&format!("    and {rule}\n"));
+                }
+                // A refinement's premise is the property the vocabulary actually used, which is
+                // the one thing the source file *does* contain and the report does not — without
+                // it a reader searching for `skos:scopeNote` in their own Turtle finds nothing
+                // and concludes the tool invented the note.
+                Some(NoteOrigin::Refined { property }) => {
+                    out.push_str(&format!("    inferred, not stated under {kind}\n"));
+                    out.push_str(&format!("    because {node} {property} {value}\n"));
+                    out.push_str(&format!("    and {property} rdfs:subPropertyOf {kind}\n"));
+                    out.push_str(&format!("    and {}\n", RdfsRule::Rdfs7));
+                }
+                _ => {}
             }
         }
     }
@@ -104,22 +114,36 @@ fn report(graph: &str, node: &Node, resource: &Resource) -> String {
     out
 }
 
-/// The properties that *did* state this value, rendered as the premise of an S17 lift.
+/// The properties that carry this value under one of the six, rendered as the premise of an S17
+/// lift.
 ///
 /// Plural because more than one can have: a value stated as both a `skos:definition` and a
 /// `skos:scopeNote` licenses one `skos:note` between them, and naming only the first would be a
 /// premise that is true but incomplete — a reader removing that one statement would expect the
 /// conclusion to go away, and it would not.
+///
+/// **A refined note counts.** S17 fires from a `skos:scopeNote` whether the graph stated it or
+/// [`crate::inspect::read`]'s first pass entailed it, so the premise names it either way. That
+/// premise is then itself derived, which is exactly what [`openbiz_skos::Derivation`] documents as
+/// normal — and the reader sees why three lines above, because the scope note prints its own
+/// derivation first. Reading only assertions here is what made this print "no asserted note was
+/// recorded" against a perfectly good vocabulary until iteration 31.
 fn stated_under(resource: &Resource, value: &Term) -> String {
     let stated: Vec<String> = NoteKind::ALL
         .into_iter()
-        .filter(|kind| resource.note_origin(value, *kind) == Some(NoteOrigin::Asserted))
+        .filter(|kind| {
+            matches!(
+                resource.note_origin(value, *kind),
+                Some(NoteOrigin::Asserted) | Some(NoteOrigin::Refined { .. })
+            )
+        })
         .map(|kind| format!("{kind} {value}"))
         .collect();
     if stated.is_empty() {
-        // Unreachable: S17 is the only rule that entails a note, and it only fires from an
-        // asserted one. Rendered rather than panicked on, for the reason `inspect` gives — a
-        // report that admits a gap in itself beats one that aborts on a customer's vocabulary.
+        // Unreachable: S17 is the only rule that entails a note, and it fires only from one of
+        // the six — which is either asserted or refined, both of which the filter above accepts.
+        // Rendered rather than panicked on, for the reason `inspect` gives — a report that admits
+        // a gap in itself beats one that aborts on a customer's vocabulary.
         return "no asserted note was recorded, which is a defect in this report".to_owned();
     }
     stated.join(", and ")
@@ -324,5 +348,96 @@ ex:Chemistry a skos:Concept ."
         )
         .expect_err("an unregistered graph is refused");
         assert!(matches!(error, CommandError::Store(_)), "{error}");
+    }
+
+    /// §7.1's extension point, end to end through the command an operator actually runs.
+    ///
+    /// A house note property declared a sub-property of `skos:scopeNote` reaches the report as a
+    /// scope note *and* a `skos:note`, each explaining itself against the document that licensed
+    /// it — RDFS for the refinement, SKOS for the lift. Before this landed, the same Turtle
+    /// produced a report saying the concept had no documentation at all.
+    #[test]
+    fn a_note_written_with_the_vocabularys_own_property_reaches_the_report() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:usageNote rdfs:subPropertyOf skos:scopeNote .
+
+ex:Chemistry a skos:Concept ;
+  skos:prefLabel \"Chemistry\"@en ;
+  ex:usageNote \"Use for the discipline, not the school subject.\"@en ."
+        ));
+
+        let report = match notes(
+            &store,
+            VOCABULARY,
+            "https://example.org/chemistry/Chemistry",
+        ) {
+            Ok(report) => report,
+            Err(error) => unreachable!("the concept is in the vocabulary: {error}"),
+        };
+
+        assert!(
+            report.contains("Use for the discipline, not the school subject."),
+            "{report}"
+        );
+        assert!(report.contains("skos:scopeNote"), "{report}");
+        assert!(report.contains("skos:note"), "{report}");
+        // The premise names the property the *source file* uses. Without it a reader searching
+        // their own Turtle for `skos:scopeNote` finds nothing and concludes we invented the note.
+        assert!(
+            report.contains("<https://example.org/chemistry/usageNote>"),
+            "the report must name the property that was actually written: {report}"
+        );
+        assert!(
+            report.contains("rdfs:subPropertyOf skos:scopeNote"),
+            "{report}"
+        );
+        assert!(report.contains("rdfs7"), "{report}");
+        assert!(
+            report.contains("inferred, not stated under skos:scopeNote"),
+            "{report}"
+        );
+        // And S17 lifts the *refined* scope note onto `skos:note` with a premise that names it.
+        // Found by running the binary: the unit tests all passed while this line read "no
+        // asserted note was recorded, which is a defect in this report", because `stated_under`
+        // looked only for assertions and S17 had just acquired a second way to fire.
+        assert!(
+            !report.contains("which is a defect in this report"),
+            "the S17 premise must name the refined note it fired from: {report}"
+        );
+        assert!(
+            report.contains("because skos:scopeNote \"Use for the discipline"),
+            "{report}"
+        );
+    }
+
+    /// The same vocabulary **without** the declaration. The statement is not a note, the concept
+    /// is undocumented, and the report says so rather than guessing from the property's name.
+    ///
+    /// This is the control for the test above: a build that treated any unrecognised predicate as
+    /// a note would pass that one and fail this one.
+    #[test]
+    fn the_same_property_without_a_declaration_is_not_a_note() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+ex:Chemistry a skos:Concept ;
+  skos:prefLabel \"Chemistry\"@en ;
+  ex:usageNote \"Use for the discipline, not the school subject.\"@en ."
+        ));
+
+        let report = match notes(
+            &store,
+            VOCABULARY,
+            "https://example.org/chemistry/Chemistry",
+        ) {
+            Ok(report) => report,
+            Err(error) => unreachable!("the concept is in the vocabulary: {error}"),
+        };
+
+        assert!(
+            report.contains("no SKOS documentation property carries anything for it"),
+            "{report}"
+        );
     }
 }

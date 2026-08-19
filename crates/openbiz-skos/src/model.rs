@@ -68,6 +68,7 @@ use crate::ancestry::AncestryBound;
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::notes::{DocumentationCoverage, NoteKind, NoteOrigin};
 use crate::ns;
+use crate::refinement::{PropertyRefinements, REFINEMENT_RULE};
 use crate::relations::{RelationOrigin, SemanticRelation, SKOS_SEMANTIC_RELATION};
 use crate::xl::{LabelOrigin, SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM};
 
@@ -580,6 +581,133 @@ impl fmt::Display for ClassOrigin {
     }
 }
 
+/// A rule from RDF 1.1 Semantics, for the one place we reason outside SKOS.
+///
+/// SKOS's §7.1 hands a vocabulary an extension point — "a set of extension points for defining
+/// more specific types of note" — and then says nothing about what follows from using it, because
+/// what follows is RDFS's business. Reading `ex:usageNote rdfs:subPropertyOf skos:scopeNote` and
+/// citing a SKOS statement for the conclusion would be a guess wearing a citation, which is the
+/// dishonesty this crate spends most of its comments avoiding. So the derivation cites the
+/// entailment rule that actually licenses it, by the name the specification gives it.
+///
+/// See [`crate::refinement`] for the only pass that produces these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(missing_docs)] // Each variant's meaning is its `statement()`, quoted from the spec.
+pub enum RdfsRule {
+    Rdfs5,
+    Rdfs7,
+}
+
+impl RdfsRule {
+    /// The rule's name in the specification's own table.
+    pub fn number(self) -> &'static str {
+        match self {
+            RdfsRule::Rdfs5 => "rdfs5",
+            RdfsRule::Rdfs7 => "rdfs7",
+        }
+    }
+
+    /// The rule as RDF 1.1 Semantics states it, quoted.
+    ///
+    /// From §9.2.1, "RDFS entailment patterns" (W3C Recommendation, 25 February 2014). Written in
+    /// prose here rather than in the specification's table notation, because a derivation is read
+    /// by a governance team defending a decision and not by a logician.
+    pub fn statement(self) -> &'static str {
+        match self {
+            RdfsRule::Rdfs5 => {
+                "if a property is a sub-property of a second, and that second is a sub-property \
+                 of a third, then the first is a sub-property of the third."
+            }
+            RdfsRule::Rdfs7 => {
+                "if a property is a sub-property of a second, then every statement made with the \
+                 first is also made with the second."
+            }
+        }
+    }
+}
+
+impl fmt::Display for RdfsRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.number(), self.statement())
+    }
+}
+
+/// The rule a [`Derivation`] cites — a SKOS statement, or an RDFS entailment pattern.
+///
+/// Two variants and not one, because they are cited from different documents and a reader
+/// checking a conclusion needs to know which one to open. Every derivation this crate produced
+/// before §7.1's extension point was read is a [`Rule::Skos`], and the `From` implementations
+/// exist so that the rules which never leave SKOS are still written as `SkosRule::S8` at the site
+/// that produces them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Rule {
+    /// A statement of the SKOS Reference.
+    Skos(SkosRule),
+    /// An entailment pattern of RDF 1.1 Semantics.
+    Rdfs(RdfsRule),
+}
+
+impl Rule {
+    /// The rule's identifier — `S17`, `rdfs7`.
+    pub fn number(self) -> &'static str {
+        match self {
+            Rule::Skos(rule) => rule.number(),
+            Rule::Rdfs(rule) => rule.number(),
+        }
+    }
+
+    /// The rule as its specification states it, quoted.
+    pub fn statement(self) -> &'static str {
+        match self {
+            Rule::Skos(rule) => rule.statement(),
+            Rule::Rdfs(rule) => rule.statement(),
+        }
+    }
+}
+
+impl From<SkosRule> for Rule {
+    fn from(rule: SkosRule) -> Self {
+        Rule::Skos(rule)
+    }
+}
+
+impl From<RdfsRule> for Rule {
+    fn from(rule: RdfsRule) -> Self {
+        Rule::Rdfs(rule)
+    }
+}
+
+/// So that `derivation.rule == SkosRule::S8` still reads the way it did before RDFS arrived.
+///
+/// The alternative was rewriting every such comparison as `Rule::Skos(SkosRule::S8)`, which is
+/// noise at the assertion sites and would have made this a bigger diff than the behaviour change
+/// it carries. An RDFS rule is never equal to a SKOS one, which is the only thing that could go
+/// wrong here.
+impl PartialEq<SkosRule> for Rule {
+    fn eq(&self, other: &SkosRule) -> bool {
+        matches!(self, Rule::Skos(rule) if rule == other)
+    }
+}
+
+impl PartialEq<Rule> for SkosRule {
+    fn eq(&self, other: &Rule) -> bool {
+        other == self
+    }
+}
+
+impl fmt::Display for Rule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Delegated rather than reassembled from `number()` and `statement()`, so that a rule
+        // renders identically whether it is reached through `Rule` or held directly. A test
+        // asserts that every derivation's rendering contains both halves, and it caught this
+        // being written the other way round.
+        match self {
+            Rule::Skos(rule) => write!(f, "{rule}"),
+            Rule::Rdfs(rule) => write!(f, "{rule}"),
+        }
+    }
+}
+
 /// A fact the model concluded, the statement it concluded it from, and the rule that licensed it.
 ///
 /// A derivation's `premise` may itself have been derived — S8 produces a `skos:topConceptOf`
@@ -593,7 +721,7 @@ pub struct Derivation {
     /// The statement it followed from.
     pub premise: String,
     /// The specification statement that licensed the step.
-    pub rule: SkosRule,
+    pub rule: Rule,
 }
 
 impl fmt::Display for Derivation {
@@ -898,6 +1026,22 @@ pub enum Finding {
         /// Links followed across every walk the check made, which is the budget it spent.
         links_walked: usize,
     },
+    /// Resolving the graph's own `rdfs:subPropertyOf` declarations hit its bound.
+    ///
+    /// [`Severity::Unchecked`], and it is not a statement about the vocabulary's consistency at
+    /// all — §7 states no integrity condition, so a refinement can never make a graph
+    /// inconsistent. What it says is that **the documentation counts below it are a floor rather
+    /// than a total**: statements made with the unresolved properties were read as non-SKOS and
+    /// dropped, so a vocabulary that stopped here reads as less documented than it is, in exactly
+    /// the way it did before refinements were read at all.
+    RefinementBoundReached {
+        /// How many declared properties were resolved.
+        resolved: usize,
+        /// How many were not, including any refused outright by the property ceiling.
+        unresolved: usize,
+        /// How many `rdfs:subPropertyOf` edges had been followed when it stopped.
+        steps_walked: usize,
+    },
 }
 
 impl Finding {
@@ -925,9 +1069,9 @@ impl Finding {
             | Finding::NonPlainLiteralLabel { .. }
             | Finding::NoLiteralForm { .. }
             | Finding::NonPlainLiteralForm { .. } => Severity::IllFormed,
-            Finding::AncestryBoundReached { .. } | Finding::DisjointnessSweepExhausted { .. } => {
-                Severity::Unchecked
-            }
+            Finding::AncestryBoundReached { .. }
+            | Finding::DisjointnessSweepExhausted { .. }
+            | Finding::RefinementBoundReached { .. } => Severity::Unchecked,
         }
     }
 }
@@ -1099,6 +1243,18 @@ impl fmt::Display for Finding {
                  link(s), leaving {unchecked} concept(s) unwalked\n    and {}\n    S27 was **not** \
                  checked for those, and this says nothing about whether they violate it",
                 SkosRule::S27,
+            ),
+            Finding::RefinementBoundReached {
+                resolved,
+                unresolved,
+                steps_walked,
+            } => write!(
+                f,
+                "resolving this vocabulary's own note properties stopped after {resolved} \
+                 property(ies) and {steps_walked} rdfs:subPropertyOf step(s), leaving \
+                 {unresolved} unresolved\n    and {}\n    statements made with those were read \
+                 as non-SKOS, so the documentation counts are a floor and not a total",
+                RdfsRule::Rdfs7,
             ),
         }
     }
@@ -1278,8 +1434,8 @@ impl Resource {
     }
 
     /// Where one of its notes came from, if it carries that value under that property.
-    pub fn note_origin(&self, value: &Term, kind: NoteKind) -> Option<NoteOrigin> {
-        self.notes.get(value)?.get(&kind).copied()
+    pub fn note_origin(&self, value: &Term, kind: NoteKind) -> Option<&NoteOrigin> {
+        self.notes.get(value)?.get(&kind)
     }
 
     pub fn relations(&self, relation: SemanticRelation) -> Option<&BTreeMap<Node, RelationOrigin>> {
@@ -1338,6 +1494,7 @@ pub struct CoreModel {
     derivations: Vec<Derivation>,
     findings: Vec<Finding>,
     statements_read: usize,
+    refinements: PropertyRefinements,
 }
 
 impl CoreModel {
@@ -1358,6 +1515,17 @@ impl CoreModel {
     /// How many statements were offered, including the ones the model ignored.
     pub fn statements_read(&self) -> usize {
         self.statements_read
+    }
+
+    /// The vocabulary's own note-property refinements, as the first pass resolved them.
+    ///
+    /// Empty for a model built without [`CoreModelBuilder::with_refinements`], which is every
+    /// caller that reads a graph in one pass. Kept on the model rather than discarded after the
+    /// build because a report has to be able to *name* the properties it read past: a coverage
+    /// table saying "3 through a declared refinement" and never saying which property that was
+    /// leaves an author unable to check it against their own file.
+    pub fn refinements(&self) -> &PropertyRefinements {
+        &self.refinements
     }
 
     /// Every resource the model has something to say about, in a stable order.
@@ -1455,12 +1623,13 @@ impl CoreModel {
                     concepts: 0,
                     notes: 0,
                     inferred: 0,
+                    refined: 0,
                 };
                 for (_, resource) in self.instances_of(SkosClass::Concept) {
-                    let origins: Vec<NoteOrigin> = resource
+                    let origins: Vec<&NoteOrigin> = resource
                         .notes
                         .values()
-                        .filter_map(|kinds| kinds.get(&kind).copied())
+                        .filter_map(|kinds| kinds.get(&kind))
                         .collect();
                     if origins.is_empty() {
                         continue;
@@ -1470,6 +1639,10 @@ impl CoreModel {
                     coverage.inferred += origins
                         .iter()
                         .filter(|origin| matches!(origin, NoteOrigin::Entailed(_)))
+                        .count();
+                    coverage.refined += origins
+                        .iter()
+                        .filter(|origin| matches!(origin, NoteOrigin::Refined { .. }))
                         .count();
                 }
                 coverage
@@ -1546,10 +1719,30 @@ pub struct CoreModelBuilder {
     label_relations: BTreeSet<(Node, Node)>,
     semantic_relations: BTreeMap<SemanticRelation, BTreeSet<(Node, Node)>>,
     semantic_relation_ends: BTreeSet<(Node, Node)>,
-    notes: BTreeMap<Node, BTreeMap<Term, BTreeSet<NoteKind>>>,
+    notes: BTreeMap<Node, BTreeMap<Term, BTreeMap<NoteKind, NoteSource>>>,
     ancestry_bound: AncestryBound,
+    /// What the graph's own `rdfs:subPropertyOf` declarations entail. Empty unless a caller ran
+    /// the first pass and handed the result to [`CoreModelBuilder::with_refinements`].
+    refinements: PropertyRefinements,
+    /// The refined properties a statement was actually made with, so an unused declaration does
+    /// not produce a derivation for a conclusion nothing reached.
+    refinements_used: BTreeSet<String>,
     findings: Vec<Finding>,
     statements_read: usize,
+}
+
+/// How a note got into the builder, before the model decides what to call it.
+///
+/// Kept apart from [`NoteOrigin`] because this one carries the resolution chain, which the model
+/// turns into a derivation and then discards — the chain is an explanation of a conclusion, not a
+/// property of the note.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum NoteSource {
+    /// The graph stated it under this very property.
+    Asserted,
+    /// The graph stated it under a property it declares a sub-property of this one. The chain
+    /// runs from the property used to the SKOS property reached, inclusive.
+    Refined(Vec<String>),
 }
 
 impl CoreModelBuilder {
@@ -1560,6 +1753,18 @@ impl CoreModelBuilder {
     /// should be able to hit it without generating a hundred thousand concepts to do it.
     pub fn with_ancestry_bound(mut self, bound: AncestryBound) -> Self {
         self.ancestry_bound = bound;
+        self
+    }
+
+    /// Read the graph's own note-property refinements as well as SKOS's.
+    ///
+    /// The argument comes from a **first pass over the same source**, which reads
+    /// `rdfs:subPropertyOf` and nothing else — see [`crate::refinement`] for why that is cheaper
+    /// than buffering, and `docs/adr/0028` for the decision. Without this call the builder reads
+    /// exactly what it read before §7.1's extension point was implemented, which is what makes
+    /// every existing caller and every existing test unaffected.
+    pub fn with_refinements(mut self, refinements: PropertyRefinements) -> Self {
+        self.refinements = refinements;
         self
     }
 
@@ -1683,12 +1888,7 @@ impl CoreModelBuilder {
                 // both consistent. The object of a note is also not registered as a resource:
                 // §7 has no range, so `<MyNote>` gets no class and joins no vocabulary.
                 if let Some(kind) = NoteKind::from_iri(&predicate) {
-                    self.notes
-                        .entry(subject)
-                        .or_default()
-                        .entry(object)
-                        .or_default()
-                        .insert(kind);
+                    self.note(subject, &predicate, object, Some(kind));
                 }
             }
             // The list vocabulary is RDF's, not SKOS's, so a literal `rdf:first` is legal RDF and
@@ -1697,7 +1897,53 @@ impl CoreModelBuilder {
             // with `skos:memberList`.
             RDF_FIRST => self.first.entry(subject).or_default().push(object),
             RDF_REST => self.rest.entry(subject).or_default().push(object),
+            // The graph's own note properties land here, and only here: a predicate SKOS does not
+            // name is a note if and only if the vocabulary declared it a sub-property of one of
+            // the seven. Everything else is still counted and dropped, and a builder given no
+            // refinements — the default — takes this branch exactly as it did before.
+            _ if self.refinements.note_kinds(&predicate).is_some() => {
+                self.note(subject, &predicate, object, None)
+            }
             _ => {}
+        }
+    }
+
+    /// Record a note, under the property that stated it and under everything that property was
+    /// declared a sub-property of.
+    ///
+    /// `stated` is the SKOS kind the predicate *is*, or `None` when the predicate is the
+    /// vocabulary's own. Both paths add every refined kind, because §7.1's extension point is not
+    /// reserved for non-SKOS properties: a graph declaring `skos:example rdfs:subPropertyOf
+    /// skos:scopeNote` has extended SKOS's own structure, and RDFS says what follows from that
+    /// whichever end it was written at.
+    fn note(&mut self, subject: Node, predicate: &str, object: Term, stated: Option<NoteKind>) {
+        let refined: Vec<(NoteKind, Vec<String>)> = self
+            .refinements
+            .note_kinds(predicate)
+            .map(|kinds| {
+                kinds
+                    .iter()
+                    .map(|(kind, chain)| (*kind, chain.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !refined.is_empty() {
+            self.refinements_used.insert(predicate.to_owned());
+        }
+
+        let held = self
+            .notes
+            .entry(subject)
+            .or_default()
+            .entry(object)
+            .or_default();
+        for (kind, chain) in refined {
+            // An assertion already recorded for this kind wins and is not overwritten: the graph
+            // said it outright, so explaining it as an inference would be false.
+            held.entry(kind).or_insert(NoteSource::Refined(chain));
+        }
+        if let Some(kind) = stated {
+            held.insert(kind, NoteSource::Asserted);
         }
     }
 
@@ -1751,6 +1997,7 @@ impl CoreModelBuilder {
         let mut model = CoreModel {
             statements_read: self.statements_read,
             findings: std::mem::take(&mut self.findings),
+            refinements: self.refinements.clone(),
             ..CoreModel::default()
         };
 
@@ -1985,7 +2232,7 @@ impl CoreModelBuilder {
             model.derivations.push(Derivation {
                 conclusion: format!("{to} skosxl:labelRelation {from}"),
                 premise: format!("{from} skosxl:labelRelation {to}"),
-                rule: SkosRule::S62,
+                rule: SkosRule::S62.into(),
             });
         }
     }
@@ -2086,7 +2333,7 @@ impl CoreModelBuilder {
             model.derivations.push(Derivation {
                 conclusion: format!("{from} {relation} {to}"),
                 premise,
-                rule,
+                rule: rule.into(),
             });
         }
     }
@@ -2142,7 +2389,7 @@ impl CoreModelBuilder {
                 model.derivations.push(Derivation {
                     conclusion: conclusion.clone(),
                     premise: format!("{from} {via} {to}"),
-                    rule: SemanticRelation::semantic_relation_rule(via),
+                    rule: SemanticRelation::semantic_relation_rule(via).into(),
                 });
             }
             entail_class(model, &from, SkosClass::Concept, SkosRule::S19, &conclusion);
@@ -2257,7 +2504,7 @@ impl CoreModelBuilder {
                                 "{resource} skosxl:{} {label}, whose skosxl:literalForm is {plain}",
                                 kind.local_name()
                             ),
-                            rule,
+                            rule: rule.into(),
                         });
                     }
                 }
@@ -2304,6 +2551,26 @@ impl CoreModelBuilder {
     /// [`notes`](crate::NoteKind) module for why a concept with no definition is a rule-pack
     /// question and not a SKOS one.
     fn attach_notes(&mut self, model: &mut CoreModel) {
+        // The `rdfs5` steps that compose a chain longer than one declaration, emitted once for
+        // the whole vocabulary rather than once per note. The conclusion is about two properties
+        // and does not mention a concept, so repeating it under every note carrying it would be
+        // the same sentence a thousand times.
+        for property in std::mem::take(&mut self.refinements_used) {
+            let Some(kinds) = self.refinements.note_kinds(&property) else {
+                continue;
+            };
+            for kind in kinds.keys() {
+                if let Some((conclusion, premise)) = self.refinements.composition(&property, *kind)
+                {
+                    model.derivations.push(Derivation {
+                        conclusion,
+                        premise,
+                        rule: RdfsRule::Rdfs5.into(),
+                    });
+                }
+            }
+        }
+
         for (node, notes) in std::mem::take(&mut self.notes) {
             for (value, kinds) in notes {
                 let held = model
@@ -2313,21 +2580,51 @@ impl CoreModelBuilder {
                     .notes
                     .entry(value.clone())
                     .or_default();
-                for kind in &kinds {
-                    held.insert(*kind, NoteOrigin::Asserted);
+                let mut refined: Vec<(NoteKind, String)> = Vec::new();
+                for (kind, source) in &kinds {
+                    match source {
+                        NoteSource::Asserted => {
+                            held.insert(*kind, NoteOrigin::Asserted);
+                        }
+                        NoteSource::Refined(chain) => {
+                            let used = chain.first().cloned().unwrap_or_default();
+                            held.insert(
+                                *kind,
+                                NoteOrigin::Refined {
+                                    property: curie(&used),
+                                },
+                            );
+                            refined.push((*kind, used));
+                        }
+                    }
                 }
 
-                // S17, after every assertion on this value is in place — so the six are lifted
-                // against the final picture and a `skos:note` stated later in the graph than the
-                // `skos:definition` it duplicates still wins.
+                for (kind, used) in refined {
+                    model.derivations.push(Derivation {
+                        conclusion: format!("{node} {kind} {value}"),
+                        premise: format!(
+                            "{node} {} {value}, and {} rdfs:subPropertyOf {kind}",
+                            curie(&used),
+                            curie(&used)
+                        ),
+                        rule: REFINEMENT_RULE.into(),
+                    });
+                }
+
+                // S17, after every assertion and every refinement on this value is in place — so
+                // the six are lifted against the final picture and a `skos:note` stated later in
+                // the graph than the `skos:definition` it duplicates still wins. The lift reads
+                // `held` rather than `kinds` because a refined `skos:scopeNote` entails a
+                // `skos:note` exactly as a stated one does.
+                let present: Vec<NoteKind> = held.keys().copied().collect();
                 let mut lifted: Vec<(NoteKind, NoteKind, SkosRule)> = Vec::new();
-                for kind in &kinds {
+                for kind in present {
                     let Some((parent, rule)) = kind.super_property() else {
                         continue;
                     };
                     if let std::collections::btree_map::Entry::Vacant(slot) = held.entry(parent) {
                         slot.insert(NoteOrigin::Entailed(rule));
-                        lifted.push((*kind, parent, rule));
+                        lifted.push((kind, parent, rule));
                     }
                 }
 
@@ -2335,10 +2632,22 @@ impl CoreModelBuilder {
                     model.derivations.push(Derivation {
                         conclusion: format!("{node} {parent} {value}"),
                         premise: format!("{node} {kind} {value}"),
-                        rule,
+                        rule: rule.into(),
                     });
                 }
             }
+        }
+
+        // A resolution that gave up leaves properties unread, and statements made with those read
+        // as non-SKOS. Reporting nothing here would make an incompletely-read vocabulary
+        // indistinguishable from a sparsely-documented one — the false green `Severity::Unchecked`
+        // exists for.
+        if let Some(exhaustion) = self.refinements.exhaustion() {
+            model.findings.push(Finding::RefinementBoundReached {
+                resolved: exhaustion.resolved,
+                unresolved: exhaustion.unresolved,
+                steps_walked: exhaustion.steps_walked,
+            });
         }
     }
 
@@ -2395,7 +2704,7 @@ impl CoreModelBuilder {
                 model.derivations.push(Derivation {
                     conclusion: format!("{scheme} skos:hasTopConcept {concept}"),
                     premise: format!("{concept} skos:topConceptOf {scheme}"),
-                    rule: SkosRule::S8,
+                    rule: SkosRule::S8.into(),
                 });
             }
         }
@@ -2407,7 +2716,7 @@ impl CoreModelBuilder {
                 model.derivations.push(Derivation {
                     conclusion: format!("{concept} skos:topConceptOf {scheme}"),
                     premise: format!("{scheme} skos:hasTopConcept {concept}"),
-                    rule: SkosRule::S8,
+                    rule: SkosRule::S8.into(),
                 });
             }
         }
@@ -2462,7 +2771,7 @@ impl CoreModelBuilder {
                 model.derivations.push(Derivation {
                     conclusion: format!("{concept} skos:inScheme {scheme}"),
                     premise: format!("{concept} skos:topConceptOf {scheme}"),
-                    rule: SkosRule::S7,
+                    rule: SkosRule::S7.into(),
                 });
             }
         }
@@ -2551,7 +2860,7 @@ impl CoreModelBuilder {
                                     "{collection} skos:memberList {head}, whose items include \
                                      {item}"
                                 ),
-                                rule: SkosRule::S36,
+                                rule: SkosRule::S36.into(),
                             });
                         }
                     }
@@ -2715,13 +3024,14 @@ fn entail_class(
     model.derivations.push(Derivation {
         conclusion: format!("{node} rdf:type {class}"),
         premise: premise.to_owned(),
-        rule,
+        rule: rule.into(),
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::refinement::RefinementBound;
 
     /// The SKOS Reference's example namespace, so a test reads like the specification's own text.
     const EX: &str = "http://example.com/ns/";
@@ -3052,13 +3362,21 @@ mod tests {
         );
 
         // And it explains itself: S36 for the members, S29 for the class.
-        let rules: BTreeSet<SkosRule> = model
+        let rules: BTreeSet<Rule> = model
             .derivations()
             .iter()
             .map(|derivation| derivation.rule)
             .collect();
-        assert!(rules.contains(&SkosRule::S36), "{:?}", model.derivations());
-        assert!(rules.contains(&SkosRule::S29), "{:?}", model.derivations());
+        assert!(
+            rules.contains(&Rule::Skos(SkosRule::S36)),
+            "{:?}",
+            model.derivations()
+        );
+        assert!(
+            rules.contains(&Rule::Skos(SkosRule::S29)),
+            "{:?}",
+            model.derivations()
+        );
         assert!(model.is_consistent(), "{:?}", model.findings());
     }
 
@@ -4080,7 +4398,7 @@ mod tests {
             .filter(|derivation| {
                 matches!(
                     derivation.rule,
-                    SkosRule::S55 | SkosRule::S56 | SkosRule::S57
+                    Rule::Skos(SkosRule::S55 | SkosRule::S56 | SkosRule::S57)
                 )
             })
             .map(|derivation| format!("{} [{}]", derivation.conclusion, derivation.rule.number()))
@@ -4787,7 +5105,7 @@ mod tests {
             !model
                 .derivations()
                 .iter()
-                .any(|d| matches!(d.rule, SkosRule::S60 | SkosRule::S61)),
+                .any(|d| matches!(d.rule, Rule::Skos(SkosRule::S60 | SkosRule::S61))),
             "{:?}",
             model.derivations()
         );
@@ -5145,10 +5463,10 @@ mod tests {
         ]);
 
         assert!(
-            !model
-                .derivations()
-                .iter()
-                .any(|derivation| matches!(derivation.rule, SkosRule::S19 | SkosRule::S20)),
+            !model.derivations().iter().any(|derivation| matches!(
+                derivation.rule,
+                Rule::Skos(SkosRule::S19 | SkosRule::S20)
+            )),
             "{:?}",
             model.derivations()
         );
@@ -5762,7 +6080,7 @@ mod tests {
         // nothing to lift it onto.
         assert_eq!(
             held.note_origin(&tagged("this is a note", "en"), NoteKind::Note),
-            Some(NoteOrigin::Asserted)
+            Some(&NoteOrigin::Asserted)
         );
         assert!(model.derivations().is_empty());
     }
@@ -5877,7 +6195,7 @@ mod tests {
             } else {
                 NoteOrigin::Asserted
             };
-            assert_eq!(held.note_origin(&value, kind), Some(expected), "{kind}");
+            assert_eq!(held.note_origin(&value, kind), Some(&expected), "{kind}");
         }
 
         // One derivation, not six: the six specific notes carry the *same* value, so they license
@@ -5919,7 +6237,7 @@ mod tests {
         };
         assert_eq!(
             held.note_origin(&value, NoteKind::Note),
-            Some(NoteOrigin::Asserted)
+            Some(&NoteOrigin::Asserted)
         );
         for kind in NoteKind::ALL {
             if kind != NoteKind::Note {
@@ -5953,7 +6271,7 @@ mod tests {
             };
             assert_eq!(
                 held.note_origin(&value, NoteKind::Note),
-                Some(NoteOrigin::Asserted)
+                Some(&NoteOrigin::Asserted)
             );
             assert!(model.derivations().is_empty(), "{:?}", model.derivations());
         }
@@ -6098,5 +6416,325 @@ mod tests {
         // Both were lifted onto `skos:note`, because S17 is about the property and says nothing
         // about the value.
         assert_eq!(held.notes_of(NoteKind::Note).count(), 2);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // §7.1's extension point — a vocabulary's own `rdfs:subPropertyOf` refinements of the seven.
+    // See `crate::refinement` for the resolution and `docs/adr/0028` for why it is two passes.
+    // ---------------------------------------------------------------------------------------
+
+    const USAGE_NOTE: &str = "http://example.com/ns/usageNote";
+    const HOUSE_NOTE: &str = "http://example.com/ns/houseNote";
+
+    /// `<sub> rdfs:subPropertyOf <sup>`.
+    fn refines(sub: &str, sup: &str) -> Statement {
+        Statement::new(
+            Node::iri(sub),
+            crate::refinement::RDFS_SUB_PROPERTY_OF.to_owned(),
+            Node::iri(sup),
+        )
+    }
+
+    /// Build the model the way a production caller does: one pass for the declarations, one for
+    /// everything else.
+    fn with_refinements(statements: Vec<Statement>) -> CoreModel {
+        let refinements = PropertyRefinements::from_statements(statements.clone());
+        let mut builder = CoreModel::builder().with_refinements(refinements);
+        for statement in statements {
+            builder.push(statement);
+        }
+        builder.build()
+    }
+
+    /// The item's whole point. `ex:usageNote rdfs:subPropertyOf skos:scopeNote` plus a statement
+    /// made with it entails a `skos:scopeNote` (rdfs7) and then a `skos:note` (S17), and both
+    /// explain themselves.
+    #[test]
+    fn a_declared_refinement_entails_the_skos_property_and_then_s17_lifts_it() {
+        let concept = ex("Chemistry");
+        let value = tagged("Prefer the IUPAC spelling.", "en");
+        let model = with_refinements(vec![
+            typed(&concept, SkosClass::Concept),
+            refines(USAGE_NOTE, &NoteKind::ScopeNote.iri()),
+            Statement::new(concept.clone(), USAGE_NOTE.to_owned(), value.clone()),
+        ]);
+
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert_eq!(
+            held.note_origin(&value, NoteKind::ScopeNote),
+            Some(&NoteOrigin::Refined {
+                property: format!("<{USAGE_NOTE}>")
+            }),
+            "the scope note is inferred, and names the property that stated it"
+        );
+        assert_eq!(
+            held.note_origin(&value, NoteKind::Note),
+            Some(&NoteOrigin::Entailed(SkosRule::S17)),
+            "S17 lifts a refined scope note exactly as it lifts a stated one"
+        );
+
+        // Two derivations, each citing the document that licenses it: rdfs7 for the refinement
+        // and S17 for the lift. Citing SKOS for the first would be a guess wearing a citation.
+        let rendered: Vec<String> = model
+            .derivations()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(rendered.len(), 2, "{rendered:?}");
+        let refined = rendered
+            .iter()
+            .find(|text| text.contains("rdfs7"))
+            .unwrap_or_else(|| panic!("no rdfs7 derivation in {rendered:?}"));
+        assert!(refined.contains("skos:scopeNote"), "{refined}");
+        assert!(refined.contains(USAGE_NOTE), "{refined}");
+        assert!(
+            refined.contains("rdfs:subPropertyOf"),
+            "the premise must name the declaration, not just the statement: {refined}"
+        );
+        assert!(
+            rendered.iter().any(|text| text.contains("S17")),
+            "{rendered:?}"
+        );
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.checks_are_complete());
+    }
+
+    /// The same graph, read **without** the first pass, is the behaviour that shipped before this
+    /// item — and it must stay exactly that, because refinements are opt-in at the call site.
+    ///
+    /// This is the test that makes the item's claim falsifiable: without it, a model that read
+    /// refinements unconditionally would pass every other assertion here.
+    #[test]
+    fn without_the_first_pass_a_refinement_entails_nothing() {
+        let concept = ex("Chemistry");
+        let value = tagged("Prefer the IUPAC spelling.", "en");
+        let model = CoreModel::from_statements([
+            typed(&concept, SkosClass::Concept),
+            refines(USAGE_NOTE, &NoteKind::ScopeNote.iri()),
+            Statement::new(concept.clone(), USAGE_NOTE.to_owned(), value.clone()),
+        ]);
+
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert!(held.notes().is_empty(), "{:?}", held.notes());
+        assert!(model.derivations().is_empty());
+        // And the statements were still counted, so the report's arithmetic is unaffected.
+        assert_eq!(model.statements_read(), 3);
+    }
+
+    /// A chain the graph controls. `ex:houseNote → ex:usageNote → skos:scopeNote` entails the far
+    /// end, and the *composition* is derived once for the vocabulary rather than once per note —
+    /// the conclusion is about two properties and mentions no concept.
+    #[test]
+    fn a_two_step_chain_entails_the_far_end_and_composes_itself_once() {
+        let (first, second) = (ex("Chemistry"), ex("Physics"));
+        let model = with_refinements(vec![
+            typed(&first, SkosClass::Concept),
+            typed(&second, SkosClass::Concept),
+            refines(HOUSE_NOTE, USAGE_NOTE),
+            refines(USAGE_NOTE, &NoteKind::ScopeNote.iri()),
+            Statement::new(first.clone(), HOUSE_NOTE.to_owned(), tagged("One.", "en")),
+            Statement::new(second.clone(), HOUSE_NOTE.to_owned(), tagged("Two.", "en")),
+        ]);
+
+        for concept in [&first, &second] {
+            let held = match model.resource(concept) {
+                Some(held) => held,
+                None => unreachable!("both are concepts"),
+            };
+            assert_eq!(
+                held.notes_of(NoteKind::ScopeNote).count(),
+                1,
+                "{concept} should carry an inferred scope note"
+            );
+        }
+
+        let compositions: Vec<&Derivation> = model
+            .derivations()
+            .iter()
+            .filter(|derivation| derivation.rule == Rule::Rdfs(RdfsRule::Rdfs5))
+            .collect();
+        assert_eq!(
+            compositions.len(),
+            1,
+            "one composition for the vocabulary, not one per note: {compositions:?}"
+        );
+        assert!(
+            compositions[0].premise.contains(USAGE_NOTE),
+            "the composition must name the middle property, which is the step a reader cannot \
+             find in the source file: {:?}",
+            compositions[0]
+        );
+    }
+
+    /// An unused declaration derives nothing. A vocabulary that declares a refinement and never
+    /// uses it would otherwise get a derivation for a conclusion no statement reached.
+    #[test]
+    fn a_declared_but_unused_refinement_derives_nothing() {
+        let concept = ex("Chemistry");
+        let model = with_refinements(vec![
+            typed(&concept, SkosClass::Concept),
+            refines(HOUSE_NOTE, USAGE_NOTE),
+            refines(USAGE_NOTE, &NoteKind::ScopeNote.iri()),
+        ]);
+        assert!(model.derivations().is_empty(), "{:?}", model.derivations());
+    }
+
+    /// An assertion beats a refinement for the same value under the same property. The graph said
+    /// it outright, so explaining it as an inference would be false.
+    #[test]
+    fn an_asserted_note_is_never_reported_as_refined() {
+        let concept = ex("Chemistry");
+        let value = tagged("Prefer the IUPAC spelling.", "en");
+        let model = with_refinements(vec![
+            typed(&concept, SkosClass::Concept),
+            refines(USAGE_NOTE, &NoteKind::ScopeNote.iri()),
+            Statement::new(concept.clone(), USAGE_NOTE.to_owned(), value.clone()),
+            noted(&concept, NoteKind::ScopeNote, value.clone()),
+        ]);
+
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert_eq!(
+            held.note_origin(&value, NoteKind::ScopeNote),
+            Some(&NoteOrigin::Asserted)
+        );
+    }
+
+    /// The coverage table counts a refined note apart from an S17 lift, because the two answer
+    /// different questions — see [`DocumentationCoverage::refined`].
+    #[test]
+    fn documentation_coverage_counts_refined_notes_separately() {
+        let concept = ex("Chemistry");
+        let model = with_refinements(vec![
+            typed(&concept, SkosClass::Concept),
+            refines(USAGE_NOTE, &NoteKind::ScopeNote.iri()),
+            Statement::new(
+                concept.clone(),
+                USAGE_NOTE.to_owned(),
+                tagged("Prefer the IUPAC spelling.", "en"),
+            ),
+        ]);
+
+        let coverage = model.documentation_coverage();
+        let scope = coverage
+            .iter()
+            .find(|row| row.kind == NoteKind::ScopeNote)
+            .unwrap_or_else(|| panic!("every kind has a row"));
+        assert_eq!((scope.concepts, scope.notes), (1, 1));
+        assert_eq!(scope.refined, 1);
+        assert_eq!(scope.inferred, 0, "a refinement is not an S17 lift");
+        assert!(scope.to_string().contains("through a declared refinement"));
+
+        let note = coverage
+            .iter()
+            .find(|row| row.kind == NoteKind::Note)
+            .unwrap_or_else(|| panic!("every kind has a row"));
+        assert_eq!(note.inferred, 1, "and S17 still lifts it");
+        assert_eq!(note.refined, 0);
+    }
+
+    /// A refinement of something that is not a documentation property changes nothing, and the
+    /// statements made with it are still counted and dropped. Most `rdfs:subPropertyOf` in the
+    /// wild is of this shape.
+    #[test]
+    fn a_refinement_of_a_non_note_property_leaves_the_model_alone() {
+        let concept = ex("Chemistry");
+        let model = with_refinements(vec![
+            typed(&concept, SkosClass::Concept),
+            refines(USAGE_NOTE, "http://purl.org/dc/terms/description"),
+            Statement::new(
+                concept.clone(),
+                USAGE_NOTE.to_owned(),
+                tagged("Prefer the IUPAC spelling.", "en"),
+            ),
+        ]);
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert!(held.notes().is_empty());
+        assert_eq!(model.statements_read(), 3);
+    }
+
+    /// A resolution that gave up must say so, at `Severity::Unchecked`, and must not make the
+    /// vocabulary read as inconsistent — §7 states no integrity condition, so a refinement can
+    /// never do that.
+    #[test]
+    fn an_exhausted_resolution_reports_unchecked_and_not_inconsistent() {
+        let concept = ex("Chemistry");
+        let declarations: Vec<Statement> = (0..8)
+            .map(|n| {
+                refines(
+                    &format!("http://example.com/ns/p{n}"),
+                    &NoteKind::Definition.iri(),
+                )
+            })
+            .collect();
+        let refinements = {
+            let mut builder = PropertyRefinements::builder().with_bound(RefinementBound {
+                max_properties: 100,
+                max_steps: 3,
+            });
+            for statement in declarations.clone() {
+                builder.push(statement);
+            }
+            builder.build()
+        };
+        let mut builder = CoreModel::builder().with_refinements(refinements);
+        builder.push(typed(&concept, SkosClass::Concept));
+        for statement in declarations {
+            builder.push(statement);
+        }
+        let model = builder.build();
+
+        let exhausted: Vec<&Finding> = model
+            .findings()
+            .iter()
+            .filter(|finding| matches!(finding, Finding::RefinementBoundReached { .. }))
+            .collect();
+        assert_eq!(exhausted.len(), 1, "{:?}", model.findings());
+        assert_eq!(exhausted[0].severity(), Severity::Unchecked);
+        assert!(
+            model.is_consistent(),
+            "an unresolved refinement says nothing about consistency: {:?}",
+            model.findings()
+        );
+        assert!(
+            !model.checks_are_complete(),
+            "but the report must not close by claiming a complete read"
+        );
+        let rendered = exhausted[0].to_string();
+        assert!(rendered.contains("floor"), "{rendered}");
+        assert!(rendered.contains("rdfs7"), "{rendered}");
+    }
+
+    /// A cycle in the declarations terminates and entails nothing, and the vocabulary is still
+    /// read. This is reachable from a customer's file, not a hostile test.
+    #[test]
+    fn a_cycle_in_the_declarations_leaves_the_vocabulary_readable() {
+        let concept = ex("Chemistry");
+        let model = with_refinements(vec![
+            typed(&concept, SkosClass::Concept),
+            refines(HOUSE_NOTE, USAGE_NOTE),
+            refines(USAGE_NOTE, HOUSE_NOTE),
+            Statement::new(concept.clone(), HOUSE_NOTE.to_owned(), tagged("One.", "en")),
+            noted(&concept, NoteKind::Definition, tagged("Matter.", "en")),
+        ]);
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert_eq!(held.notes_of(NoteKind::Definition).count(), 1);
+        assert_eq!(held.notes_of(NoteKind::ScopeNote).count(), 0);
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.checks_are_complete());
     }
 }

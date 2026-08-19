@@ -2288,3 +2288,77 @@ look competent disables the one signal that catches a stuck loop.
   that the harness now exercises exactly one pass more than it did this morning, and that the next
   blind-spot pass should extend the generator along a different axis rather than re-reading this
   one.
+
+## Iteration 31 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `2bcbc78`.** Took the next unchecked,
+  unblocked Phase 2 item: **documentation properties, part 2 — §7.1's extension point**, a
+  vocabulary's own `rdfs:subPropertyOf` refinements of the seven. (The two unchecked items above it
+  in the file are Phase 1's SPARQL Update and Graph Store Protocol, both deferred at iteration 11
+  on charter grounds, and the candidate seam part 3, which is in `BLOCKED.md` on authentication.)
+- **What it does.** `ex:usageNote rdfs:subPropertyOf skos:scopeNote` plus a statement written with
+  `ex:usageNote` now entails a `skos:scopeNote` under RDFS `rdfs7`, which S17 then lifts to a
+  `skos:note`. A chain the graph controls — `ex:houseNote → ex:usageNote → skos:scopeNote` —
+  resolves with a cycle guard and a bound, and its composition is derived **once for the
+  vocabulary** citing `rdfs5`, because the conclusion is about two properties and mentions no
+  concept. Before this, the same Turtle reported the concept as undocumented and gave no hint it
+  had looked past anything.
+- **Two passes over the source, not a buffer, and that is the ADR's main decision.** The builder is
+  a one-pass stream and a declaration can arrive after every statement that uses it, so one pass
+  would have to hold every unrecognised statement until the declarations were in — on a graph
+  carrying `dct:created` and `foaf:name` that is most of the graph, and `openbiz inspect`'s own
+  documentation promises "peak memory is the model rather than the graph". The first pass reads
+  `rdfs:subPropertyOf` and keeps the **property** graph, which is schema-sized rather than
+  data-sized. That is also why this materialises where `adr/0025` walks, and `adr/0028` states the
+  rule the two share: materialise what is bounded by the schema, walk what is bounded by the data.
+- **Iteration 30's lesson applied before the fact rather than after it.** `RefinementBound`'s step
+  budget is spent **across the whole resolution**, not per property — the exact shape `adr/0027`
+  found broken in the disjointness sweep, where the prose described a limit the code did not
+  impose. `the_step_budget_is_shared_across_every_property` asserts it directly and was proven to
+  fail against a per-property mutant before I trusted it.
+- **The derivation cites RDFS, not SKOS.** `Derivation.rule` was `SkosRule` and is now `Rule`,
+  either a SKOS statement or an RDFS entailment pattern, quoted from RDF 1.1 Semantics §9.2.1.
+  Citing an S-number for an entailment SKOS does not state would be a guess wearing a citation.
+  A `PartialEq<SkosRule> for Rule` keeps every existing comparison reading as it did.
+- **The binary found a defect the whole green suite did not, which is the sharpest thing here.**
+  With 556 tests passing I ran `openbiz notes` against a store on disk, and the entailed
+  `skos:note` printed `because no asserted note was recorded, which is a defect in this report`.
+  `stated_under` rendered the premise of an S17 lift by looking for **asserted** notes only, and
+  S17 had just acquired a second way to fire. The fallback was written as unreachable with a
+  comment explaining why, and that comment's reasoning had been falsified by the same commit that
+  was reading it. Fixed test-first. This is the fourth iteration running to find a comment that was
+  true when written — 28, 29 and 30 each found one — but it is the first found by *running the
+  product* rather than by reading the file being changed, and that is a different and better
+  detector.
+- **Three things deliberately not built.** A graph's own copy of S17 (a vocabulary that imports the
+  SKOS ontology carries `skos:definition rdfs:subPropertyOf skos:note` as a statement) is read,
+  counted, and **not** used — deriving from the customer's copy would make an explanation depend on
+  whether they imported the ontology. `skosxl:labelRelation`'s refinement is still not read, because
+  B.4.4.1 forbids closing a refinement of a symmetric property and that is a decision this item does
+  not get to make; it is a proposal. And refinements are **opt-in at the call site**, with
+  `without_the_first_pass_a_refinement_entails_nothing` asserting the old behaviour — without that
+  test, a build reading refinements unconditionally would pass every other test here.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **558 Rust tests, up from 531.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it. Two mutants run and both caught: disabling the refinement arm in `push`
+  fails five tests across two crates, and a per-property budget fails two.
+- **Recorded:** `adr/0028`. One `UNTESTED.md` entry closed (the note half; the `skosxl` half is
+  explicitly still open), **three opened** — the second store scan is unmeasured, the two bound
+  defaults have never been reached outside a test that lowered them, and **no fixture here is a
+  real extended thesaurus**. Two proposals, neither promoted.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T03:05Z.
+- **Still uncertain:** whether the first pass is reading the right graph. Every fixture proving this
+  works declares `ex:usageNote rdfs:subPropertyOf skos:scopeNote` **inside the vocabulary graph**,
+  because that is where I put it. I do not know whether enterprise thesauri do that, or whether the
+  declarations live in a separate ontology the vocabulary pulls in with `owl:imports` — and if it is
+  the second, the first pass scans a graph that contains no declarations, finds none, and
+  `openbiz inspect` prints nothing where a refinement section should be. That reads exactly like
+  "this vocabulary declares none", which is the silent-broken-connector failure the driver names by
+  name, and it would be *invisible*: the feature would look correct, the tests would stay green, and
+  the customer would see the same undocumented concept they saw before the item was built. I cannot
+  settle it from inside this repository — `CLAUDE.md` §6 forbids unlicensed real vocabulary data in
+  fixtures, and rightly — so it is a proposal to find a licence-cleared published thesaurus that
+  uses §7.1's extension point and read it end to end. Until then the honest claim is "§7.1 works on
+  graphs this loop wrote", which is weaker than the checked box implies, and the same doubt applies
+  to every §2 standard we claim, because **nothing in this repository has ever been read against a
+  vocabulary somebody else published.**

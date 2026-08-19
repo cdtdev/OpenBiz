@@ -1627,7 +1627,12 @@ Do not delete it — the record of what took how long to close is the signal.
   `scale::tests` already does for relations. The harness exists; the case does not.
 - **Opened:** iteration 29
 
-### A vocabulary's own note refinements are invisible, because we still read no `rdfs:subPropertyOf`
+### ~~A vocabulary's own note refinements are invisible, because we still read no `rdfs:subPropertyOf`~~ — CLOSED, iteration 31
+- **Closed by** `adr/0028`. A first pass reads `rdfs:subPropertyOf` and resolves it against the
+  seven; `ex:usageNote` reaches the report as a `skos:scopeNote` citing `rdfs7`, S17 lifts it to
+  `skos:note`, and `openbiz inspect` names the declared properties rather than only counting them.
+  Proven against the binary on disk. **The `skosxl:labelRelation` half of this entry is still
+  open** — see the entry above it, which is unchanged.
 - **Kind:** partial-standard
 - **What is proven:** the seven properties SKOS names are read, and S17 lifts the six onto
   `skos:note`.
@@ -1646,3 +1651,57 @@ Do not delete it — the record of what took how long to close is the signal.
 - **What would close it:** Phase 2's "Documentation properties, part 2" item, which is in the plan
   unchecked and was split out for exactly this reason.
 - **Opened:** iteration 29
+
+### Every read of a vocabulary now scans the store twice, and the second scan is unmeasured
+- **Kind:** unmeasured-cost
+- **What is proven:** `openbiz inspect` and `openbiz notes` both go through
+  `inspect::read`, which runs `Store::for_each_statement` twice — once for `rdfs:subPropertyOf`,
+  once for everything else (`adr/0028`). It is correct, and the tests cover the behaviour.
+- **What is not:** what it costs. Every vocabulary pays the first pass, including the large
+  majority that declare no refinements at all, because the pass cannot know that until it has
+  finished. `scale.rs` generates no `rdfs:subPropertyOf` and does not go through the store, so
+  there is no number for the second scan at 10k, 100k or 1M statements, and no comparison against
+  the one-pass build it replaced. `adr/0024` has a hard number for the option it rejected;
+  this ADR has none for the option it shipped, which is the same criticism iteration 28 made of
+  `adr/0025`.
+- **How to tell:** it will show as `inspect` taking roughly twice as long on a large import, with
+  no report line explaining why.
+- **What would close it:** a timing case in `scale.rs` that reads through a real `Store` rather
+  than a statement vector, at the three sizes, with and without the first pass. That harness does
+  not exist — every `scale.rs` case builds the model from an in-memory iterator.
+- **Opened:** iteration 31
+
+### `RefinementBound::DEFAULT` is a judgement about vocabularies nobody here has seen
+- **Kind:** unproven-default
+- **What is proven:** the bound works and is shared across the resolution rather than per property
+  — `the_step_budget_is_shared_across_every_property` asserts it and was proven to fail against a
+  per-property mutant. `an_exhausted_resolution_reports_unchecked_and_not_inconsistent` proves the
+  exhausted path reports at `Severity::Unchecked` and leaves `is_consistent()` true.
+- **What is not:** the two numbers. 10 000 declared properties and 100 000 edges were chosen by
+  reasoning about what a schema plausibly holds, not by measuring one. **Neither has been reached
+  outside a test that lowered them** — the same gap iteration 28 opened for `AncestryBound::DEFAULT`
+  and iteration 30 closed by hitting it for real. There is no fixture here where the real default
+  fires, so an operator hitting it would be the first.
+- **How to tell:** the report says the resolution stopped and how much was left. That part is
+  proven; what is unproven is whether it can ever legitimately happen.
+- **What would close it:** an end-to-end case through the binary whose declared property graph
+  reaches the shipped default, the way iteration 30's 1 500-deep chain did for ancestry.
+- **Opened:** iteration 31
+
+### No fixture here is a real extended thesaurus
+- **Kind:** unproven-against-real-data
+- **What is proven:** §7.1's extension point works on graphs this loop wrote — a single
+  declaration, a two-step chain, a cycle, a refinement of a non-note property, one property
+  refining two of the seven, and a graph carrying its own copy of S17.
+- **What is not:** that those shapes are the ones enterprise thesauri actually use. `CLAUDE.md` §6
+  forbids real vocabulary data in fixtures without a clear licence, so every case here was invented
+  by the same process that wrote the code — which means a shape neither of us thought of is
+  invisible to both. The specific unknown is whether refinements in the wild are declared in the
+  vocabulary graph at all, or in a separate ontology graph the vocabulary imports; if the latter,
+  the first pass reads the wrong graph and finds nothing, and reports "no declared refinements"
+  rather than "the declarations are somewhere I did not look".
+- **How to tell:** it cannot be told from inside this repository.
+- **What would close it:** a permissively-licensed published SKOS thesaurus that uses §7.1's
+  extension point, read end to end. Recorded as a proposal rather than taken, because finding one
+  is research and not engineering.
+- **Opened:** iteration 31

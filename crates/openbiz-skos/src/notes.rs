@@ -75,16 +75,22 @@
 //! `skos:definition "X"` and `skos:note "X"` keeps the assertion and records no derivation —
 //! consistent with how an asserted class and an asserted label are treated.
 //!
-//! # Sub-properties a *vocabulary* declares are not read yet
+//! # Sub-properties a *vocabulary* declares are read, by a second pass
+//!
+//! **Corrected at iteration 31; this section said "we do not read it" until then.**
 //!
 //! §7.1 also says the seven "provide a set of extension points for defining more specific types of
 //! note", and an enterprise thesaurus routinely declares `ex:usageNote rdfs:subPropertyOf
 //! skos:scopeNote`. Under RDFS that entails a `skos:scopeNote`, and then S17 entails a
-//! `skos:note`. **We do not read it.** Doing so means reading `rdfs:subPropertyOf` out of the
-//! graph and walking a chain the graph controls, which needs two passes over a stream that has
-//! one, and it is a separate build-plan item for that reason. Until it lands, a vocabulary's own
-//! note refinements are counted among its non-SKOS statements and are invisible to the counts
-//! here. `docs/UNTESTED.md` records it.
+//! `skos:note`. Both now happen — see [`crate::refinement`] for the mechanism and
+//! `docs/adr/0028` for why it is a second pass over the source rather than a buffer.
+//!
+//! Two things follow that this module has to be careful about. The lift below is still exactly one
+//! step deep and still needs no cycle guard, because **S17 is not what chains** — a refinement
+//! chain is resolved entirely in [`crate::refinement`], which has its own guard and its own bound,
+//! and what reaches [`NoteKind`] is always one of the seven. And a caller that does not run the
+//! first pass gets [`PropertyRefinements::default()`](crate::PropertyRefinements), which entails
+//! nothing, so refinements are opt-in at the call site rather than silently on.
 
 use std::fmt;
 
@@ -173,7 +179,9 @@ impl NoteKind {
     /// `None` for [`NoteKind::Note`] itself, which is the top of a hierarchy exactly one step
     /// deep. That shallowness is not an assumption about the graph: S17 names the six explicitly
     /// and SKOS declares no sub-property relationship among them, so the lift can never chain and
-    /// needs no cycle guard. A vocabulary's *own* refinements would chain — see the module note.
+    /// needs no cycle guard. A vocabulary's *own* refinements do chain, and are resolved into one
+    /// of the seven by [`crate::refinement`] before they ever reach here — which is why this stays
+    /// one step and why the guard lives there rather than in this file.
     pub fn super_property(self) -> Option<(NoteKind, SkosRule)> {
         match self {
             NoteKind::Note => None,
@@ -188,13 +196,29 @@ impl fmt::Display for NoteKind {
     }
 }
 
-/// Whether a note was stated by the graph or lifted onto a super-property by S17.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Whether a note was stated by the graph, lifted onto a super-property by S17, or reached
+/// through a refinement the vocabulary declared itself.
+///
+/// Not [`Copy`], unlike the other origin types in this crate, because [`NoteOrigin::Refined`]
+/// names an arbitrary property IRI. The alternative was keeping the refining property somewhere
+/// other than the origin, which would have meant a report could say a note was inferred without
+/// being able to say from what.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NoteOrigin {
     /// The graph carries the statement under this property.
     Asserted,
     /// We concluded it, under this rule — in practice always S17.
     Entailed(SkosRule),
+    /// The graph stated it under its own property, which it declares a sub-property of this one.
+    ///
+    /// Licensed by RDFS, not by SKOS: §7.1 offers the extension point and RDF 1.1 Semantics says
+    /// what follows from using it. The IRI is the property the graph actually used, so a reader
+    /// can find the statement in the source file — which is the whole point, because the source
+    /// file does not contain the conclusion.
+    Refined {
+        /// The property the statement was made with.
+        property: String,
+    },
 }
 
 impl fmt::Display for NoteOrigin {
@@ -202,6 +226,7 @@ impl fmt::Display for NoteOrigin {
         match self {
             NoteOrigin::Asserted => write!(f, "asserted"),
             NoteOrigin::Entailed(rule) => write!(f, "inferred, {}", rule.number()),
+            NoteOrigin::Refined { property } => write!(f, "inferred from {property}, rdfs7"),
         }
     }
 }
@@ -222,6 +247,15 @@ pub struct DocumentationCoverage {
     /// How many of those notes we inferred rather than read — always under S17, so always zero
     /// for every kind except [`NoteKind::Note`].
     pub inferred: usize,
+    /// How many reached this property through an `rdfs:subPropertyOf` the vocabulary declared
+    /// itself, rather than through S17 or through being stated.
+    ///
+    /// Counted apart from `inferred` because the two answer different questions. An S17 lift is
+    /// the specification's own arithmetic and needs no explaining; a refinement means the
+    /// vocabulary has note properties of its own, and an author reading a coverage table wants to
+    /// know that the number in front of them includes statements written with a property whose
+    /// name does not appear in it.
+    pub refined: usize,
 }
 
 impl fmt::Display for DocumentationCoverage {
@@ -235,6 +269,9 @@ impl fmt::Display for DocumentationCoverage {
         )?;
         if self.inferred > 0 {
             write!(f, ", {} inferred under S17", self.inferred)?;
+        }
+        if self.refined > 0 {
+            write!(f, ", {} through a declared refinement", self.refined)?;
         }
         Ok(())
     }
@@ -312,6 +349,13 @@ mod tests {
         assert_eq!(
             NoteOrigin::Entailed(SkosRule::S17).to_string(),
             "inferred, S17"
+        );
+        assert_eq!(
+            NoteOrigin::Refined {
+                property: "ex:usageNote".to_owned()
+            }
+            .to_string(),
+            "inferred from ex:usageNote, rdfs7"
         );
     }
 }

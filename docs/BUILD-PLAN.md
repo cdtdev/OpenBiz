@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 10 of 20 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 11 of 23 items done. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -75,6 +75,15 @@ entailed — the one thing a Turtle export of the same vocabulary cannot show. *
 integrity condition and we invent none**: a concept with no definition is consistent SKOS, the
 report says so beside the count, and the check every incumbent runs there is named as the Z39.19 /
 ISO 25964 rule pack it actually is. See `adr/0026`.
+**And a vocabulary's own note properties are read too.** §7.1 calls the seven "a set of extension
+points", and an enterprise thesaurus uses them: `ex:usageNote rdfs:subPropertyOf skos:scopeNote`
+plus a statement written with `ex:usageNote` now reaches the report as a scope note citing RDFS
+`rdfs7`, which S17 then lifts to a `skos:note`. Reading it takes **two passes over the source** —
+a declaration can arrive after every statement that uses it, and buffering the alternative would
+cost the graph in memory. `openbiz inspect` names the declared properties rather than only counting
+them, because a number an author cannot check against their own file is not a report. See
+`adr/0028`, and note that `Derivation` can now cite RDFS as well as SKOS, because citing an
+S-number for something SKOS does not state would be a guess wearing a citation.
 
 **And we now know what that costs, which changed the design of the next item before it was
 written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
@@ -868,21 +877,34 @@ the interface is a core differentiator, and building it late means retrofitting 
       > reason the languages section is counts. Both proven against the binary on disk.
       > **Acceptance:** §7's Examples 22, 23 and 24, all three, plus a test asserting §7's silence.
       > See `adr/0026`.
-- [ ] Documentation properties, part 2 — the extension point: a vocabulary's own
+- [x] Documentation properties, part 2 — the extension point: a vocabulary's own
       `rdfs:subPropertyOf` refinements of the seven
-      > Split out at iteration 29. §7.1 says the seven "provide a set of extension points for
-      > defining more specific types of note", and an enterprise thesaurus routinely declares
-      > `ex:usageNote rdfs:subPropertyOf skos:scopeNote`. Under RDFS that entails a
-      > `skos:scopeNote`, and S17 then entails a `skos:note`; today it entails nothing here,
-      > because we read no `rdfs:subPropertyOf` at all.
-      > **Why it is a separate item and not a continuation:** the builder is a one-pass stream, and
-      > a declaration can arrive after the statement that uses it. Reading refinements means either
-      > buffering or a second pass, and the chain is graph-controlled so it needs a cycle guard and
-      > a bound — the machinery `ancestry.rs` has and `attach_notes` deliberately does not.
-      > **It is the same gap as `skosxl:labelRelation`'s refinement** (`UNTESTED.md`, iteration 26),
-      > and the two should be closed by one mechanism. The `skosxl` case additionally cannot close
-      > a refinement even when it reads one (B.4.4.1); this one can, because a sub-property of an
-      > annotation property is just a sub-property.
+      > Split out at iteration 29, landed at iteration 31. §7.1's "set of extension points for
+      > defining more specific types of note" is read: `ex:usageNote rdfs:subPropertyOf
+      > skos:scopeNote` plus a statement made with `ex:usageNote` entails a `skos:scopeNote` under
+      > RDFS `rdfs7`, and S17 then entails a `skos:note`. A chain the graph controls is resolved
+      > with a cycle guard and a bound, and its composition is derived once for the vocabulary
+      > citing `rdfs5`.
+      > **Two passes over the source, not a buffer.** A declaration can arrive after every
+      > statement that uses it, so a single pass would have to hold every unrecognised statement
+      > until the declarations were in — which breaks `inspect`'s own promise that peak memory is
+      > the model rather than the graph. The first pass reads `rdfs:subPropertyOf` and keeps the
+      > *property* graph, which is schema-sized. See `adr/0028`.
+      > **The budget is shared across the resolution**, not per property — `adr/0027`'s finding
+      > applied before the fact rather than after it, with a test proven to fail against a
+      > per-property mutant.
+      > **`Derivation.rule` is now `Rule`**, either a SKOS statement or an RDFS entailment pattern,
+      > because citing an S-number for something SKOS does not state would be a guess wearing a
+      > citation.
+      > **Production callers: both existing ones.** `openbiz notes` prints the property the
+      > vocabulary actually used, the declaration, and the rule; `openbiz inspect` counts refined
+      > notes apart from S17 lifts and **names** the declared properties. Both proven against the
+      > binary on disk — which is how the S17-premise defect in `openbiz notes` was found, with the
+      > whole suite green.
+      > **Scope, honestly:** `skosxl:labelRelation`'s refinement is still not read. It was meant to
+      > be the same mechanism and the resolution is written to accept it, but B.4.4.1 forbids
+      > closing a refinement of a symmetric property, which is a decision this item does not make.
+      > `UNTESTED.md`'s iteration-23 entry stays open and it is a proposal.
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number
 - [ ] Concept tree query API: children, ancestors, siblings, paths-to-root, with cycle detection

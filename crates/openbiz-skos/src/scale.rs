@@ -565,7 +565,7 @@ mod tests {
         let derivation = Derivation {
             conclusion: "<a> skos:narrower <b>".to_string(),
             premise: "<b> skos:broader <a>".to_string(),
-            rule: SkosRule::S25,
+            rule: SkosRule::S25.into(),
         };
         let rendered = format!("  {derivation}\n");
         let model = CoreModel::from_statements([Statement::new(

@@ -1276,3 +1276,49 @@ has. `README.md` is the right home for it and a human wrote it._
   the proposal above — an algorithmic fix might remove the need entirely, so this should not be
   built first.
 - **Suggested phase:** Phase 2.
+
+### Find a permissively-licensed extended thesaurus and read it end to end
+- **Status:** proposed.
+- **Gap:** §7.1's extension point now works (`adr/0028`), and every fixture proving it was invented
+  by this loop. `CLAUDE.md` §6 forbids real vocabulary data in fixtures without a clear licence,
+  which is right — and the consequence is that a shape neither the code nor the tests thought of is
+  invisible to both. The specific unknown that worries me: whether enterprise vocabularies declare
+  `ex:usageNote rdfs:subPropertyOf skos:scopeNote` **in the vocabulary graph**, or in a separate
+  ontology graph the vocabulary imports. If it is the second, the first pass reads the wrong graph,
+  finds nothing, and reports "no declared refinements" — which reads exactly like "there are none".
+  That is the silent-broken-connector failure the driver names by name.
+- **Why load-bearing:** it is the difference between a feature that works on our examples and one
+  that works on a customer's file, and the failure mode is a false negative that looks like a clean
+  report. It also generalises past this item: the same question applies to every §2 standard we
+  claim, and nothing in the repository has ever been read against a published vocabulary.
+- **Options:** a licence-cleared corpus checked into `tests/fixtures` (best, and the licence review
+  is the work); a documented manual procedure an operator can run against their own file and report
+  on (cheap, and proves nothing here); or a `--follow-imports` option on `inspect` that reads
+  `owl:imports`, which is a different item and would need the graph registry to hold the imported
+  ontology at all.
+- **Cost & impact:** the search is research, not engineering, and it is the reason this is a
+  proposal. Reading one once found is small.
+- **Suggested phase:** Phase 2, or Phase 11 (interop & migration) if it turns into a corpus.
+
+### Close `skosxl:labelRelation`'s refinement, now that the mechanism exists
+- **Status:** proposed.
+- **Gap:** `UNTESTED.md`'s iteration-23 entry — a refinement of `skosxl:labelRelation` reaches
+  nothing — was written as the same gap as the note one, to be closed by one mechanism. The
+  mechanism now exists (`crate::refinement`, `adr/0028`) and is written against a target property
+  set rather than hard-wired to notes, so attaching B.4's property to it is small. What is *not*
+  small is the decision it needs: B.4.4.1 says "a sub-property of a symmetric property is not
+  necessarily symmetric", so reading `ex:acronym` means entailing the `skosxl:labelRelation` and
+  then **declining** to close S62 over the refined property while still closing it over the
+  super-property. That is a rule about which conclusions a derivation may licence, not a wiring job.
+- **Why load-bearing:** B.4.1 says the property "is not intended to be used directly, but rather as
+  an extension point", so a refinement is the *ordinary* way B.4 is used. A thesaurus whose ISO
+  25964 label relationships are expressed through `ex:acronym` currently reads to us as one with no
+  label relationships at all.
+- **Options:** extend `PropertyRefinements` to resolve B.4's property and record, per entailed link,
+  whether it arrived through a refinement — then have S62 close only the ones that did not. Or
+  defer the whole thing to the reasoner (Phase 5), which is where iterations 18–23 kept concluding
+  entailment belongs.
+- **Cost & impact:** moderate, and it is the second half of a gap this iteration closed the first
+  half of. Not taken because deciding where entailment lives is a standing question and I should
+  not settle it inside a documentation-properties item.
+- **Suggested phase:** Phase 2.

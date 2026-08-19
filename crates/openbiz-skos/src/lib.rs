@@ -9,6 +9,7 @@ mod ancestry;
 mod labels;
 mod model;
 mod notes;
+mod refinement;
 mod relations;
 mod xl;
 
@@ -26,13 +27,17 @@ pub use labels::{
 };
 pub use model::{
     ClassOrigin, CoreModel, CoreModelBuilder, Derivation, Finding, ListDefect, Literal, MemberList,
-    Node, Resource, Severity, SkosClass, SkosRule, Statement, Term, RDF_FIRST, RDF_NIL, RDF_REST,
-    RDF_TYPE, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER, SKOS_MEMBER_LIST,
-    SKOS_TOP_CONCEPT_OF,
+    Node, RdfsRule, Resource, Rule, Severity, SkosClass, SkosRule, Statement, Term, RDF_FIRST,
+    RDF_NIL, RDF_REST, RDF_TYPE, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER,
+    SKOS_MEMBER_LIST, SKOS_TOP_CONCEPT_OF,
 };
 pub use notes::{
     DocumentationCoverage, NoteKind, NoteOrigin, SKOS_CHANGE_NOTE, SKOS_DEFINITION,
     SKOS_EDITORIAL_NOTE, SKOS_EXAMPLE, SKOS_HISTORY_NOTE, SKOS_NOTE, SKOS_SCOPE_NOTE,
+};
+pub use refinement::{
+    PropertyRefinements, PropertyRefinementsBuilder, RefinementBound, RefinementExhaustion,
+    RDFS_SUB_PROPERTY_OF,
 };
 pub use relations::{
     RelationOrigin, SemanticRelation, SKOS_BROADER, SKOS_BROADER_TRANSITIVE, SKOS_NARROWER,
