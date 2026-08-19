@@ -40,6 +40,15 @@
 //! S27 that needs it — §8.6's Examples 27 and 29 are inconsistent only once the closure exists, so
 //! neither the closure nor the condition is claimed until both land. In `docs/UNTESTED.md`.
 //!
+//! **And when it does land, it will not be stored here.** `docs/adr/0024` measured what the
+//! closure would cost and decided against materialising it at any size: a chain of 100 000 links
+//! is a legal SKOS graph and licenses five thousand million pairs, and a stored
+//! `(Node, RelationOrigin)` can cite S24 but cannot name the path it took, which
+//! `CLAUDE.md` §3 requires of every inference. Ancestry is therefore a traversal answered on read.
+//! A caller reading [`SemanticRelation::BroaderTransitive`] out of a [`Resource`](crate::Resource)
+//! will keep getting one-step links after S24 lands, permanently and by design — which is why the
+//! accessor is named for the property and never for "ancestors".
+//!
 //! # Polyhierarchy is not a defect and is not treated as one
 //!
 //! A concept with two broader concepts is ordinary in a thesaurus and §8 states nothing against it.

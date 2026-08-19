@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 7 of 18 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 8 of 19 items done. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -62,6 +62,16 @@ property nobody writes — see `adr/0023`. What is **not** there is the transiti
 `skos:broaderTransitive` is one step deep and §8.4's integrity condition is unchecked; that is the
 next item and `docs/UNTESTED.md` says exactly which of the specification's examples read as clean
 to us in the meantime.
+
+**And we now know what that costs, which changed the design of the next item before it was
+written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
+hierarchy shapes and decided, in `adr/0024`, that **S24's closure is never materialised** — a legal
+100 000-link chain licenses five thousand million pairs, and a stored entry can cite the rule but
+cannot name the path, which `CLAUDE.md` §3 requires. Ancestry will be a bounded traversal answered
+on read. The measurement also produced the first hard number that contradicts a non-negotiable:
+a stated link costs **3.9 KiB of resident memory**, 43× the size of the fact, and a million-link
+vocabulary with no labels at all held **4.4 GiB**. That is about what is already shipped, it is
+recorded rather than fixed, and it is in `UNTESTED.md` and three proposals awaiting a human.
 
 **Iteration 25 was the product-owner pass, so no plan item moved and the count above is unchanged.**
 It landed one thing that changes the shape of a later phase: **`horned-owl` is LGPL-3.0**, which
@@ -733,9 +743,32 @@ the interface is a core differentiator, and building it late means retrofitting 
       > today. A test pins that rather than leaving it to be found. Also new: the model now holds
       > something that scales with a vocabulary's *size* rather than its structure, four entries
       > per stated link, and the ceiling is unmeasured. Both in `docs/UNTESTED.md`.
-- [ ] Semantic relations, part 2 — the transitive closure and §8.4's integrity condition (S24,
+- [x] Semantic relations, part 2a — measure what the model holds, and decide where the closure
+      lives before it is built
+      > Split out of the item below at iteration 26, because that item's own text made the
+      > measurement a prerequisite of its design and iteration 24's loop log said in as many words
+      > that starting S24 without a number in front of it should stop and get one first.
+      > **Done:** `crates/openbiz-skos/src/scale.rs` reports build time, resident memory, held
+      > entries, derivations, report size and the S24 closure's size at 10k, 100k and 1M links
+      > across four hierarchy shapes — no links, a star, a balanced tree, and a chain. The closure
+      > is **counted by traversal and never held**, so its size is knowable without paying for it,
+      > and a count past its budget is recorded as a refusal rather than as a zero.
+      > **Decided, `adr/0024`:** S24's closure is **never materialised**. A legal 100 000-link
+      > chain licenses five thousand million pairs, and a stored `(Node, RelationOrigin)` can cite
+      > S24 but cannot name the path it took, which `CLAUDE.md` §3 requires of every inference.
+      > Ancestry is a bounded traversal answered on read, and a bounded answer says that it was.
+      > **Production caller:** none, and by design — this is a measurement spike in the shape of
+      > `adr/0013` and `adr/0014`, and its output is a decision the next item is bound by. Its small
+      > case runs in the ordinary suite and asserts the arithmetic of every shape, so the harness
+      > cannot rot into measuring nothing.
+      > **What it found that nobody asked for:** a stated link costs **3.9 KiB resident**, 43× the
+      > size of the fact, and a million-link vocabulary with no labels at all held **4.4 GiB** and
+      > took **62.66 s** to build. That is against §1.5 and it is about what is already shipped,
+      > not about what comes next. Two `UNTESTED.md` entries and three proposals; **not** fixed
+      > here, because each fix changes a shipped public type and is its own item.
+- [ ] Semantic relations, part 2b — the transitive traversal and §8.4's integrity condition (S24,
       S27)
-      > Split out of the item above at iteration 24. S24 makes `skos:broaderTransitive` and
+      > Split out of the item above at iteration 24, and split again at iteration 26. S24 makes `skos:broaderTransitive` and
       > `skos:narrowerTransitive` `owl:TransitiveProperty`; S27 makes `skos:related` disjoint with
       > `skos:broaderTransitive`. They are one item because **S27 cannot be tested without S24**:
       > §8.6's Examples 27 and 29 are inconsistent only through the closure, and a build that
@@ -743,9 +776,13 @@ the interface is a core differentiator, and building it late means retrofitting 
       > a validator that answers "consistent" for a graph the specification marks otherwise, which
       > is worse than one that says nothing.
       > Needs: cycle containment (a vocabulary with `<A> broader <B> broader <A>` must terminate
-      > and must not be reported as broken — §8 states no condition against a cycle), a derivation
-      > that names each step of the path rather than asserting the endpoint, and a decision on the
-      > closure's size taken against the measurement `docs/UNTESTED.md` now asks for.
+      > and must not be reported as broken — §8 states no condition against a cycle), and a
+      > derivation that names each step of the path rather than asserting the endpoint.
+      > **Bound by `adr/0024`:** build a traversal, not a closure. Nothing is added to
+      > `Resource::relations`, which keeps meaning "links under this property" and never
+      > "ancestors" — permanently, and by design. The traversal is bounded and an answer that hit
+      > its bound is distinguishable from one that ran out of ancestors, because `Some(0)` from an
+      > abandoned walk reads as "this concept has no ancestors" for the concept that has most.
       > Acceptance: §8.6's Examples 25–29, all five, each asserted to the consistency the
       > specification prints beside it.
 - [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`

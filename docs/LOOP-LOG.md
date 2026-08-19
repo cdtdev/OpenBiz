@@ -1920,3 +1920,86 @@ look competent disables the one signal that catches a stuck loop.
   proposal because I have a sample of four and a strong prior, and a proposal argued from a strong
   prior is how the loop talks itself into work. The next product-owner pass should check the rest
   of the named dependencies first, before any market research, and settle it with a count.
+
+## Iteration 26 — 2026-08-19
+- **Took:** Phase 2's next item, **"Semantic relations, part 2"**, and split it in place. The item's
+  own text made the split for me: it required *"a decision on the closure's size taken against the
+  measurement `docs/UNTESTED.md` now asks for"*, and iteration 24's "still uncertain" line said in
+  as many words that an iteration starting S24 without a number in front of it should stop and get
+  one first. So **2a is the measurement and the decision** and landed; **2b is S24 and S27** and is
+  next. Started clean: `main` green on `e4cc66c`, tree clean, both inboxes empty.
+- **What was built:** `crates/openbiz-skos/src/scale.rs`, a harness in the shape of
+  `openbiz-store`'s. Four hierarchy shapes — no links at all, a star, a balanced ten-way tree, and
+  a chain — at 10k, 100k and 1M links, reporting build time, `VmRSS`/`VmHWM`, held
+  `(Node, RelationOrigin)` entries, derivations, the bytes `openbiz inspect` would render, and the
+  size of the closure S24 would license. Small case in the ordinary suite asserting every shape's
+  arithmetic; the real sizes `#[ignore]`d and run in release.
+- **The one design idea in it:** the S24 closure is **counted by traversal and never held** — one
+  breadth-first walk per concept, visited set dropped between walks, so the peak memory of the
+  count is one concept's ancestor set. That is what let the number be known *without first building
+  the thing the number might forbid*, which was the whole difficulty of taking this measurement
+  before the item it constrains. A count past its budget returns a refusal, not a zero, and there
+  is a test for that: `Some(0)` from an abandoned walk would read as "this concept has no
+  ancestors" for the concept that has most.
+- **Why there is a "no links at all" shape.** Without a baseline the table says what a *vocabulary*
+  costs and cannot say what the *relations* cost, and those are two different numbers — the
+  decision needed the second. It is the row that turned "4.4 GiB at a million links" into
+  "3.86 KiB per stated link", which is the number that means something.
+- **The decision, `adr/0024`: S24's closure is never materialised.** Two independent reasons and
+  either would do. The chain: 1 000 links license 500 500 pairs, 10 000 license 50 005 000, 100 000
+  license five thousand million — and a chain is a *legal* SKOS graph, because §8 states no
+  condition against depth, so this is not "expensive", it is unbounded on permitted input. And
+  explainability: a stored `(Node, RelationOrigin)` can cite S24 but cannot name the path it took,
+  which `CLAUDE.md` §3 requires of every inference, whereas a traversal produces the path as a
+  by-product of finding the answer at all. **The constraint that forces the traversal is the same
+  one that makes it explainable** — that is the strongest form this kind of argument comes in, and
+  I would not have seen it from the design side alone.
+- **What the measurement found that nobody asked for, and it is the more important half.** A stated
+  `skos:broader` costs **3.86 KiB of resident memory** at a million links and **3.85 KiB** at a
+  hundred thousand — the two agree, so it is marginal cost and not an artefact — against 0.70 KiB
+  for a typed concept that states nothing. The fact itself is 92 bytes. **We spend 43× the size of
+  the fact to record the fact.** A 1M-link tree with **no labels at all** held 4 376 MiB, peaked at
+  5 081 MiB, and took 62.66 s to build of which 54.7 s was system time: it was paging, not
+  computing. `CLAUDE.md` §1.5 asks for modest memory at rest and this is not that. It is the first
+  hard number in the repo that contradicts a non-negotiable.
+- **I did not fix it, deliberately.** The decomposition is in the ADR — roughly 900 B of eagerly
+  rendered derivation text, 390 B of cloned IRIs, and about 1 KiB of `BTreeMap` reserving an
+  eleven-slot node for a map that holds one entry — and all three fixes change shipped public types
+  with production callers. Doing them inside the change that decides where the closure lives would
+  mean neither decision was measured against the other. Three proposals, two `UNTESTED.md` entries,
+  and a target ("a million links under N GiB") that a human should pick rather than the loop.
+- **One thing I corrected rather than left reading well.** `CoreModelBuilder`'s doc comment claimed
+  what it keeps is "proportional to the resources the model has something to say about rather than
+  to the size of the graph". Iteration 24 opened an `UNTESTED.md` entry saying that had become
+  false; this iteration has the number, so the comment now carries it. A doc comment that flatters
+  the code is a lie with better manners.
+- **Honesty about the memory column.** At 10 000 links the same measurement read +48.4 MiB in one
+  run and +14.7 MiB in another, differing only in where it sat in the sequence — that size is
+  allocator warm-up, not the model. The ADR's table leaves those cells **blank** and quotes only
+  the rows where the model dominates, with the peak beside the delta so neither is mistaken for the
+  other. Reporting the 14.7 would have been the flattering number and it is meaningless.
+- **Tests: 478 Rust (from 470)** and the UI untouched. `fmt`, `clippy -D warnings`, `cargo deny`
+  green. No new dependency — the harness reads `/proc/self/status` rather than pulling a crate in
+  to weigh the thing whose weight is the concern.
+- **Recorded:** `adr/0024`. One `UNTESTED.md` entry struck through and closed, two opened. Three
+  `PROPOSED.md` entries; the pre-existing "measure the core model's size" proposal marked
+  *deferred — overtaken by events*, with the reason it was acted on without promotion written out,
+  because acting on an unpromoted proposal is exactly the thing the brake exists to stop and it
+  should be visible if I do it, even when the plan item authorised it.
+- **The date agrees for once.** `currentDate` said 2026-08-19 and `date -u` said 2026-08-19T00:05Z.
+  Iterations 16–25 all recorded a mismatch; there is none tonight, and the reason is that the wall
+  clock has crossed midnight UTC rather than that anything was fixed.
+- **Still uncertain:** whether "answer on read" survives contact with the interface, because I have
+  measured the cost of *storing* the closure and not the cost of *not* storing it. Phase 3's
+  concept tree opens ancestor paths for every visible node, and Phase 6's SHACL rules will ask
+  §8.4's question of every concept in the vocabulary at once — that second one is n traversals of
+  average depth d, which is precisely the closure computed and thrown away, once per validation
+  run. The chain that makes materialising impossible makes *that* quadratic too, and a bound will
+  turn it into a refusal rather than a hang, which is honest but is a validator that declines to
+  answer. I did not measure it because the traversal does not exist yet and measuring an imagined
+  one is how you get a number that agrees with you. But the shape of the risk is that `adr/0024`
+  has correctly ruled out the wrong answer without proving the remaining one is right, and the
+  place that shows up is not item 2b — which asks about five worked examples from §8.6 — but the
+  first caller that asks the question a million times. **2b should extend this harness to the
+  traversal it builds, not merely pass §8.6**, or the next measurement will again arrive after the
+  thing it should have shaped.

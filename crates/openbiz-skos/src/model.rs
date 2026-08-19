@@ -1285,9 +1285,23 @@ impl CoreModel {
 /// Reads statements one at a time and resolves the model when it has them all.
 ///
 /// Incremental because a graph does not fit in memory twice. The store hands statements over as it
-/// scans, and what is kept is proportional to the resources the model has something to say about
-/// rather than to the size of the graph — a vocabulary's labels and notes, which are most of its
-/// statements, are counted and dropped.
+/// scans, and a vocabulary's notes and its non-SKOS statements, which are most of its statements,
+/// are counted and dropped.
+///
+/// # What it keeps is not small
+///
+/// This used to say that what is kept is proportional to the resources the model has something to
+/// say about rather than to the size of the graph. That stopped being true when the semantic
+/// relations landed, and it is corrected here rather than left reading well: **every stated
+/// `skos:broader` costs about 3.9 KiB of resident memory** — four `(Node, RelationOrigin)` entries
+/// and three [`Derivation`]s, each derivation holding two eagerly-rendered strings — against
+/// 0.70 KiB for a typed concept that states nothing. A million-link vocabulary measured 4.4 GiB.
+///
+/// The numbers, the decomposition, and what is and is not being done about them are in
+/// `docs/adr/0024-semantic-relation-closure-scale.md`; the harness that produced them is this
+/// crate's `scale` module. The one thing that ADR settles is that **S24's transitive closure is
+/// never added to this** — it is answered by traversal on read, because a legal chain of 100 000
+/// links would otherwise materialise five thousand million pairs.
 #[derive(Debug, Clone, Default)]
 pub struct CoreModelBuilder {
     types: BTreeMap<Node, BTreeSet<SkosClass>>,
