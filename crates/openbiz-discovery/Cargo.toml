@@ -1,0 +1,17 @@
+[package]
+name = "openbiz-discovery"
+description = "Discovery — what already exists, asked before anything new is created"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No store, no HTTP client, no engine. A source is reached through `LocalCorpus` or through a
+# `DiscoveryProvider` a caller implements, so this crate cannot open a connection or a database
+# even by accident — which is what keeps an air-gapped deployment (CLAUDE.md §1.1) provably
+# unaffected by anything added here.
+[dependencies]
+openbiz-skos.workspace = true
+thiserror.workspace = true

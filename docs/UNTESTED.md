@@ -2705,3 +2705,76 @@ module's own tests and end to end against the real binary reading a store off di
   and confirming or refuting the four-vocabulary composition. Alternatively data.world's own public
   ontology documentation, which was not located this pass.
 - **Opened:** iteration 50 (product-owner pass)
+
+### Discovery on the creation path is unmeasured, and `openbiz mint` now reads the store twice
+- **Kind:** partial-coverage
+- **What is proven:** correctness on fixtures of a handful of concepts across two vocabularies and
+  one pending change — in-process, and against the real binary on disk. The loop is deliberately
+  one part at a time: `LocalVocabularies` builds a `CoreModel`, searches it, and drops it before
+  reading the next, so the memory held is the largest single vocabulary rather than the store, and
+  a test pins that each part is read exactly once.
+- **What is not:** anything about cost. `openbiz mint` now reads **every statement of every
+  vocabulary twice** on each run — once for the IRI collision scan, once for discovery — plus once
+  more per change waiting for a decision. Both passes existed as whole-store reads before this
+  item for the namespace scan; what is new is that there are two of them, on a command a person is
+  waiting for in the middle of creating a concept. `adr/0003` names discovery latency on the
+  creation path as its own risk and says to search asynchronously; this build searches
+  synchronously and has no number for what that costs.
+- **Why it was not merged into one pass:** the two ask different questions — every IRI under one
+  namespace, against every label of every resource — and fusing them would tie discovery's corpus
+  to the minter's scan, which is the coupling that makes the next source impossible to add.
+- **Note:** the first unmeasured cost recorded outside `openbiz-skos`, and the first on a path
+  where the user is waiting rather than reading a report. Nine others are recorded above. The proposal to replace the whole run of them
+  with measurements is in `docs/PROPOSED.md` from iteration 45 and is unpromoted.
+- **What would close it:** `openbiz mint` run against the 100k and 1M generated vocabularies
+  `adr/0013` and `adr/0024` already build, in a store holding several of them, with wall-clock
+  recorded — and a decision about whether a synchronous pass is still the right shape at that
+  size.
+- **Opened:** iteration 54
+
+### `DiscoveryBound::DEFAULT` is the seventh unmeasured constant
+- **Kind:** inspected-only
+- **What is proven:** that the bound is enforced, that what it withholds is counted rather than
+  dropped, and that the report says so — three tests, one of them on the report itself.
+- **What is not:** that 20 is the right number. It is reasoning about a person reading a report in
+  the middle of creating one concept, not a measurement of anything, and the same objection
+  applies to it as to `SearchBound::DEFAULT`, `WalkBound::DEFAULT` and the five others.
+- **What would close it:** watching somebody use the command, which nothing in this repository can
+  do. Failing that, a defensible rule rather than a number — the bound could be a fraction of the
+  matches or adapt to how many are exact.
+- **Opened:** iteration 54
+
+### The `DiscoveryProvider` trait has exactly one implementation, and the swap it exists for is untried
+- **Kind:** partial-coverage
+- **What is proven:** that `Discovery::across` asks several sources, merges and ranks their
+  answers, and reports an unavailable one without failing the pass — six tests, using fixture
+  providers that answer or refuse on demand. That is the *contract* proven, and it is the part
+  that matters most, because it is what stops a broken source blocking creation.
+- **What is not:** that the trait's shape survives contact with a real second source. Every
+  implementation today is the local store or a test double. A public registry answers over HTTP
+  with paging, rate limits, its own IRIs, and labels in languages the query did not ask for; a
+  SPARQL endpoint answers with a result set and a timeout. `search(&LabelQuery) -> SourceAnswer`
+  may turn out to want a timeout, a cancellation, or a stream, and none of that is knowable from
+  here. `CLAUDE.md` §3's whole point is that the trait can be changed without touching callers,
+  and that is exactly what would happen — but the claim "the boundary is right" is not yet earned.
+- **What would close it:** the first Phase 12 connector, or a spike that writes one against a
+  public registry and reports what the trait made awkward.
+- **Opened:** iteration 54
+
+### Discovery matches lexically, so a differently spelled or accented term is still invisible
+- **Kind:** partial-standard
+- **What is proven:** that matching is case-insensitive over Unicode, covers all three SKOS label
+  kinds and every language, and matches anywhere inside a label — and that the report states each
+  of those limits in the same sentence as the reach, so a curator is not left to assume more.
+- **What is not:** anything `adr/0003` §6 calls matching. There is no normalisation, no case
+  folding, no transliteration, no stemming, and no structural comparison. `"Straße"` does not match
+  a search for `STRASSE`; `"é"` written as one code point does not match the same character
+  written as two, and both forms occur in real multilingual thesauri. The same gaps are already
+  recorded against `openbiz search`, which is where the matching comes from; they are repeated
+  here because the *consequence* is different. On a search, a miss is an empty result the user
+  retries. On the creation path, a miss is a duplicate concept.
+- **What would close it:** Unicode normalisation (NFC) and full case folding on both sides of the
+  comparison, which is a decision about a dependency rather than a bug fix; then a fixture of the
+  known-hard cases. `adr/0003` §6's structural and near-duplicate matching is a Phase 12 item and
+  a larger question.
+- **Opened:** iteration 54

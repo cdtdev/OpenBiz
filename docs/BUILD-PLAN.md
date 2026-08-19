@@ -3,20 +3,21 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **58 of 223 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **59 of 224 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 28 of 30; the denominator moved by two at
-iteration 51, which split the "current concepts only" item into one per command. Every count on
+wait on authorisation, not on anything else. Phase 2 is 29 of 31; the denominator moved again at
+iteration 54, which split the discovery item into one per creation path. Every count on
 this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was
 left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records
 how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **28 of 30**. Iteration 53 landed
-`--current` on `openbiz ancestors` and `openbiz paths`, closing the "current concepts only" run:
-looking up, the list is narrowed but the derivations are not, and a route is offered whole or
-withheld whole. Of the two items left, one — the candidate seam over HTTP and in the interface —
-is **blocked on authentication** (`BLOCKED.md`); the next unblocked item is the `DiscoveryProvider`
-trait wired into concept creation, which is the last item in the phase.
+**Current position:** Phase 2 (SKOS authoring model), **29 of 31**. Iteration 54 landed the
+`DiscoveryProvider` trait, a local-store provider behind it, and `openbiz mint` running a
+discovery pass over the whole store before it offers an IRI — reuse ahead of creation, on the
+creation path, with no flag to enable and no way to print "nothing found" without saying how far
+it looked. Of the two items left, one — the candidate seam over HTTP and in the interface — is
+**blocked on authentication** (`BLOCKED.md`); the other is discovery on `openbiz split` plus the
+justification `adr/0003` §3 requires.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1239,9 +1240,49 @@ the interface is a core differentiator, and building it late means retrofitting 
       > three different rules because they answer three different questions. Measured on fixtures
       > only; no claim is made about the incumbents' filters, which this iteration did not measure.
       > In `docs/UNTESTED.md`.
-- [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation
+- [x] **`DiscoveryProvider` trait plus a local-store implementation, wired into `openbiz mint`**
       > The hook lands here so the creation path is **built around discovery** rather than
       > retrofitted. Enterprise and public sources arrive in Phase 12 (`adr/0003`).
+      > **Split at iteration 54**, because "wired into concept creation" is two creation paths and
+      > one of them is `openbiz split`. This item is the trait, the local-store provider, and
+      > `openbiz mint`; the item below is the rest.
+      > **What landed** (`adr/0046`): `openbiz mint <graph> <label>` runs a discovery pass over
+      > every vocabulary in the store and every change waiting for a decision, and prints what it
+      > found **above** the IRI, with no flag to enable — a discovery feature you have to remember
+      > to invoke prevents nothing, because the person who forgets is the person creating the
+      > duplicate. The concept it finds is usually in the vocabulary the curator is *not* looking
+      > at, which is the match one exact lookup in one vocabulary could never make.
+      > **Better, not parity, and specific:** the incumbents' new-concept wizards search the
+      > vocabulary being edited. Ours searches the store, ranks a duplicate at home above the same
+      > match elsewhere, and — the part that is actually ours — **can never print a bare "nothing
+      > found"**. Every pass names what answered, what it read, and what was *not* asked: no peer,
+      > no catalog, no public registry, because this build has no connector for one. A silently
+      > broken connector reporting "nothing found" reads exactly like "nothing exists", which
+      > turns the anti-silo feature into a silo generator; the sentence naming what was not
+      > consulted is what makes that impossible here.
+      > **A source that cannot answer is reported, never fatal** (`adr/0003` §7). Creation is
+      > never blocked by a catalog that is down, and the local provider degrades as a whole source
+      > rather than skipping the part it could not read, because a partial answer offered as a
+      > complete one is the failure being defended against.
+      > **The crate cannot reach a source.** `openbiz-discovery` depends on `openbiz-skos` and
+      > `thiserror` and nothing else — no store, no HTTP client. Sources arrive through
+      > `LocalCorpus`, implemented at the composition root, so the crate that will hold catalog
+      > connectors cannot open a connection or a database by accident and an air-gapped
+      > deployment stays provably unaffected.
+      > **Scope, honestly:** one source, lexical matching only — case-insensitive and *not*
+      > accent-, spelling- or normalisation-insensitive — and no place to record a justification
+      > for creating anyway beyond the note on the change that creates the concept. The report
+      > states each limit in the same breath as the reach. Nothing measured at scale, and `mint`
+      > now reads every vocabulary twice per run. In `docs/UNTESTED.md`.
+- [ ] Discovery on the other creation path — `openbiz split` — and a recorded justification
+      > `split` mints an IRI per `--into` and creates concepts without asking discovery anything,
+      > so §1.7 holds on one creation path and not the other. The parts of a split are exactly
+      > where a duplicate arrives under a new name.
+      > The justification `adr/0003` §3 requires is the second half: creating new when something
+      > existing would serve has to leave an auditable record naming what was found and why
+      > nothing fitted. Today the only place for it is the note on the candidate. Whether that is
+      > enough, or whether it needs a first-class object on the candidate — which would wait on
+      > the seam over HTTP, blocked on authentication — is the decision this item has to make.
 
 ---
 

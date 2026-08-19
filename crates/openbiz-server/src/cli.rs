@@ -354,8 +354,16 @@ list and still reports how many there were and on how many concepts, including w
 that matched. A search that silently omitted them would report a term the vocabulary holds as one
 it has never heard of, which is how a duplicate gets created.
 
-Mint only reads, and reserves nothing: run it twice and it answers the same. It reports the IRI a
-new concept would be given, under a pattern with one placeholder — {n} for an opaque IRI, {slug}
+Mint only reads, and reserves nothing: run it twice and it answers the same. Given a label it
+runs discovery first and answers the IRI second, because reuse outranks creation: every
+vocabulary in the store and every change waiting for a decision is searched for that term — every
+label kind, any language, anywhere inside the label — and what it found is printed above the IRI
+with the vocabulary each match is in. A clean pass says what it consulted and what it did not: no
+peer, catalog, or public registry is asked, because this build has no connector for one, so a
+term that exists only outside this store has not been seen. A source that cannot answer is
+reported as unavailable and never blocks the mint.
+
+The IRI itself is minted under a pattern with one placeholder — {n} for an opaque IRI, {slug}
 for one read from the label. With no --pattern the pattern is read off the vocabulary's own
 concepts, and a vocabulary with no majority namespace gets no suggestion rather than a guess. A
 number goes above the highest in use and never fills a gap; a slug that is already taken is

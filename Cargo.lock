@@ -674,6 +674,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "openbiz-discovery"
+version = "0.0.1"
+dependencies = [
+ "openbiz-skos",
+ "thiserror",
+]
+
+[[package]]
 name = "openbiz-git"
 version = "0.0.1"
 dependencies = [
@@ -696,6 +704,7 @@ dependencies = [
  "http-body-util",
  "mime_guess",
  "openbiz-api",
+ "openbiz-discovery",
  "openbiz-skos",
  "openbiz-store",
  "rust-embed",

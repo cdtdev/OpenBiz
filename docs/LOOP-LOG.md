@@ -4017,3 +4017,76 @@ look competent disables the one signal that catches a stuck loop.
   suggests is that the question is no longer "is each rule right" — I believe each one is — but
   "does the flag as a whole earn its explanation", and that is a product question a fixture cannot
   answer and I should not keep re-deriving from a new command each iteration.
+
+## Iteration 54 — 2026-08-20
+- **Clean start, verified rather than assumed.** `main` at `99ff74a`, tree clean, and the CI run for
+  that exact commit was `success` — read from `gh run list --branch main`. Both inboxes empty:
+  `promote-queue.json` is `[]`, `feedback.md` zero bytes. Iteration 37's LCGFT fixture is
+  unpromoted for the eighteenth iteration.
+- **The date disagreement of iterations 51–53 is resolved, and it is not a defect.** `timedatectl`
+  says the host is `Pacific/Auckland (NZST, +1200)`: local time is `2026-08-20 02:17`, UTC is
+  `2026-08-19 14:17`. The harness reports the **local** date and `date -u` reports UTC, so the
+  twelve-hour gap those three entries flagged for a human is a timezone, not a clock. Nothing needs
+  doing. This entry is dated locally, which is what git will stamp the commit with; the previous
+  three were dated in UTC, which is why they read a day behind.
+- **What shipped: `openbiz-discovery`, and `openbiz mint` asking it before it answers** (`adr/0046`).
+  Phase 2 is 29 of 31 — the item was split in place, because "wired into concept creation" is two
+  creation paths and `openbiz split` is the other one.
+- **Why `mint` is the creation path at all.** There is no "create concept" command; a concept is
+  created by staging a change, and to write that change somebody decides its IRI. That decision is
+  `mint`, so §1.7 binds there. Before this it ran one exact-label lookup in the target vocabulary
+  and its own report said so. The concept a curator is about to duplicate is almost always in the
+  vocabulary they are *not* looking at, so the honest report was still the wrong shape.
+- **The sentence the feature is actually built around is the one printed when nothing is found.**
+  A discovery pass that prints "no matches" and stops is indistinguishable from a broken connector,
+  and both read as "nothing exists", which is what creates the tenth overlapping vocabulary. So
+  every pass — clean or not — names what answered, what each source read, how many labels it
+  considered, and what was never asked: no peer, no catalog, no public registry, because this build
+  has no connector for one. Two tests pin that sentence, one of them against the real binary.
+- **A source that cannot answer is reported and never fatal** (`adr/0003` §7), and the local
+  provider degrades as a *whole source* rather than skipping the part it could not read — a partial
+  answer offered as a complete one is the exact failure being defended against. Fixture providers
+  that refuse on demand pin both, including the case where every source is unavailable.
+- **The crate cannot reach a source, by construction.** `openbiz-discovery` depends on
+  `openbiz-skos` and `thiserror` and nothing else: no store, no HTTP client. Sources arrive through
+  `LocalCorpus`, implemented in a ~90-line server module. So the crate that will one day hold
+  catalog connectors cannot open a connection or a database by accident, the store's
+  statement-to-model conversion stays in one place instead of being copied, and each vocabulary is
+  read, searched and dropped one at a time rather than the whole store being held.
+- **Three bugs I found by driving the binary, not by testing, all in this iteration's own code.**
+  (1) The reuse-ladder paragraph printed with runs of six spaces inside it — a Rust string
+  continuation I wrote through a Python heredoc that ate the escape, so the whole const landed on
+  one 672-character line. (2) The STOP line counted *labels* and said "concepts", so a concept
+  carrying the term as both a preferred and an alternative label would be reported as two concepts
+  to reuse; it now counts distinct resources. (3) The section had no blank lines in it and read as
+  one wall.
+- **Mutation-checked, not just green.** Narrowing `StoreCorpus::parts` back to the target
+  vocabulary — precisely the behaviour this item replaces — fails three tests, two in-process and
+  one end to end. The tests catch the thing they are for.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1136 Rust tests, 0 failed**, up from 1117: nineteen new — fourteen in
+  `openbiz-discovery`, three on the `mint` report, two end to end. UI untouched, so no npm run. One
+  new workspace crate, no new external dependency, no build artefact.
+- **Recorded:** `adr/0046`. Four new `UNTESTED.md` entries, and they are the honest half of this
+  item: `mint` now reads every vocabulary in the store **twice** per run on a path where a person
+  is waiting, and `adr/0003` names that latency as its own risk and says to search asynchronously —
+  we search synchronously with no number for it. `DiscoveryBound::DEFAULT` is a seventh unmeasured
+  constant. The trait has exactly one real implementation, so the swap it exists for is untried.
+  And matching is lexical, so "Straße"/"STRASSE" and the two spellings of "é" still miss — the same
+  gap already recorded against `openbiz search`, repeated because on the creation path a miss is a
+  duplicate rather than a retry. `PROPOSED.md` gained the LLM opportunity this item makes concrete
+  (recall on near-misses, as proposals that may never suppress a lexical match) and a deliberate
+  nil on generating the justification text. `CAPABILITIES.md` and `BUILD-PLAN.md` updated. Nothing
+  self-promoted.
+- **Still uncertain:** whether the report is now too long to be read at the moment it matters. The
+  §1.7 section runs to a dozen lines before the IRI appears — matches, the ladder, what was
+  consulted, what was not — and it is printed on *every* mint, including the ones where nothing was
+  found. Every line of it is there because omitting it is a way to create a duplicate, and that
+  argument is individually sound for each line and is exactly the argument that produces a wall of
+  text nobody reads. I have no way to tell from here which of the two I have built: the same doubt
+  iterations 52 and 53 reached about `--current`, arrived at from a third direction, and it is now
+  clearly one question rather than three. What would settle it is watching a curator use the
+  command once. Nothing in this repository can do that, and I should stop re-deriving the question
+  from each new command and let the human who reads this decide whether it is worth a usability
+  session.

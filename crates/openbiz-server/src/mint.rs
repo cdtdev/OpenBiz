@@ -2,12 +2,17 @@
 //!
 //! # Why minting is a command of its own, and why it writes nothing
 //!
-//! There is no "create concept" command in this build, on purpose: `CLAUDE.md` §1.7 puts
-//! discovery before creation and the `DiscoveryProvider` item is still ahead of us in the plan.
-//! What exists today is the candidate seam — a change is proposed in a file, staged, read, and
-//! approved — and to write that file somebody has to decide what the new concept's IRI will be.
-//! Today they decide it by copying an existing IRI and editing the end of it, which is how a
-//! vocabulary ends up with `c_00123` beside `c_124` and two concepts sharing one IRI.
+//! There is no "create concept" command in this build, on purpose: what exists is the candidate
+//! seam — a change is proposed in a file, staged, read, and approved — and to write that file
+//! somebody has to decide what the new concept's IRI will be. Without this command they decide it
+//! by copying an existing IRI and editing the end of it, which is how a vocabulary ends up with
+//! `c_00123` beside `c_124` and two concepts sharing one IRI.
+//!
+//! Which makes this the creation path, and `CLAUDE.md` §1.7 puts discovery *before* creation. So
+//! this command runs a discovery pass over every source the deployment has and prints what it
+//! found **above** the IRI. The IRI is still offered — two concepts can legitimately share a
+//! label, and a tool that refuses is a tool people work around — but nobody mints one here
+//! without first being shown what is already there.
 //!
 //! So this command answers exactly that question and does nothing else. It reads; it stages
 //! nothing; **it reserves nothing**. Run it twice and it returns the same IRI both times, and the
@@ -49,19 +54,25 @@
 //!    the same namespace is the ordinary case in an enterprise, not an exotic one. Only IRIs
 //!    under the prefix are kept, so the memory this costs is the size of the namespace and not
 //!    the size of the store.
-//! 3. **The labels the vocabulary already carries.** §1.7 again: if something here is already
-//!    called what you are about to call the new concept, minting an IRI is the wrong next step,
-//!    and the report says so before it says anything else. This is not the discovery pass that
-//!    Phase 12 will bring — it is one exact-label lookup in one vocabulary — and it says which it
-//!    is rather than letting a quiet "nothing found" be read as "nothing exists".
+//! 3. **Everything discovery can reach that is already called this.** Not one vocabulary: every
+//!    vocabulary in the store and every change staged against one, matched anywhere inside a
+//!    label of any kind in any language, through `openbiz-discovery`'s own trait. What answered,
+//!    what it read, and what was never asked are all printed, because a quiet "nothing found"
+//!    read as "nothing exists" is what creates the tenth overlapping vocabulary. Sources beyond
+//!    the local store — peers, catalogs, public registries — are Phase 12, and the report says
+//!    they were not consulted rather than leaving the reader to assume they were.
 
+use std::collections::BTreeSet;
+
+use openbiz_discovery::{Discovered, Discovery, LocalVocabularies, Match, Outcome};
 use openbiz_skos::{
-    mint as mint_iri, CoreModel, IriConvention, LabelKind, LabelQuery, MatchMode, MintDerivation,
-    MintPattern, MintScan, Minted, Node, Resource, SkosClass, SlugBound, Suggestion,
+    mint as mint_iri, CoreModel, IriConvention, LabelQuery, MintDerivation, MintPattern, MintScan,
+    Minted, SkosClass, SlugBound, Suggestion,
 };
 use openbiz_store::{CandidateState, GraphId, GraphKind, IriPolicy, Store};
 
 use crate::cli::CommandError;
+use crate::discovery::StoreCorpus;
 use crate::inspect::convert;
 
 /// Report the IRI a new concept in `graph` would be minted with. Reads and nothing else.
@@ -75,11 +86,18 @@ pub fn mint(
     store.for_each_statement(graph, |statement| builder.push(convert(statement)))?;
     let model = builder.build();
 
-    // The same question asked of the changes waiting for a decision. The IRI half of this report
-    // reads them, so a label half that does not would have the report saying "nothing here is
-    // called that" directly above "the IRI is taken by candidate 2" — two true sentences that read
-    // as a contradiction. Found by running the command.
-    let staged = staged_models(store, graph)?;
+    // §1.7 before anything else: what already exists, asked across the whole store rather than
+    // the one vocabulary. Discovery cannot fail the command — a source that will not answer is
+    // reported as unavailable and the mint goes ahead — so there is no `?` here and there must
+    // never be one.
+    let corpus = StoreCorpus::authoring(store, graph);
+    let local = LocalVocabularies::named("this store", &corpus);
+    let found = label
+        .map(LabelQuery::new)
+        .transpose()
+        .ok()
+        .flatten()
+        .map(|query| Discovery::new().across(&[&local], &query));
 
     let convention = convention_of(&model);
 
@@ -107,7 +125,7 @@ pub fn mint(
     }
 
     Ok(report(
-        graph, label, &chosen, &source, &suggested, &scan, &minted, &model, &staged,
+        graph, label, &chosen, &source, &suggested, &scan, &minted, &found,
     ))
 }
 
@@ -151,28 +169,6 @@ pub(crate) fn pattern_for<'a>(
             },
         },
     })
-}
-
-/// A model of each change staged against `graph` and still waiting for a decision.
-///
-/// Only this vocabulary's own pending changes. A label in *another* vocabulary is a real and
-/// useful thing to know about and it is a different question — that is the discovery pass §1.7
-/// promises and Phase 12 builds, and answering a fraction of it here under the same heading would
-/// misreport how far this looked.
-fn staged_models(store: &Store, graph: &str) -> Result<Vec<(String, CoreModel)>, CommandError> {
-    let mut staged = Vec::new();
-    for candidate in store.candidates()? {
-        if candidate.state() != CandidateState::Proposed || candidate.target().iri() != graph {
-            continue;
-        }
-        let Some(payload) = candidate.payload() else {
-            continue;
-        };
-        let mut builder = CoreModel::builder();
-        store.for_each_statement(payload.iri(), |statement| builder.push(convert(statement)))?;
-        staged.push((format!("candidate {}", candidate.id()), builder.build()));
-    }
-    Ok(staged)
 }
 
 /// Every IRI in the store that begins with `prefix`, and where each was found.
@@ -344,8 +340,7 @@ fn report(
     suggested: &Result<Suggestion, openbiz_skos::NoConvention>,
     scan: &MintScan,
     minted: &Result<Minted, openbiz_skos::MintError>,
-    model: &CoreModel,
-    staged: &[(String, CoreModel)],
+    found: &Option<Discovered>,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("an IRI for a new concept in {graph}\n"));
@@ -356,7 +351,7 @@ fn report(
 
     // §1.7 first, before the IRI: if the vocabulary already calls something this, the next step is
     // not to mint anything.
-    out.push_str(&already_called(model, staged, label));
+    out.push_str(&already_here(label, found));
 
     out.push_str(&format!("\npattern: {pattern}\n"));
     out.push_str(policy_line(pattern));
@@ -559,69 +554,161 @@ fn derivation(derivation: &MintDerivation) -> String {
     }
 }
 
-/// What the vocabulary already calls by this label — the §1.7 check, run before anything is
-/// minted.
-fn already_called(
-    model: &CoreModel,
-    staged: &[(String, CoreModel)],
-    label: Option<&str>,
-) -> String {
+/// What already exists that this label might already name — the §1.7 pass, run before anything
+/// is minted and printed before the IRI.
+///
+/// This is the whole difference between a minter and a silo generator. The question is not "does
+/// this vocabulary already use this string" but "does the organisation already have this concept",
+/// and the second one is answered by asking every source discovery has — today the local store's
+/// vocabularies and the changes staged against them, tomorrow a peer, a catalog, a registry
+/// (`adr/0003` §2, Phase 12).
+///
+/// Three things this section must never do, each of which is how a duplicate gets created:
+/// report a bounded list as a complete one; report an unavailable source as an absent match; or
+/// print a bare "nothing found" without saying how far the looking went.
+fn already_here(label: Option<&str>, found: &Option<Discovered>) -> String {
     let Some(label) = label else {
         return "\nno label was given, so nothing was checked for an existing concept of the same \
-                name; give one and this looks first\n"
+                name; give one and this looks across every vocabulary in the store first\n"
             .to_owned();
     };
-    let Ok(query) = LabelQuery::new(label).map(|query| query.with_mode(MatchMode::Exact)) else {
-        return String::new();
+    // The only way a query fails to build is an empty one, which matches every label there is and
+    // would report the whole store as a duplicate of nothing.
+    let Some(found) = found else {
+        return "\nthe label given is empty, so nothing was looked for: an empty query matches \
+                every label there is\n"
+            .to_owned();
     };
-    let mut lines = String::new();
-    let mut matched = 0;
-    for (where_, model) in std::iter::once((&"this vocabulary".to_owned(), model))
-        .chain(staged.iter().map(|(source, model)| (source, model)))
-    {
-        let found = model.search(&query);
-        matched += found.matched();
-        for hit in found.hits() {
-            lines.push_str(&format!(
-                "  {}{}  {}, in {where_}\n",
-                hit.resource,
-                named(model, &hit.resource),
-                match hit.best_kind() {
-                    Some(LabelKind::Preferred) => "skos:prefLabel",
-                    Some(LabelKind::Alternative) => "skos:altLabel",
-                    Some(LabelKind::Hidden) => "skos:hiddenLabel",
-                    None => "labelled",
-                }
-            ));
+
+    let mut out = String::new();
+    let exact = found.exact().count();
+    let related = found.related().count();
+
+    if exact > 0 {
+        // Concepts, not labels. Two of a concept's labels reading the same string is one concept
+        // to reuse, and a count of labels would report it as two — an over-count in the one
+        // sentence whose whole job is to be believed.
+        let concepts: BTreeSet<_> = found.exact().map(|hit| &hit.resource).collect();
+        out.push_str(&format!(
+            "\nSTOP — {label:?} is already a label on {} concept(s) discovery reached:\n",
+            concepts.len()
+        ));
+        for hit in found.exact() {
+            out.push_str(&line(hit));
+        }
+    } else {
+        out.push_str(&format!(
+            "\nnothing discovery reached is called {label:?}\n"
+        ));
+    }
+
+    if related > 0 {
+        out.push_str(&format!(
+            "\n{} {related} label(s) contain it, which may be the concept meant under another \
+             name:\n",
+            match exact {
+                0 => "but",
+                _ => "and",
+            }
+        ));
+        for hit in found.related() {
+            out.push_str(&line(hit));
         }
     }
 
-    if matched == 0 {
-        return format!(
-            "\nnothing is already called {label:?}, in this vocabulary or in the {} change(s) \
-             staged against it — matched against whole labels of every kind, in every language. \
-             That is one exact lookup in one vocabulary and not a discovery pass: a differently \
-             spelled or accented term here will not have been seen.\n",
-            staged.len()
-        );
+    if !found.is_complete() {
+        out.push_str(&format!(
+            "  {} more match(es) are not listed: {} matched and this report stops at {}\n",
+            found.withheld(),
+            found.matched(),
+            found.bound().max_matches
+        ));
     }
 
-    let mut out = format!("\nSTOP — {matched} label(s) already match {label:?} exactly:\n");
-    out.push_str(&lines);
-    out.push_str(
-        "reuse outranks creation (CLAUDE.md §1.7). An IRI may still be minted below, because two \
-         concepts can legitimately share a label — but if one of these is the concept you mean, \
-         minting a second one is how a vocabulary becomes a silo.\n",
-    );
+    if exact > 0 || related > 0 {
+        out.push_str(LADDER);
+    }
+
+    out.push_str(&consulted(found));
     out
 }
 
-/// A resource's preferred label in parentheses, never a hidden one — SKOS §5.1.
-fn named(model: &CoreModel, node: &Node) -> String {
-    match model.resource(node).and_then(Resource::display_label) {
-        Some(label) => format!("  ({label})"),
-        None => String::new(),
+/// The reuse ladder, `adr/0003` §3, in the words of what this build can actually do about it.
+///
+/// Printed only when something was found, because a ladder offered over an empty list is noise
+/// that teaches the reader to skip the paragraph on the day it matters.
+const LADDER: &str = concat!(
+    "\nreuse outranks creation (CLAUDE.md §1.7, adr/0003 §3), in this order: use one of these ",
+    "concepts as it stands; map to it with skos:exactMatch or skos:closeMatch; extend it with a ",
+    "narrower concept of your own; and only then create a new one. An IRI is still minted below, ",
+    "because two concepts can legitimately share a label — but if one of these is the concept ",
+    "you mean, minting a second one is how a vocabulary becomes a silo.\n",
+    "nothing here records a justification for creating a new one instead: §3 requires that ",
+    "record, and the only place this build has for it is the note on the change that creates the ",
+    "concept.\n",
+);
+
+/// One match: what it is, what it is called, how it matched, and where it lives.
+fn line(hit: &Match) -> String {
+    format!(
+        "  {}{}  {}{}, in {}\n",
+        hit.resource,
+        match &hit.display {
+            Some(display) => format!("  ({display})"),
+            None => String::new(),
+        },
+        match hit.kind {
+            Some(kind) => kind.to_string(),
+            None => "labelled".to_owned(),
+        },
+        match &hit.label.language {
+            Some(tag) => format!(" {:?}@{tag}", hit.label.text),
+            None => format!(" {:?}, untagged", hit.label.text),
+        },
+        hit.within
+    )
+}
+
+/// Which sources answered, what each looked at, and which could not be reached.
+///
+/// Never omitted, and never shortened when everything went well. A reader has to be able to tell
+/// "this term is not in the organisation" from "one store was read and nothing else was asked",
+/// and the second is what this build actually does.
+fn consulted(found: &Discovered) -> String {
+    let mut out = format!(
+        "\ndiscovery consulted {} source(s):\n",
+        found.consulted().len()
+    );
+    for entry in found.consulted() {
+        match &entry.outcome {
+            Outcome::Answered {
+                matched,
+                searched,
+                labels_read,
+            } => out.push_str(&format!(
+                "  {} — {searched}, {labels_read} label(s) read, {matched} match(es)\n",
+                entry.source
+            )),
+            // The case the whole design turns on. An unavailable source is not an absent match,
+            // and a report that let the two look alike would have a broken connector quietly
+            // telling somebody to create a concept the organisation already has.
+            Outcome::Unavailable { reason } => out.push_str(&format!(
+                "  {} — UNAVAILABLE: {reason}. Nothing above says this term is not there; it says \
+                 it was not looked for\n",
+                entry.source
+            )),
+        }
     }
+    out.push_str(
+        "matched over every label of every kind, in any language, anywhere inside the label, \
+         ignoring case but not accents, spelling, or Unicode normalisation\n",
+    );
+    out.push_str(
+        "no peer, no data catalog, and no public registry was consulted: this build has no \
+         connector for one (adr/0003 §2, Phase 12), so a concept that exists only outside this \
+         store has not been seen\n",
+    );
+    out
 }
 
 #[cfg(test)]
@@ -840,15 +927,121 @@ mod tests {
         assert!(report.contains("reuse outranks creation"), "{report}");
     }
 
-    /// The §1.7 check is one exact lookup, and says so. A quiet "nothing found" that reads as
-    /// "nothing exists" is the report that creates duplicates.
+    /// A clean answer has to say how far it looked. A quiet "nothing found" that reads as
+    /// "nothing exists" is the report that creates duplicates, and the sentence that stops it
+    /// being read that way is the one naming the sources nobody asked.
     #[test]
-    fn a_clean_label_check_says_how_narrow_it_was() {
-        let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
+    fn a_clean_discovery_pass_says_what_it_consulted_and_what_it_did_not() {
+        let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED), (OTHER, "")]);
         let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
 
-        assert!(report.contains("nothing is already called"), "{report}");
-        assert!(report.contains("not a discovery pass"), "{report}");
+        assert!(
+            report.contains("nothing discovery reached is called \"Tidal power\""),
+            "{report}"
+        );
+        assert!(
+            report.contains("this store — 2 vocabularies"),
+            "the answer says what was read, not just that it read: {report}"
+        );
+        assert!(
+            report.contains("no peer, no data catalog, and no public registry was consulted"),
+            "what was *not* asked is the sentence that stops this reading as \"nothing \
+             exists\": {report}"
+        );
+        assert!(
+            !report.contains("reuse outranks creation"),
+            "a ladder over an empty list teaches the reader to skip the paragraph: {report}"
+        );
+    }
+
+    /// **The item, in one report.** A concept in a *different* vocabulary in the same store is
+    /// found — the match `openbiz mint` could not make when it looked in one vocabulary — and it
+    /// is found before the IRI, because the next step is to reuse it, not to mint.
+    #[test]
+    fn a_concept_in_another_vocabulary_is_discovered_before_the_iri() {
+        let (_directory, store) = store_with(&[
+            (VOCABULARY, NUMBERED),
+            (
+                OTHER,
+                r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+                   <https://example.org/materials/c_7> a skos:Concept ;
+                     skos:prefLabel "Tidal power"@en ."#,
+            ),
+        ]);
+
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+
+        let stop = report.find("STOP").expect("the §1.7 warning");
+        let minted = report.find("minted:").expect("an IRI");
+        assert!(stop < minted, "the warning comes first: {report}");
+        assert!(
+            report.contains("https://example.org/materials/c_7"),
+            "the concept already holding the term is named: {report}"
+        );
+        assert!(
+            report.contains("in the vocabulary https://example.org/materials"),
+            "and so is the vocabulary it is in, which is the one the curator is not looking at: \
+             {report}"
+        );
+        assert!(report.contains("reuse outranks creation"), "{report}");
+        assert!(
+            report.contains("skos:exactMatch"),
+            "the rung above creating is named, not just the warning: {report}"
+        );
+    }
+
+    /// A term that contains the query is not the same term, and the report must not say STOP
+    /// about it — but it must still be shown, because "Tidal power generation" existing is the
+    /// reason not to mint "Tidal power" without thinking.
+    #[test]
+    fn a_partial_match_is_shown_as_related_and_does_not_stop_the_report() {
+        let (_directory, store) = store_with(&[(
+            VOCABULARY,
+            r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+               <https://example.org/energy/c_1> a skos:Concept ;
+                 skos:prefLabel "Tidal power generation"@en ."#,
+        )]);
+
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+
+        assert!(
+            !report.contains("STOP"),
+            "it is not the same term: {report}"
+        );
+        assert!(
+            report.contains("label(s) contain it"),
+            "and it is still shown: {report}"
+        );
+        assert!(
+            report.contains("https://example.org/energy/c_1"),
+            "{report}"
+        );
+    }
+
+    /// A hit on an alternative label is a hit — SKOS §5.1 defines the other two label properties
+    /// for exactly this — and the concept is shown under the label it is *displayed* by, which
+    /// §5.1 says is never a hidden one.
+    #[test]
+    fn a_match_on_an_alternative_label_names_the_concepts_preferred_one() {
+        let (_directory, store) = store_with(&[(
+            VOCABULARY,
+            r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+               <https://example.org/energy/c_1> a skos:Concept ;
+                 skos:prefLabel "Tidal stream generation"@en ;
+                 skos:altLabel "Tidal power"@en ."#,
+        )]);
+
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+
+        assert!(report.contains("STOP"), "{report}");
+        assert!(
+            report.contains("(Tidal stream generation)"),
+            "shown under its preferred label: {report}"
+        );
+        assert!(
+            report.contains("skos:altLabel"),
+            "and honest about which label matched: {report}"
+        );
     }
 
     /// **The contradiction running the command produced.** The IRI half of the report reads the

@@ -16,6 +16,7 @@ publish = false
 
 [workspace.dependencies]
 openbiz-api = { path = "crates/openbiz-api" }
+openbiz-discovery = { path = "crates/openbiz-discovery" }
 openbiz-git = { path = "crates/openbiz-git" }
 openbiz-owl = { path = "crates/openbiz-owl" }
 openbiz-skos = { path = "crates/openbiz-skos" }
