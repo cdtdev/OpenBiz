@@ -25,6 +25,8 @@ mod relocate;
 mod search;
 mod shutdown;
 mod sparql;
+mod split;
+mod staging;
 mod tree;
 mod ui;
 
@@ -46,6 +48,7 @@ pub use policy::policy;
 pub use relocate::relocate;
 pub use search::search;
 pub use shutdown::StopSignals;
+pub use split::split;
 pub use tree::tree;
 
 /// Build the application router.

@@ -32,16 +32,9 @@
 //! and `POST /api/merge` would be an unauthenticated way to delete a concept out of somebody's
 //! thesaurus. The candidate seam over HTTP is its own plan item and lands with the identity.
 
-use openbiz_skos::{
-    newly_violated, ConditionOutcome, CoreModel, Demotion, Merge, MergeScan, Node,
-    PropertyRefinements, Statement, WalkBound,
-};
-use std::collections::BTreeSet;
+use openbiz_skos::{CoreModel, Demotion, Merge, MergeScan, Node, WalkBound};
 
-use openbiz_store::{
-    Candidate, CandidateSource, CandidateState, GraphId, GraphKind, Provenance, StatementRef,
-    StatementTerm, Store,
-};
+use openbiz_store::{Candidate, CandidateSource, GraphId, Provenance, Store};
 
 use crate::cli::{actor, CommandError};
 
@@ -70,19 +63,20 @@ pub fn merge(
 
     // The change is computed; now check what it would leave behind. See `would_break` for why
     // this is the whole condition set and not the two conditions a merge obviously risks.
-    let broken = would_break(store, graph, &model, &merge)?;
+    let broken =
+        crate::staging::newly_broken(store, graph, &model, merge.additions(), merge.removals())?;
     if !broken.is_empty() {
-        return Err(CommandError::MergeBreaksIntegrity(Box::new(
-            BrokenConditions {
+        return Err(CommandError::BreaksIntegrity {
+            operation: "merge",
+            conditions: Box::new(crate::staging::BrokenConditions {
                 graph: graph.to_owned(),
-                source: merge.source().clone(),
-                target: merge.target().clone(),
+                change: format!("merging {} into {}", merge.source(), merge.target()),
                 broken,
-            },
-        )));
+            }),
+        });
     }
 
-    let elsewhere = elsewhere(store, graph, &source)?;
+    let elsewhere = crate::staging::elsewhere(store, graph, &source)?;
 
     let provenance = Provenance {
         source: CandidateSource::BulkEdit,
@@ -97,212 +91,11 @@ pub fn merge(
         confidence: None,
     };
 
-    let additions = borrowed(merge.additions());
-    let removals = borrowed(merge.removals());
+    let additions = crate::staging::borrowed(merge.additions());
+    let removals = crate::staging::borrowed(merge.removals());
     let candidate = store.propose_edit(&vocabulary, &additions, &removals, &provenance)?;
 
     Ok(report(graph, &model, &merge, &elsewhere, &candidate))
-}
-
-/// The SKOS integrity conditions this merge would break, having read the vocabulary as it would
-/// be afterwards.
-///
-/// **The whole condition set, not a subset.** A hand-written check for the conditions a merge is
-/// *expected* to risk would have caught S14 — both concepts have a preferred label, so the
-/// collision is obvious — and missed S27 entirely, which a merge breaks whenever one concept is
-/// `skos:related` to something above the other. That was found by running the command against a
-/// store on disk, not by reasoning about it, and it is exactly the argument for asking the model
-/// the question it already answers rather than predicting the answer.
-///
-/// **The cost is real and stated.** This reads the vocabulary a second time and builds a second
-/// model, so a merge is four passes over the graph rather than two. That is the price of checking
-/// a proposal against the whole specification instead of against an author's expectations, and it
-/// is paid by a bulk operation nobody runs in a loop. It is unmeasured on a large vocabulary and
-/// recorded as such in `docs/UNTESTED.md`.
-fn would_break(
-    store: &Store,
-    graph: &str,
-    before: &CoreModel,
-    merge: &Merge,
-) -> Result<Vec<ConditionOutcome>, CommandError> {
-    let removed: BTreeSet<Statement> = merge.removals().iter().cloned().collect();
-
-    // The same two passes `crate::inspect::read` makes, and for the same reason: a refinement
-    // declaration may sit after every statement that uses it.
-    let mut refinements = PropertyRefinements::builder();
-    read_as_merged(store, graph, &removed, merge, |statement| {
-        refinements.push(statement)
-    })?;
-    let mut builder = CoreModel::builder().with_refinements(refinements.build());
-    read_as_merged(store, graph, &removed, merge, |statement| {
-        builder.push(statement)
-    })?;
-
-    Ok(newly_violated(before, &builder.build()))
-}
-
-/// Stream the vocabulary as it would be after the merge: without the removals, with the additions.
-fn read_as_merged(
-    store: &Store,
-    graph: &str,
-    removed: &BTreeSet<Statement>,
-    merge: &Merge,
-    mut visit: impl FnMut(Statement),
-) -> Result<(), CommandError> {
-    store.for_each_statement(graph, |statement| {
-        let statement = crate::inspect::convert(statement);
-        if !removed.contains(&statement) {
-            visit(statement);
-        }
-    })?;
-    for statement in merge.additions() {
-        visit(statement.clone());
-    }
-    Ok(())
-}
-
-/// A merge refused because of what it would leave behind, and the conditions that say so.
-#[derive(Debug)]
-pub struct BrokenConditions {
-    /// The vocabulary, which is what `openbiz integrity` takes — not either concept.
-    pub graph: String,
-    /// The concept that would have been merged away.
-    pub source: Node,
-    /// The concept that would have survived.
-    pub target: Node,
-    /// The conditions that hold now and would not afterwards.
-    pub broken: Vec<ConditionOutcome>,
-}
-
-impl std::fmt::Display for BrokenConditions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "merging {} into {} would leave a graph that is not a SKOS vocabulary. {} that {} \
-             now would not afterwards:",
-            self.source,
-            self.target,
-            match self.broken.len() {
-                1 => "One integrity condition".to_owned(),
-                many => format!("{many} integrity conditions"),
-            },
-            match self.broken.len() {
-                1 => "holds",
-                _ => "hold",
-            },
-        )?;
-        for outcome in &self.broken {
-            // `forbids`, not the rule's full statement: each finding below prints the statement
-            // as part of its own derivation, and printing it here as well said it twice.
-            write!(
-                f,
-                "\n  {} ({}) — {}",
-                outcome.condition.rule().number(),
-                outcome.condition.section(),
-                outcome.condition.forbids(),
-            )?;
-            for finding in outcome.violations.iter().take(3) {
-                write!(f, "\n    {finding}")?;
-            }
-        }
-        write!(
-            f,
-            "\nRetract what causes it first. `openbiz integrity {}` would have reported the same \
-             thing after the merge — but by then the change would be in the vocabulary",
-            self.graph
-        )
-    }
-}
-
-/// Where else in the store the merged concept is mentioned, and how often.
-///
-/// Other vocabularies and the changes still waiting for a decision. Neither is touched: the first
-/// belongs to somebody else's graph, and the second has not been agreed to yet.
-fn elsewhere(
-    store: &Store,
-    graph: &str,
-    source: &Node,
-) -> Result<Vec<(String, usize)>, CommandError> {
-    let mut found = Vec::new();
-
-    for other in store.graphs()? {
-        if other.kind() != GraphKind::Vocabulary || other.iri() == graph {
-            continue;
-        }
-        let count = count_in(store, other.iri(), source)?;
-        if count > 0 {
-            found.push((format!("the vocabulary {}", other.iri()), count));
-        }
-    }
-
-    for candidate in store.candidates()? {
-        // Only the ones still waiting. An applied candidate's statements are in a vocabulary and
-        // were counted there; a rejected one's are the record of what was refused and will never
-        // be written.
-        if candidate.state() != CandidateState::Proposed {
-            continue;
-        }
-        let Some(payload) = candidate.payload() else {
-            continue;
-        };
-        let count = count_in(store, payload.iri(), source)?;
-        if count > 0 {
-            found.push((
-                format!(
-                    "candidate {}, which is waiting for a decision",
-                    candidate.id()
-                ),
-                count,
-            ));
-        }
-    }
-
-    Ok(found)
-}
-
-/// How many statements in one graph mention `concept`.
-fn count_in(store: &Store, graph: &str, concept: &Node) -> Result<usize, CommandError> {
-    let iri = concept.as_iri().unwrap_or_default();
-    let mut count = 0;
-    store.for_each_statement(graph, |statement| {
-        let names = matches!(statement.subject, StatementTerm::Iri(subject) if subject == iri)
-            || matches!(statement.object, StatementTerm::Iri(object) if object == iri);
-        if names {
-            count += 1;
-        }
-    })?;
-    Ok(count)
-}
-
-/// The domain crate's owned statements as the store's borrowed ones.
-///
-/// The other direction of `crate::inspect::convert`, and the same cost of the layering that
-/// `docs/adr/0019` records. Unlike a move, a merge really does carry literals — a repointed label
-/// is one — so both arms of this are exercised by the ordinary path.
-fn borrowed(statements: &[openbiz_skos::Statement]) -> Vec<StatementRef<'_>> {
-    statements
-        .iter()
-        .map(|statement| StatementRef {
-            subject: term(&statement.subject),
-            predicate: &statement.predicate,
-            object: match &statement.object {
-                openbiz_skos::Term::Node(node) => term(node),
-                openbiz_skos::Term::Literal(literal) => StatementTerm::Literal {
-                    value: &literal.value,
-                    language: literal.language.as_deref(),
-                    datatype: &literal.datatype,
-                },
-            },
-        })
-        .collect()
-}
-
-/// One node as the store's borrowed term.
-fn term(node: &Node) -> StatementTerm<'_> {
-    match node {
-        Node::Iri(iri) => StatementTerm::Iri(iri),
-        Node::Blank(label) => StatementTerm::Blank(label),
-    }
 }
 
 /// What the operator reads back, in the order they need it.
@@ -704,7 +497,7 @@ mod tests {
 
         let said = error.to_string();
         assert!(
-            matches!(error, CommandError::MergeBreaksIntegrity(_)),
+            matches!(error, CommandError::BreaksIntegrity { .. }),
             "{said}"
         );
         assert!(said.contains("not a SKOS vocabulary"), "{said}");

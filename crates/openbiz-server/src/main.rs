@@ -161,6 +161,24 @@ async fn main() -> anyhow::Result<()> {
         } => one_shot(store, |store| {
             openbiz_server::merge(store, &graph, &source, &target)
         }),
+        Command::Split {
+            graph,
+            concept,
+            labels,
+            placement,
+            language,
+            pattern,
+        } => one_shot(store, |store| {
+            openbiz_server::split(
+                store,
+                &graph,
+                &concept,
+                &labels,
+                placement,
+                language.as_deref(),
+                pattern.as_deref(),
+            )
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

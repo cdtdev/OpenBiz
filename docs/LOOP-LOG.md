@@ -3263,3 +3263,85 @@ look competent disables the one signal that catches a stuck loop.
   operator. I picked the permissive reading because the strict one would make the tool unable to
   repair the mess it is being pointed at, and I am not confident that argument survives contact
   with a real thesaurus rather than a three-concept fixture.
+
+## Iteration 44 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `b087ba4`, tree clean, and the CI run for
+  that commit was **still in progress** when I first looked — so I read the plan and the code I
+  needed while it ran and checked it again before creating the branch, rather than reading an empty
+  `conclusion` as either green or red. It completed `success`. Both human inboxes empty
+  (`promote-queue.json` is `[]`, `feedback.md` zero bytes). Nothing to drain, so nothing truncated.
+- **Took the next unblocked item and did not split it.** The candidate seam over HTTP is above it in
+  Phase 2, recorded in `BLOCKED.md` on authentication, and not re-attempted. The next is iteration
+  42's third split: **split one concept into several**. It is the smallest of the remaining bulk
+  operations because it removes nothing.
+- **What shipped.** `openbiz split <graph> <concept> --place beside|below --into <label> …` computes
+  the change and stages it as one additions-only candidate; `openbiz approve` applies it. IRIs are
+  minted through the same resolution `openbiz mint` uses. See `adr/0039`.
+- **The decision the whole item turns on is what it refuses to do.** A merge has one right answer
+  for every statement it touches. A split has **none**: the concept is being divided *because* its
+  labels, children, associative links, mappings and notes belong to different things, and which part
+  each belongs to is the editorial judgement the operator is being asked for. So the command creates
+  the parts, leaves the original untouched, and ends its report with everything still hanging off it
+  and the command that apportions each kind — **before the diff**, because a reader who stops at
+  "2 parts proposed" believes the job is finished. The end-to-end test asserts the honest half the
+  way it has to be asserted: it reads the graph off disk with `openbiz backup` before and after and
+  compares every line mentioning the concept, and the only difference permitted is the two
+  derivations that name it as *their* source.
+- **`--place` is required and has no default, and that is the same argument `adr/0037` made about
+  cycles.** `Banks (river)` is not narrower than `Banks` — homonymy is not hierarchy — but §8.6.7
+  makes the graph consistent, so nothing downstream reports the wrong choice. Both readings are
+  ordinary thesaurus practice; guessing would produce consistent SKOS that says something false.
+- **I put `prov:wasDerivedFrom` in the user's vocabulary, not in our own graphs — and that decision
+  bit back in a way worth recording.** It is the recorded justification §1.7 asks of anything that
+  creates rather than reuses, it is the PROV-O §2 commits to, and it survives an export, so a tool
+  that has never heard of OpenBiz can answer "why does this concept exist?". The consequence is that
+  **our statement now interacts with the user's own declarations**: a vocabulary declaring
+  `prov:wasDerivedFrom rdfs:subPropertyOf skos:related` makes a `below` split entail an S27
+  violation, and the guard does not catch it — because this build reports S27 as *unchecked* in such
+  a vocabulary rather than falsely held, and a condition with no verdict either side cannot be
+  *newly* violated. Honest behaviour producing a blind spot. Found by trying to break my own check
+  against a store on disk, in `UNTESTED.md` with the reproduction, and raised in `PROPOSED.md`
+  because it is a property of the guard rather than of splits.
+- **I generalised `adr/0038`'s check rather than copying it.** `would_break`, `elsewhere` and
+  `borrowed` moved out of `openbiz merge` into `crate::staging` unchanged, because the lesson of
+  iteration 43 was never "a merge risks S14 and S27" — it was that *predicting* which conditions an
+  operation risks is unreliable, and that reasoning is not about merges. `openbiz move` still does
+  not call it; that remains a defect a human authorises the fix for, and "I am already here and it
+  is one line" is exactly what the one-item rule refuses.
+- **Two things in the report were wrong until I read the command's own output**, for the fourteenth
+  iteration running: "1 concept is below it: move **each** under the right part", and a label count
+  claiming "including the one that named both senses" — presumptuous for a polysemy split and simply
+  false for a granularity one, where no label ever named two senses. **And a test I wrote failed and
+  was right to**: a reused label is a *warning* under an opaque pattern and a *mint refusal* under a
+  readable one, because there the label is the local name. Both are now tested; the asymmetry is
+  recorded rather than papered over.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **941 Rust tests, up from 899**: 24 in `openbiz-skos` for the computation and
+  every refusal, 11 in the server for the report and the store, 3 in argument parsing, and 5 against
+  the real binary on disk in separate processes. No new dependency. UI untouched: Phase 2 is the
+  model and the command line, which is the basis every item in this phase was closed on.
+- **Recorded:** `adr/0039`. `UNTESTED.md` — **one entry narrowed, none closed, four opened**. The
+  narrowed one is iteration 41's "every producer mints under the recorded policy has exactly one
+  producer": there are two now, and it stays open because the three paths `adr/0036` was written for
+  — import, discovery, agents — still do not mint. The four opened are the refinement blind spot, the
+  label-versus-IRI refusal, `skos:topConceptOf` propagated in a direction chosen rather than read
+  (the same core-model gap iteration 42 found from the other side — one gap, not two), and a fourth
+  command whose cost is unmeasured, which is the seventh such entry in this crate and where the
+  recurrence is the finding. One proposal. Iteration 37's LCGFT fixture is unpromoted for the
+  eighth iteration.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T09:25Z at branch creation.
+- **Still uncertain:** whether `--place` being a required choice is a good design or a question I
+  pushed onto the operator because I could not answer it. The refusal explains both words, but it
+  explains them in the vocabulary of *my* model — "the parts take the concept's place" versus "the
+  concept becomes their broader concept" — and the person running this is a subject-matter expert who
+  knows that `Banks` means two things and does not necessarily know what either sentence implies for
+  the sixteen concepts underneath it. `CLAUDE.md`'s second pillar is that an SME with no RDF training
+  makes their first correct edit unaided, and a required flag whose two values are distinguished by
+  a fact about SKOS semantics is a place where that pillar and my refusal-rather-than-guess habit
+  point in opposite directions. I do not know which should win. It is possible the right shape is not
+  a flag at all but the Solution Advisor's routing applied one level down — ask what happened to the
+  concept ("it meant two things" / "it was too broad") and derive the placement — and I did not look
+  for that because a flag was easy to write and easy to justify by analogy with `--from` on a move.
+  That analogy may not hold: `--from` disambiguates something the *graph* is ambiguous about, and
+  this disambiguates something only the human knows.

@@ -90,34 +90,7 @@ pub fn mint(
     // vocabulary's own concepts would have chosen — a pattern that disagrees with them is exactly
     // the thing worth showing somebody before they use it.
     let suggested = convention.suggest();
-    let (chosen, source) = match pattern {
-        Some(text) => (
-            MintPattern::parse(text)?,
-            PatternSource::Given {
-                recorded: recorded.as_ref(),
-            },
-        ),
-        None => match &recorded {
-            // Refused rather than fallen back from. A vocabulary with a recorded policy has made a
-            // decision, and minting under a different pattern because we could not read that
-            // decision is worse than not minting at all.
-            Some(policy) => (
-                MintPattern::parse(policy.pattern()).map_err(|source| {
-                    CommandError::RecordedPatternUnusable {
-                        graph: graph.to_owned(),
-                        pattern: policy.pattern().to_owned(),
-                        recorded_by: policy.recorded_by().to_owned(),
-                        source,
-                    }
-                })?,
-                PatternSource::Recorded(policy),
-            ),
-            None => match &suggested {
-                Ok(suggestion) => (suggestion.pattern.clone(), PatternSource::Inferred),
-                Err(error) => return Err(CommandError::NoConvention(error.clone())),
-            },
-        },
-    };
+    let (chosen, source) = pattern_for(graph, &suggested, &recorded, pattern)?;
 
     let scan = scan_for(store, graph, chosen.prefix())?;
     let minted = mint_iri(&chosen, label, SlugBound::DEFAULT, &scan);
@@ -136,6 +109,48 @@ pub fn mint(
     Ok(report(
         graph, label, &chosen, &source, &suggested, &scan, &minted, &model, &staged,
     ))
+}
+
+/// Which pattern a new IRI in `graph` is minted under, and where that pattern came from.
+///
+/// Three answers, and the first one that exists wins: `--pattern`, then the vocabulary's recorded
+/// policy, then the convention read off its own concepts. Shared with `openbiz split`, which mints
+/// under the same three and must not resolve them a second, subtly different way — the whole point
+/// of `openbiz policy` is that every producer mints the same.
+pub(crate) fn pattern_for<'a>(
+    graph: &str,
+    suggested: &Result<Suggestion, openbiz_skos::NoConvention>,
+    recorded: &'a Option<IriPolicy>,
+    given: Option<&str>,
+) -> Result<(MintPattern, PatternSource<'a>), CommandError> {
+    Ok(match given {
+        Some(text) => (
+            MintPattern::parse(text)?,
+            PatternSource::Given {
+                recorded: recorded.as_ref(),
+            },
+        ),
+        None => match recorded {
+            // Refused rather than fallen back from. A vocabulary with a recorded policy has made a
+            // decision, and minting under a different pattern because we could not read that
+            // decision is worse than not minting at all.
+            Some(policy) => (
+                MintPattern::parse(policy.pattern()).map_err(|source| {
+                    CommandError::RecordedPatternUnusable {
+                        graph: graph.to_owned(),
+                        pattern: policy.pattern().to_owned(),
+                        recorded_by: policy.recorded_by().to_owned(),
+                        source,
+                    }
+                })?,
+                PatternSource::Recorded(policy),
+            ),
+            None => match suggested {
+                Ok(suggestion) => (suggestion.pattern.clone(), PatternSource::Inferred),
+                Err(error) => return Err(CommandError::NoConvention(error.clone())),
+            },
+        },
+    })
 }
 
 /// A model of each change staged against `graph` and still waiting for a decision.
@@ -165,7 +180,11 @@ fn staged_models(store: &Store, graph: &str) -> Result<Vec<(String, CoreModel)>,
 /// Vocabularies first, then the staged changes, because [`MintScan`] keeps the first source to
 /// mention an IRI: a collision with a vocabulary must not be reported as a collision with a
 /// candidate that merely repeats what the vocabulary already says.
-fn scan_for(store: &Store, target: &str, prefix: &str) -> Result<MintScan, CommandError> {
+pub(crate) fn scan_for(
+    store: &Store,
+    target: &str,
+    prefix: &str,
+) -> Result<MintScan, CommandError> {
     let mut scan = MintScan::under(prefix);
 
     for graph in store.graphs()? {

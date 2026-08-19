@@ -1520,3 +1520,33 @@ has. `README.md` is the right home for it and a human wrote it._
 - **Cost & impact:** (a) is moderate and needs a decision the seam has not needed before — a single
   operator action producing candidates against graphs the operator may not own.
 - **Suggested phase:** Phase 2, or alongside the deprecation-lifecycle item, which it overlaps.
+
+### Decide what the integrity guard should do when a vocabulary's own refinements make a condition unreadable
+- **Status:** proposed.
+- **Gap:** `crate::staging::newly_broken` — `adr/0038`'s check, generalised at iteration 44 — asks
+  whether a condition **holds now and would not afterwards**. A vocabulary that declares a
+  sub-property this build cannot entail through leaves the affected conditions **unchecked**, which
+  is the honest verdict and is exactly why the guard cannot fire: a condition with no verdict on
+  either side was never "held". So the change goes through and the violation lands unseen.
+  Reproduced at iteration 44 with `prov:wasDerivedFrom rdfs:subPropertyOf skos:related`, which makes
+  `openbiz split --place below` entail an S27 violation the guard passes and `openbiz integrity`
+  afterwards reports as `unchecked` rather than `VIOLATED` (`docs/UNTESTED.md`).
+- **Why load-bearing:** the guard is currently the only thing standing between a computed bulk edit
+  and a vocabulary that stops being SKOS, and it is **weakest on exactly the vocabularies most
+  likely to need it** — the ones elaborate enough to declare their own refinements, which is what an
+  ISO 25964 thesaurus with a house extension looks like. It also compounds the doubt iteration 43
+  closed on: the guard already protects a clean vocabulary better than a dirty one, and this is a
+  second axis of the same asymmetry.
+- **Options:** (a) entail through declared refinements of the SKOS semantic properties, which is the
+  real fix and is a reasoning change, not a check change — it belongs with the `RefinementScan` work
+  and is the largest of the three. (b) Refuse a change whose statements use a property whose
+  refinements leave a condition unchecked — cheap, sound, and probably too blunt: it would refuse
+  ordinary edits to any vocabulary with one awkward declaration. (c) Do not refuse, but **say so**:
+  have every staging command report "N conditions could not be checked here, so this change was not
+  measured against them", which is the explainability commitment applied to the guard's own limits
+  and costs almost nothing. (c) is worth doing whichever of (a) and (b) is chosen.
+- **Cost & impact:** (c) is small. (b) is small and risky. (a) is a substantial piece of reasoning
+  work and should be scoped against the specification rather than against this one reproduction.
+- **Suggested phase:** (c) in Phase 2, alongside the "check every writing path" item above, which it
+  belongs with. (a) in Phase 4, where SHACL and the rule packs raise the same question about what a
+  rule that cannot be evaluated should say.
