@@ -35,10 +35,10 @@
 //! word for the rest. `openbiz-server` is where the two meet, and it is where a pattern is validated
 //! before it is ever recorded.
 
+use oxigraph::model::vocab::xsd;
 use oxigraph::model::{Literal, NamedNode, Quad, Term};
-use oxsdatatypes::DateTime;
 
-use crate::{named_node, GraphId, GraphKind, RegistryReader, Store, StoreError};
+use crate::{named_node, GraphId, GraphKind, RecordedAt, RegistryReader, Store, StoreError};
 
 /// The pattern a vocabulary's new concepts are minted under.
 const IRI_PATTERN_IRI: &str = "urn:openbiz:iriPattern";
@@ -46,7 +46,12 @@ const IRI_PATTERN_IRI: &str = "urn:openbiz:iriPattern";
 /// Who recorded that pattern.
 const IRI_PATTERN_BY_IRI: &str = "urn:openbiz:iriPatternRecordedBy";
 
-/// When they recorded it.
+/// When they recorded it, as an `xsd:dateTime`.
+///
+/// Typed since store format version 5. Builds before it wrote the same lexical form as a plain
+/// string, which SPARQL cannot order or compare against any other timestamp in the trail — so a
+/// query asking which of two conventions a vocabulary adopted first got no answer from a record
+/// that plainly contains one. `migrate::RetypeIriPolicyStamps` brings older stores forward.
 const IRI_PATTERN_AT_IRI: &str = "urn:openbiz:iriPatternRecordedAt";
 
 /// A recorded decision about how one vocabulary mints the IRIs of its new concepts.
@@ -58,7 +63,7 @@ const IRI_PATTERN_AT_IRI: &str = "urn:openbiz:iriPatternRecordedAt";
 pub struct IriPolicy {
     pattern: String,
     recorded_by: String,
-    recorded_at: String,
+    recorded_at: RecordedAt,
 }
 
 impl IriPolicy {
@@ -77,9 +82,9 @@ impl IriPolicy {
         &self.recorded_by
     }
 
-    /// When it was recorded, as an `xsd:dateTime`.
+    /// When it was recorded, as an `xsd:dateTime` on the UTC clock.
     pub fn recorded_at(&self) -> &str {
-        &self.recorded_at
+        self.recorded_at.as_str()
     }
 }
 
@@ -171,7 +176,7 @@ impl Store {
             let policy = IriPolicy {
                 pattern: pattern.to_owned(),
                 recorded_by: recorded_by.to_owned(),
-                recorded_at: DateTime::now().to_string(),
+                recorded_at: RecordedAt::now(),
             };
             txn.extend_graph(&GraphId::system(), &quads_of(graph, &policy))?;
 
@@ -206,17 +211,30 @@ fn only_a_vocabulary(graph: &GraphId) -> Result<(), StoreError> {
 fn quads_of(graph: &GraphId, policy: &IriPolicy) -> Vec<Quad> {
     let subject = NamedNode::new_unchecked(graph.iri());
     let system = NamedNode::new_unchecked(GraphId::system().iri());
+    // The stamp is typed and the other two are not, which is the difference between a value and a
+    // string: `recorded_at` is the one field of the three a reader will want to *order* — which
+    // policy came first, was this one in force when that concept was minted — and SPARQL can only
+    // answer that over `xsd:dateTime`. A pattern and an actor's name are text and nothing else.
     [
-        (IRI_PATTERN_IRI, policy.pattern.as_str()),
-        (IRI_PATTERN_BY_IRI, policy.recorded_by.as_str()),
-        (IRI_PATTERN_AT_IRI, policy.recorded_at.as_str()),
+        (
+            IRI_PATTERN_IRI,
+            Literal::new_simple_literal(policy.pattern.as_str()),
+        ),
+        (
+            IRI_PATTERN_BY_IRI,
+            Literal::new_simple_literal(policy.recorded_by.as_str()),
+        ),
+        (
+            IRI_PATTERN_AT_IRI,
+            Literal::new_typed_literal(policy.recorded_at.as_str(), xsd::DATE_TIME),
+        ),
     ]
     .into_iter()
     .map(|(predicate, value)| {
         Quad::new(
             subject.clone(),
             named_node(predicate).into_owned(),
-            Literal::new_simple_literal(value),
+            value,
             system.clone(),
         )
     })
@@ -265,11 +283,27 @@ fn read_policy(
     let recorded_at = one(IRI_PATTERN_AT_IRI, "recording time")?;
 
     match (recorded_by, recorded_at) {
-        (Some(recorded_by), Some(recorded_at)) => Ok(Some(IriPolicy {
-            pattern,
-            recorded_by,
-            recorded_at,
-        })),
+        (Some(recorded_by), Some(recorded_at)) => {
+            // Re-validated for the same reason the attribution is required: a policy whose
+            // recorded time cannot be placed against anything else is not evidence of when the
+            // convention changed, and reporting it as though it were would put OpenBiz's name to
+            // a date nobody can order.
+            let recorded_at = RecordedAt::parse(&recorded_at).map_err(|error| {
+                StoreError::Corrupt {
+                    path: path.to_path_buf(),
+                    detail: format!(
+                        "the vocabulary {} records the pattern {pattern:?} for minting IRIs, and records \
+                         when that was decided in a form this build cannot act on: {error}",
+                        graph.iri()
+                    ),
+                }
+            })?;
+            Ok(Some(IriPolicy {
+                pattern,
+                recorded_by,
+                recorded_at,
+            }))
+        }
         _ => Err(StoreError::Corrupt {
             path: path.to_path_buf(),
             detail: format!(
@@ -415,6 +449,173 @@ mod tests {
             .expect("the system graph is readable")
             .len();
         assert_eq!(patterns, 1, "one vocabulary records one pattern");
+    }
+
+    /// The stamp is a value, not a string, because the only question it exists to answer is a
+    /// comparison. Before format version 5 this was a plain literal and this assertion failed.
+    #[test]
+    fn the_recorded_time_is_a_typed_date_time_on_the_utc_clock() {
+        let (_dir, store) = store();
+        store
+            .record_iri_policy(&id(ENERGY), "https://example.org/energy/c_{n}", "ada")
+            .expect("the policy is recorded");
+
+        let stamps = store
+            .backend
+            .system_quads(Some(named_node(ENERGY)), named_node(IRI_PATTERN_AT_IRI))
+            .expect("the system graph is readable");
+        let [quad] = stamps.as_slice() else {
+            panic!("one policy records one time: {stamps:?}");
+        };
+        let Term::Literal(literal) = &quad.object else {
+            panic!("the recorded time is a literal: {quad:?}");
+        };
+        assert_eq!(
+            literal.datatype(),
+            xsd::DATE_TIME,
+            "a stamp SPARQL cannot compare is not an audit record: {literal}"
+        );
+        assert!(
+            literal.value().ends_with('Z'),
+            "this build stamps UTC and says so: {literal}"
+        );
+    }
+
+    /// The payoff, asked the way an auditor would ask it: order the trail by time, in SPARQL,
+    /// across the two kinds of record that carry one. This is what an untyped stamp made
+    /// impossible — the engine will not relate an `xsd:string` to an `xsd:dateTime`, so a policy
+    /// simply vanished from the answer rather than sorting wrongly.
+    #[test]
+    fn a_recorded_time_can_be_compared_in_sparql_against_the_rest_of_the_trail() {
+        let (_dir, store) = store();
+        store
+            .record_iri_policy(&id(ENERGY), "https://example.org/energy/c_{n}", "ada")
+            .expect("the policy is recorded");
+
+        let query = format!(
+            "SELECT ?at FROM <{}> WHERE {{ ?v <{IRI_PATTERN_AT_IRI}> ?at . \
+             FILTER (?at > \"2000-01-01T00:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }}",
+            crate::SYSTEM_GRAPH_IRI
+        );
+        let mut written = Vec::new();
+        let report = store
+            .query(
+                &query,
+                crate::QueryFormats::default(),
+                crate::QueryLimits::default(),
+                &mut written,
+            )
+            .expect("the query runs");
+        assert_eq!(
+            report.answers(),
+            1,
+            "the recorded time must compare as a date and time, not merely exist: {}",
+            String::from_utf8_lossy(&written)
+        );
+    }
+
+    /// A store is data on disk. One that says a convention was adopted at a time no reader can
+    /// place is refused at the read, naming the vocabulary, rather than reported as a decision.
+    #[test]
+    fn a_recorded_time_that_names_no_clock_is_refused() {
+        for (lexical, expected) in [
+            ("2026-08-19T14:17:03", "names no timezone"),
+            ("2026-08-19", "is not a date and time"),
+            ("last Tuesday", "is not a date and time"),
+        ] {
+            let (_dir, store) = store();
+            store
+                .record_iri_policy(&id(ENERGY), "https://example.org/energy/c_{n}", "ada")
+                .expect("the policy is recorded");
+            overwrite_stamp(&store, Literal::new_typed_literal(lexical, xsd::DATE_TIME));
+
+            let error = store
+                .iri_policy(&id(ENERGY))
+                .expect_err("a stamp nobody can place is not a decision");
+            let StoreError::Corrupt { detail, .. } = &error else {
+                panic!("{lexical:?} should be corrupt metadata, not {error:?}");
+            };
+            assert!(
+                detail.contains(expected) && detail.contains(ENERGY),
+                "the message must name the vocabulary and the reason: {detail}"
+            );
+            // A wrapped Rust string literal whose continuation is lost prints the source's own
+            // indentation. It has reached a user-facing message twice now (iterations 54 and 55),
+            // and it is invisible to every assertion that only checks for a substring.
+            assert!(
+                !detail.contains("  "),
+                "a run of spaces means a lost line continuation: {detail:?}"
+            );
+        }
+    }
+
+    /// The seam's promise, checked against the engine rather than against itself.
+    ///
+    /// `24:00:00` is a valid `xsd:dateTime` — XSD defines it as the next day's midnight — and it
+    /// is one of the odd-looking forms this build accepts. The question that matters is not
+    /// whether it parses but whether a record carrying it can still be *ordered*, because a stamp
+    /// that is stored, readable, and silently absent from every comparison is the failure this
+    /// seam exists to prevent. It normalises and it compares. The forms that would not are
+    /// refused before they reach a record, which `clock.rs` pins from the other side.
+    #[test]
+    fn every_stamp_this_build_accepts_is_one_the_engine_can_order() {
+        let (_dir, store) = store();
+        store
+            .record_iri_policy(&id(ENERGY), "https://example.org/energy/c_{n}", "ada")
+            .expect("the policy is recorded");
+        overwrite_stamp(
+            &store,
+            Literal::new_typed_literal("2026-08-19T24:00:00Z", xsd::DATE_TIME),
+        );
+        assert!(
+            store.iri_policy(&id(ENERGY)).expect("readable").is_some(),
+            "XSD admits it, so this build does not refuse it"
+        );
+
+        let query = format!(
+            "SELECT ?at FROM <{}> WHERE {{ ?v <{IRI_PATTERN_AT_IRI}> ?at . FILTER (?at > \
+             \"2000-01-01T00:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }}",
+            crate::SYSTEM_GRAPH_IRI
+        );
+        let mut written = Vec::new();
+        let report = store
+            .query(
+                &query,
+                crate::QueryFormats::default(),
+                crate::QueryLimits::default(),
+                &mut written,
+            )
+            .expect("the query runs");
+        assert_eq!(
+            report.answers(),
+            1,
+            "an accepted stamp that does not compare would be worse than a refused one: {}",
+            String::from_utf8_lossy(&written)
+        );
+    }
+
+    /// Replace whatever stamp is recorded for `ENERGY` with `object`, the way a hand-edited or
+    /// doctored store would carry one.
+    fn overwrite_stamp(store: &Store, object: Literal) {
+        let system = NamedNode::new_unchecked(GraphId::system().iri());
+        let existing = store
+            .backend
+            .system_quads(Some(named_node(ENERGY)), named_node(IRI_PATTERN_AT_IRI))
+            .expect("the system graph is readable");
+        store
+            .transaction(|txn| {
+                txn.remove_graph_quads(&GraphId::system(), &existing)?;
+                txn.extend_graph(
+                    &GraphId::system(),
+                    &[Quad::new(
+                        NamedNode::new_unchecked(ENERGY),
+                        named_node(IRI_PATTERN_AT_IRI).into_owned(),
+                        object.clone(),
+                        system.clone(),
+                    )],
+                )
+            })
+            .expect("the doctored record is written");
     }
 
     /// One vocabulary's decision is not another's.

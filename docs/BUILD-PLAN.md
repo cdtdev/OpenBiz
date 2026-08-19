@@ -3,21 +3,20 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **59 of 224 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **60 of 225 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 29 of 31; the denominator moved again at
-iteration 54, which split the discovery item into one per creation path. Every count on
+wait on authorisation, not on anything else. Phase 2 is 30 of 32; the denominator moved again at
+iteration 55, which added a product-owner-authorised item on the audit trail's clock. Every count on
 this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was
 left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records
 how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **29 of 31**. Iteration 54 landed the
-`DiscoveryProvider` trait, a local-store provider behind it, and `openbiz mint` running a
-discovery pass over the whole store before it offers an IRI — reuse ahead of creation, on the
-creation path, with no flag to enable and no way to print "nothing found" without saying how far
-it looked. Of the two items left, one — the candidate seam over HTTP and in the interface — is
-**blocked on authentication** (`BLOCKED.md`); the other is discovery on `openbiz split` plus the
-justification `adr/0003` §3 requires.
+**Current position:** Phase 2 (SKOS authoring model), **30 of 32**. Iteration 55 put every
+audit-trail timestamp behind one seam — UTC on write, an explicit offset required on read — and
+retyped the recorded IRI policy's stamp so the trail can be ordered in SPARQL rather than only read
+by eye (store format 5, `adr/0047`). Of the two items left, one — the candidate seam over HTTP and
+in the interface — is **blocked on authentication** (`BLOCKED.md`); the other is discovery on
+`openbiz split` plus the justification `adr/0003` §3 requires.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1283,6 +1282,24 @@ the interface is a core differentiator, and building it late means retrofitting 
       > nothing fitted. Today the only place for it is the note on the candidate. Whether that is
       > enough, or whether it needs a first-class object on the candidate — which would wait on
       > the seam over HTTP, blocked on authentication — is the decision this item has to make.
+- [x] **The audit trail says which clock it is on, and its stamps are values** (`adr/0047`)
+      > Added on product-owner instruction (`FEEDBACK-LOG.md`, 2026-08-20), which set the rule:
+      > for anything a reader must order, an explicit offset or UTC and never a bare date.
+      > The instants were already UTC. Two things around them were not. A recorded IRI policy's
+      > timestamp was a plain literal where a candidate's and a migration's were typed, so
+      > `FILTER (?at > …^^xsd:dateTime)` over the system graph returned **zero** rows for a policy
+      > plainly in range — the trail could be read and not ordered, which is what it is ordinary
+      > RDF for. And the two candidate stamps were the one field of a record `read_record` did not
+      > re-validate, so a doctored store saying a candidate was raised "last Tuesday" was shown to
+      > a reviewer as evidence.
+      > One seam, `RecordedAt`: UTC on write, an explicit offset required on read, and no
+      > comparison implemented in Rust because ordering is the datatype's own semantics. Store
+      > format **5** and the chain's first migration that rewrites data; a value it cannot read is
+      > left as found rather than retyped into a lie or made fatal at open.
+      > **Scope, honestly:** the trail is now orderable and nothing in the product orders it, and
+      > the seam is a convention rather than an enforced rule. Both in `docs/UNTESTED.md`; a
+      > reader-facing timeline and the same rule for the git and export paths are in
+      > `docs/PROPOSED.md`, unpromoted.
 
 ---
 

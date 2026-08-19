@@ -2778,3 +2778,45 @@ module's own tests and end to end against the real binary reading a store off di
   known-hard cases. `adr/0003` §6's structural and near-duplicate matching is a Phase 12 item and
   a larger question.
 - **Opened:** iteration 54
+
+### The one wall-clock seam is a convention, not an enforced rule
+- **Kind:** partial-coverage
+- **What is proven:** every stamp the audit trail holds today goes through
+  `openbiz_store::RecordedAt` — a candidate raised, a candidate decided, an IRI policy recorded, a
+  migration applied — and each is UTC on write and re-validated on read (`adr/0047`). `openbiz-store`
+  has no `chrono` or `time` dependency and no other wall-clock call.
+- **What is not:** that the *next* one will. A new `oxsdatatypes::DateTime::now().to_string()`
+  written into a record next phase compiles, passes clippy, and writes a stamp nothing validated —
+  and it would look exactly like the code that was there before this iteration. The seam removes
+  today's instances; it does not prevent tomorrow's.
+- **What would close it:** a test that reads the crate's own source through `include_str!` and
+  asserts `DateTime::now` appears only in `clock.rs`. Cheap and slightly unusual, which is why it was
+  not done on the way past rather than considered and skipped — it is a real guard against a defect
+  class that has already shipped once.
+- **Opened:** iteration 55
+
+### The audit trail is orderable and nothing orders it
+- **Kind:** no-production-caller
+- **What is proven:** a policy's `recorded_at` is an `xsd:dateTime` and compares in SPARQL against
+  the rest of the trail — measured, not asserted, and it returned zero rows before this iteration.
+- **What is not:** that anyone can ask. There is no `openbiz history`, no timeline, and no sorted
+  candidate list; the capability is exercised only by a test's own query. A reader wanting the trail
+  in order must write SPARQL against `urn:openbiz:graph:system` and know the predicate names. That is
+  strictly better than "cannot be done" and it is not a feature.
+- **What would close it:** a reader-facing command over the trail. Proposed, not self-authorised.
+- **Opened:** iteration 55
+
+### The retype migration has only been run against stores with one policy in them
+- **Kind:** partial-coverage
+- **What is proven:** `RetypeIriPolicyStamps` retypes a legacy stamp, leaves an unreadable one as
+  found, is idempotent across two runs, and runs through the real binary on a restored version-4
+  backup.
+- **What is not:** its cost. It reads every `urn:openbiz:iriPatternRecordedAt` quad in the system
+  graph in one transaction, at open, on the startup path — bounded by the number of vocabularies,
+  which is small in every fixture that has ever exercised it (one). Nothing has measured a store with
+  a thousand vocabularies, and nothing has run it against a store where the policy graph is large for
+  another reason. This is an **eighth** entry in the unmeasured-scale family and it is on the startup
+  path, which is the one place a cost is paid by every user on every run.
+- **What would close it:** the store-scale spike `adr/0013` and `adr/0024` already build, with a
+  store carrying policies for 1k and 10k vocabularies, and the migration's wall-clock recorded.
+- **Opened:** iteration 55

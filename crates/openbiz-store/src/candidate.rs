@@ -70,12 +70,11 @@ use std::io::Read;
 use oxigraph::io::RdfParser;
 use oxigraph::model::vocab::{rdf, xsd};
 use oxigraph::model::{BlankNode, GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term};
-use oxsdatatypes::DateTime;
 use thiserror::Error;
 
 use crate::{
-    named_node, CandidatePart, GraphId, GraphKind, RdfSyntax, RegistryReader, StatementRef,
-    StatementTerm, Store, StoreError, Transaction,
+    named_node, CandidatePart, GraphId, GraphKind, RdfSyntax, RecordedAt, RegistryReader,
+    StatementRef, StatementTerm, Store, StoreError, Transaction,
 };
 
 /// The class every candidate's record is typed with, in the system graph.
@@ -354,12 +353,12 @@ pub struct Candidate {
     payload: Option<GraphId>,
     removal_payload: Option<GraphId>,
     provenance: Provenance,
-    proposed_at: String,
+    proposed_at: RecordedAt,
     additions: u64,
     removals: u64,
     state: CandidateState,
     decided_by: Option<String>,
-    decided_at: Option<String>,
+    decided_at: Option<RecordedAt>,
 }
 
 impl Candidate {
@@ -397,7 +396,7 @@ impl Candidate {
 
     /// When it was raised, as an `xsd:dateTime` lexical form.
     pub fn proposed_at(&self) -> &str {
-        &self.proposed_at
+        self.proposed_at.as_str()
     }
 
     /// How many statements it proposes to add.
@@ -422,7 +421,7 @@ impl Candidate {
 
     /// When it was decided, as an `xsd:dateTime` lexical form, if it has been.
     pub fn decided_at(&self) -> Option<&str> {
-        self.decided_at.as_deref()
+        self.decided_at.as_ref().map(RecordedAt::as_str)
     }
 }
 
@@ -646,7 +645,7 @@ impl Store {
                 payload,
                 removal_payload,
                 provenance: provenance.clone(),
-                proposed_at: DateTime::now().to_string(),
+                proposed_at: RecordedAt::now(),
                 additions,
                 removals,
                 state: CandidateState::Proposed,
@@ -795,7 +794,7 @@ impl Store {
                 payload,
                 removal_payload,
                 provenance: provenance.clone(),
-                proposed_at: DateTime::now().to_string(),
+                proposed_at: RecordedAt::now(),
                 additions: additions_count,
                 removals: removals_count,
                 state: CandidateState::Proposed,
@@ -880,7 +879,7 @@ impl Store {
                 apply_payload(txn, &candidate)?;
             }
 
-            let decided_at = DateTime::now().to_string();
+            let decided_at = RecordedAt::now();
             txn.remove_graph_quads(
                 &GraphId::system(),
                 &[Quad::new(
@@ -893,7 +892,7 @@ impl Store {
 
             candidate.state = decision.outcome();
             candidate.decided_by = Some(decided_by.to_owned());
-            candidate.decided_at = Some(decided_at);
+            candidate.decided_at = Some(decided_at.clone());
 
             let subject = candidate.id.subject();
             txn.insert(
@@ -912,11 +911,7 @@ impl Store {
                     (
                         subject,
                         named_node(DECIDED_AT_IRI).into_owned(),
-                        Literal::new_typed_literal(
-                            candidate.decided_at.clone().unwrap_or_default(),
-                            xsd::DATE_TIME,
-                        )
-                        .into(),
+                        Literal::new_typed_literal(decided_at.as_str(), xsd::DATE_TIME).into(),
                     ),
                 ],
             )?;
@@ -1145,7 +1140,7 @@ fn write_record(txn: &mut Transaction<'_>, candidate: &Candidate) -> Result<(), 
         (
             subject.clone(),
             named_node(PROPOSED_AT_IRI).into_owned(),
-            Literal::new_typed_literal(candidate.proposed_at.clone(), xsd::DATE_TIME).into(),
+            Literal::new_typed_literal(candidate.proposed_at.as_str(), xsd::DATE_TIME).into(),
         ),
         (
             subject.clone(),
@@ -1358,9 +1353,22 @@ fn read_record(
         None => None,
         Some(_) => Some(text(DECIDED_BY_IRI)?),
     };
+    // The two stamps are re-validated like every other field, and for the same reason: a record
+    // is data on disk. A candidate whose `proposed_at` reads "yesterday", or names no timezone so
+    // that no reader can place it against any other record, is refused here rather than shown to
+    // a reviewer as though it were evidence.
+    let stamp = |what: &str, lexical: String| -> Result<RecordedAt, StoreError> {
+        RecordedAt::parse(&lexical).map_err(|error| {
+            corrupt(format!(
+                "candidate {id} records when it was {what} in a form this build cannot act \
+                 on: {error}"
+            ))
+        })
+    };
+    let proposed_at = stamp("raised", text(PROPOSED_AT_IRI)?)?;
     let decided_at = match one(DECIDED_AT_IRI)? {
         None => None,
-        Some(_) => Some(text(DECIDED_AT_IRI)?),
+        Some(_) => Some(stamp("decided", text(DECIDED_AT_IRI)?)?),
     };
 
     // The pairing is an invariant, not a convention: a decided candidate that cannot say who
@@ -1387,7 +1395,7 @@ fn read_record(
             note: text(NOTE_IRI)?,
             confidence,
         },
-        proposed_at: text(PROPOSED_AT_IRI)?,
+        proposed_at,
         additions,
         removals,
         state,
@@ -2707,6 +2715,84 @@ mod tests {
             matches!(read, Err(StoreError::Corrupt { .. })),
             "a decided candidate with no decider must be refused, not shown: {read:?}"
         );
+    }
+
+    /// The stamps get the same treatment as every other field, which they did not until format
+    /// version 5: `proposed_at` came back through the same reader that returns a note or an
+    /// agent's name, so a record saying it was raised "last Tuesday" — or at a time naming no
+    /// timezone, which no reader can order against any other record — was read, kept, and printed
+    /// to a reviewer as though the trail could account for it.
+    #[test]
+    fn a_record_whose_stamp_nobody_can_place_is_refused() {
+        for (predicate, what, lexical, expected) in [
+            (
+                PROPOSED_AT_IRI,
+                "raised",
+                "2026-08-19T14:17:03",
+                "names no timezone",
+            ),
+            (PROPOSED_AT_IRI, "raised", "2026-08-19", "is not a date"),
+            (PROPOSED_AT_IRI, "raised", "last Tuesday", "is not a date"),
+            (
+                DECIDED_AT_IRI,
+                "decided",
+                "2026-08-19T14:17:03",
+                "names no timezone",
+            ),
+        ] {
+            let dir = temp_dir();
+            let (store, graph) = store_with_vocabulary(&dir);
+            let candidate = store
+                .propose_import(
+                    &graph,
+                    RdfSyntax::Turtle,
+                    CAT_TURTLE.as_bytes(),
+                    &import_provenance(),
+                )
+                .expect("proposed");
+            let candidate = if predicate == DECIDED_AT_IRI {
+                store
+                    .decide(candidate.id(), Decision::Reject, "ada")
+                    .expect("decided")
+            } else {
+                candidate
+            };
+
+            let system = GraphId::system();
+            let existing = store
+                .backend
+                .system_quads(
+                    Some(candidate.id().subject().as_ref()),
+                    named_node(predicate),
+                )
+                .expect("the system graph is readable");
+            store
+                .transaction(|txn| {
+                    txn.remove_graph_quads(&system, &existing)?;
+                    txn.insert(
+                        &system,
+                        vec![(
+                            candidate.id().subject(),
+                            named_node(predicate).into_owned(),
+                            Literal::new_typed_literal(lexical, xsd::DATE_TIME).into(),
+                        )],
+                    )
+                })
+                .expect("write the forged record");
+
+            let read = store.candidate(candidate.id());
+            let Err(StoreError::Corrupt { detail, .. }) = &read else {
+                panic!("{lexical:?} as <{predicate}> should be refused, not {read:?}");
+            };
+            assert!(
+                detail.contains(expected) && detail.contains(what),
+                "the message must say which stamp and why: {detail}"
+            );
+            assert!(
+                !detail.contains("  "),
+                "a run of spaces means a lost line continuation: {detail:?}"
+            );
+        }
     }
 
     /// A pending proposal is part of the store, so it has to survive the store's own disaster

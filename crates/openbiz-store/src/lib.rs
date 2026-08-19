@@ -41,6 +41,9 @@ use thiserror::Error;
 
 mod backup;
 mod candidate;
+/// When something was recorded, and on whose clock: the one seam every audit-trail timestamp
+/// is written and read through. See the module documentation.
+mod clock;
 mod graph;
 /// How a store written by an older OpenBiz becomes one this build reads: the migration chain, the
 /// records it leaves behind, and why it refuses rather than skips. See the module documentation.
@@ -73,6 +76,7 @@ pub use backup::{BackupReport, RestoreReport, BACKUP_SYNTAX};
 pub use candidate::{
     Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, Provenance,
 };
+pub use clock::{ClockError, RecordedAt};
 pub use migrate::{Migration, MigrationReport, MigrationStep};
 pub use policy::{IriPolicy, PolicyRecorded};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
@@ -118,7 +122,15 @@ pub const STORE_SUBDIR: &str = "store";
 /// change, and the system graph may hold the records that describe them. Additive: a version-2
 /// store needed nothing done to it. The version exists so a build without the candidate seam
 /// refuses the store rather than reporting a graph kind it does not know as corrupt metadata.
-pub const FORMAT_VERSION: u32 = 4;
+///
+/// **4** — a candidate may propose removals as well as additions. Additive again, and the version
+/// exists because a build without removals would read such a candidate as removing nothing and
+/// apply half the change while recording that it had applied all of it.
+///
+/// **5** — a recorded IRI policy's timestamp is an `xsd:dateTime` and not a plain string. The
+/// first version that rewrites data: the trail could be read but not ordered or compared in
+/// SPARQL, which is what it is ordinary RDF for.
+pub const FORMAT_VERSION: u32 = 5;
 
 /// Subject describing the store itself, within the system graph.
 const STORE_IRI: &str = "urn:openbiz:store";
@@ -1507,7 +1519,8 @@ mod tests {
             vec![
                 "0002-register-system-graph",
                 "0003-allow-candidate-graphs",
-                "0004-allow-candidate-removals"
+                "0004-allow-candidate-removals",
+                "0005-retype-iri-policy-stamps"
             ],
             "the report must name every step that ran, not just that something did"
         );

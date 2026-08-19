@@ -31,7 +31,7 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// graph's registration; the vocabulary's registration; and two statements of actual content.
 const BACKUP: &str = concat!(
     "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
-    "\"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "\"5\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
@@ -103,6 +103,37 @@ const BACKUP_VERSION_3: &str = concat!(
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
     "<urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions/emea> ",
+    "<http://www.w3.org/2004/02/skos/core#prefLabel> \"Europe, Middle East and Africa\"@en ",
+    "<https://example.org/regions> .\n",
+    "<https://example.org/regions/emea> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://www.w3.org/2004/02/skos/core#Concept> <https://example.org/regions> .\n",
+);
+
+/// The same store as [`BACKUP`] plus a recorded IRI-minting policy, as a **format version 4**
+/// build wrote it — which is to say with the policy's timestamp as a **plain literal**.
+///
+/// This is the first fixture whose difference from the current format is a difference in the data
+/// rather than only in the stamp, so it is the first one where a migration that silently did not
+/// run would leave something an assertion can see. The lexical form is the same one version 5
+/// would write; only its datatype is missing, which is exactly how the defect looked in the field:
+/// correct to every reader who was printing it and unusable to every reader who was comparing it.
+const BACKUP_VERSION_4: &str = concat!(
+    "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> ",
+    "\"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> .\n",
+    "<urn:openbiz:graph:system> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<urn:openbiz:graph:system> <urn:openbiz:graphKind> \"system\" <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:graphKind> \"vocabulary\" ",
+    "<urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:iriPattern> ",
+    "\"https://example.org/regions/c_{n}\" <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:iriPatternRecordedBy> ",
+    "\"ada@example.org\" <urn:openbiz:graph:system> .\n",
+    "<https://example.org/regions> <urn:openbiz:iriPatternRecordedAt> ",
+    "\"2026-08-19T14:17:03Z\" <urn:openbiz:graph:system> .\n",
     "<https://example.org/regions/emea> ",
     "<http://www.w3.org/2004/02/skos/core#prefLabel> \"Europe, Middle East and Africa\"@en ",
     "<https://example.org/regions> .\n",
@@ -244,8 +275,8 @@ fn a_restored_backup_is_a_vocabulary_the_running_server_serves() {
     let file = temp.path().join("yesterday.nq");
     assert_eq!(
         openbiz_store::FORMAT_VERSION,
-        4,
-        "the fixture is a version-4 backup; bumping the format means writing the fixture for the \
+        5,
+        "the fixture is a version-5 backup; bumping the format means writing the fixture for the \
          new one and adding an older-format test beside it, not editing this number"
     );
     std::fs::write(&file, BACKUP).expect("write the backup fixture");
@@ -366,7 +397,7 @@ fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
         "restore must report what it did, got {said:?}"
     );
     assert!(
-        said.contains("migrated the store format from version 1 to 4"),
+        said.contains("migrated the store format from version 1 to 5"),
         "a migration must be reported, not silently performed: {said:?}"
     );
     assert!(
@@ -410,7 +441,7 @@ fn a_backup_from_an_older_format_is_migrated_as_it_is_restored() {
     assert!(
         written.contains(
             "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
-             \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+             \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
         ),
         "the migrated store must be stamped at the current version: {written}"
     );
@@ -626,7 +657,7 @@ fn a_version_two_backup_is_brought_forward_by_a_migration_that_rewrites_nothing(
 
     let said = stdout(&restore);
     assert!(
-        said.contains("migrated the store format from version 2 to 4"),
+        said.contains("migrated the store format from version 2 to 5"),
         "a migration that writes nothing must still be reported: {said:?}"
     );
     assert!(
@@ -648,7 +679,7 @@ fn a_version_two_backup_is_brought_forward_by_a_migration_that_rewrites_nothing(
     assert!(
         written.contains(
             "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
-             \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+             \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
         ),
         "the store must be stamped at the current version: {written}"
     );
@@ -693,7 +724,7 @@ fn a_version_three_backup_is_brought_forward_by_the_step_that_allows_removals() 
 
     let said = stdout(&restore);
     assert!(
-        said.contains("migrated the store format from version 3 to 4"),
+        said.contains("migrated the store format from version 3 to 5"),
         "the one step that applies must be reported: {said:?}"
     );
     assert!(
@@ -720,7 +751,7 @@ fn a_version_three_backup_is_brought_forward_by_the_step_that_allows_removals() 
     assert!(
         written.contains(
             "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
-             \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+             \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
         ),
         "the store must be stamped at the current version: {written}"
     );
@@ -731,6 +762,94 @@ fn a_version_three_backup_is_brought_forward_by_the_step_that_allows_removals() 
     assert!(
         written.contains("Europe, Middle East and Africa"),
         "the content must have survived: {written}"
+    );
+}
+
+/// The first migration that rewrites data, through the real binary, on the shape it exists for.
+///
+/// Every earlier step was additive, so every earlier test could only check that a *stamp* moved.
+/// This one restores a version-4 backup whose recorded IRI policy carries a plain-string
+/// timestamp, and asks three things an operator would ask: did the upgrade happen, is the trail
+/// now a value SPARQL can order, and did the thing the record actually says survive being retyped.
+#[test]
+fn a_version_four_backup_has_its_policy_timestamp_retyped_as_it_is_restored() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let data_dir = temp.path().join("data");
+    std::fs::create_dir(&data_dir).expect("create the data directory");
+    let file = temp.path().join("version-4.nq");
+    std::fs::write(&file, BACKUP_VERSION_4).expect("write the backup fixture");
+
+    let restore = run(
+        &data_dir,
+        &["restore", file.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        restore.status.success(),
+        "restore failed: {}{}",
+        stdout(&restore),
+        stderr(&restore)
+    );
+
+    let said = stdout(&restore);
+    assert!(
+        said.contains("migrated the store format from version 4 to 5"),
+        "the one step that applies must be reported: {said:?}"
+    );
+    assert!(
+        said.contains("xsd:dateTime"),
+        "and must say what it did, not merely that it ran: {said:?}"
+    );
+    assert!(
+        !said.contains("propose removals"),
+        "a step that does not apply must not run: {said:?}"
+    );
+
+    // The policy still says what it said. A migration that repaired the datatype by losing the
+    // attribution or the instant would be a worse defect than the one it fixed.
+    let shown = run(&data_dir, &["policy", "https://example.org/regions"]);
+    assert!(shown.status.success(), "policy failed: {}", stderr(&shown));
+    let policy = stdout(&shown);
+    for expected in [
+        "https://example.org/regions/c_{n}",
+        "ada@example.org",
+        "2026-08-19T14:17:03Z",
+    ] {
+        assert!(
+            policy.contains(expected),
+            "the recorded policy must survive the migration intact, missing {expected:?}: \
+             {policy}"
+        );
+    }
+
+    let second = temp.path().join("today.nq");
+    let backup = run(
+        &data_dir,
+        &["backup", second.to_str().expect("a UTF-8 path")],
+    );
+    assert!(
+        backup.status.success(),
+        "backup failed: {}",
+        stderr(&backup)
+    );
+    let written = std::fs::read_to_string(&second).expect("read the backup back");
+    assert!(
+        written.contains(
+            "<https://example.org/regions> <urn:openbiz:iriPatternRecordedAt> \
+             \"2026-08-19T14:17:03Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> \
+             <urn:openbiz:graph:system> ."
+        ),
+        "the stamp must now be a date and time and not a string: {written}"
+    );
+    assert!(
+        written.contains(
+            "<urn:openbiz:store> <urn:openbiz:storeFormatVersion> \
+             \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:openbiz:graph:system> ."
+        ),
+        "the store must be stamped at the current version: {written}"
+    );
+    assert!(
+        written.contains("urn:openbiz:migration:0005-retype-iri-policy-stamps"),
+        "the step must have left a record of itself: {written}"
     );
 }
 
