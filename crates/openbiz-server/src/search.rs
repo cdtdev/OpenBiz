@@ -123,8 +123,10 @@ fn report(
             found.resources_read()
         ));
         out.push_str(
-            "matching ignores case but not accents or spelling: an unaccented or differently \
-             spelled query will not find an accented or differently spelled label.\n",
+            "matching folds case and normalises Unicode, so it does not miss on case or on \
+             which way an accented character was encoded; it does not strip accents or correct \
+             spelling, so an unaccented or differently spelled query will not find an accented \
+             or differently spelled label.\n",
         );
         // Last, because it is the sentence that changes what the reader does next. This is the one
         // outcome that makes `--current` dangerous: every match this vocabulary had was on a
@@ -452,7 +454,7 @@ mod tests {
         assert!(report.contains("nothing matched"), "{report}");
         assert!(report.contains("label(s) on"), "{report}");
         assert!(
-            report.contains("ignores case but not accents or spelling"),
+            report.contains("does not strip accents or correct spelling"),
             "{report}"
         );
     }

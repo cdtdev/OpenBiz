@@ -897,7 +897,7 @@ pub(crate) fn consulted_entries(entries: &[openbiz_discovery::Consulted]) -> Str
     }
     out.push_str(
         "matched over every label of every kind, in any language, anywhere inside the label, \
-         ignoring case but not accents, spelling, or Unicode normalisation\n",
+         folding case and normalising Unicode but not stripping accents or correcting spelling\n",
     );
     out.push_str(
         "no peer, no data catalog, and no public registry was consulted: this build has no \
@@ -1183,6 +1183,88 @@ mod tests {
         assert!(
             report.contains("skos:exactMatch"),
             "the rung above creating is named, not just the warning: {report}"
+        );
+    }
+
+    /// **What iteration 60 was for, at the level a curator meets it.** Before folding, a German
+    /// cataloguer typing `Strasse` — which is the ASCII convention for `Straße` and the likelier
+    /// spelling to be typed — got "nothing discovery reached is called it" and an IRI, and the
+    /// organisation got its second concept for the same street. The report must now STOP.
+    #[test]
+    fn a_term_typed_without_its_sharp_s_still_stops_the_mint() {
+        let (_directory, store) = store_with(&[
+            (VOCABULARY, NUMBERED),
+            (
+                OTHER,
+                r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+                   <https://example.org/materials/c_9> a skos:Concept ;
+                     skos:prefLabel "Straße"@de ."#,
+            ),
+        ]);
+
+        for typed in ["Strasse", "STRASSE", "strasse"] {
+            let report = mint(&store, VOCABULARY, Some(typed), None, None).expect("a mint");
+            let stop = report
+                .find("STOP")
+                .unwrap_or_else(|| panic!("{typed:?} must reach the §1.7 warning: {report}"));
+            let minted = report.find("minted:").expect("an IRI");
+            assert!(stop < minted, "the warning comes first: {report}");
+            assert!(
+                report.contains("https://example.org/materials/c_9"),
+                "the concept already holding the term is named: {report}"
+            );
+        }
+    }
+
+    /// The other half, and the one no user can see in their own text: a label stored with a
+    /// decomposed accent and a query typed with a composed one are the same word on screen and
+    /// different strings in the store. Neither the curator nor the cataloguer can tell which form
+    /// their editor produced, so this miss was undiagnosable from the outside.
+    #[test]
+    fn a_term_typed_with_the_other_encoding_of_its_accent_still_stops_the_mint() {
+        let (_directory, store) = store_with(&[
+            (VOCABULARY, NUMBERED),
+            (
+                OTHER,
+                // Stored decomposed: `E` + combining acute.
+                "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+                 <https://example.org/materials/c_11> a skos:Concept ;\n\
+                   skos:prefLabel \"E\u{301}nergie\"@fr .",
+            ),
+        ]);
+
+        // Typed composed, which is what almost every keyboard and editor produces.
+        let report = mint(&store, VOCABULARY, Some("\u{c9}nergie"), None, None).expect("a mint");
+        assert!(report.contains("STOP"), "{report}");
+        assert!(
+            report.contains("https://example.org/materials/c_11"),
+            "{report}"
+        );
+    }
+
+    /// And the boundary that must hold in the other direction: folding is not accent-stripping.
+    /// A report that said STOP here would be telling a curator that `Energie` and `Énergie` are
+    /// the same term, and the cost of that error is a merge nobody asked for.
+    #[test]
+    fn an_unaccented_term_does_not_stop_the_mint() {
+        let (_directory, store) = store_with(&[
+            (VOCABULARY, NUMBERED),
+            (
+                OTHER,
+                r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+                   <https://example.org/materials/c_11> a skos:Concept ;
+                     skos:prefLabel "Énergie"@fr ."#,
+            ),
+        ]);
+
+        let report = mint(&store, VOCABULARY, Some("Energie"), None, None).expect("a mint");
+        assert!(
+            !report.contains("STOP"),
+            "an accent is a difference, not a decoration: {report}"
+        );
+        assert!(
+            report.contains("not stripping accents or correcting spelling"),
+            "and the report says so, so the curator knows what was not tried: {report}"
         );
     }
 

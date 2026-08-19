@@ -13,13 +13,13 @@ Every count on this line is derived by counting `- [ ]` and `- [x]` in the phase
 of what was left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which
 also records how the denominator has moved as items were split.
 
-**Current position:** Phase 3 (the interface), **1 of 14**. Iteration 59 laid the design system's
-token layer: a two-layer colour, type and space vocabulary in `ui/src/design/tokens.css`, light and
-dark, with WCAG 2.2 AA contrast **computed over the shipped bytes** for every pairing the naming
-convention implies, and three system rules — no literal colour outside the palette, no unused
-swatch, no unused role — that a mutation pass confirmed all bite (`adr/0051`). The whole existing
-shell is drawn through it. Next is part 2, an explicit theme choice over the operating system's.
-Phase 2's last item stays **blocked on authentication** (`BLOCKED.md`).
+**Current position:** Phase 3 (the interface), **1 of 14** — unchanged, because iteration 60 was a
+blind-spot pass and took no plan item. It closed the oldest load-bearing gap in `UNTESTED.md`
+instead: label matching now folds case and normalises Unicode (`adr/0052`), so `openbiz search` and
+`openbiz mint`'s discovery pass stop reporting "nothing found" for a concept the store holds — the
+§1.7 silo-generating failure, which the anti-silo feature was itself producing. Next is the plan
+item proper: design-system part 2, an explicit theme choice over the operating system's. Phase 2's
+last item stays **blocked on authentication** (`BLOCKED.md`).
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find

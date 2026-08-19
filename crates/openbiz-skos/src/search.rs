@@ -22,30 +22,35 @@
 //! *which* label matched — see `docs/adr/0034` for why an authoring tool answers that question
 //! where a public search front-end would not.
 //!
-//! # Case, and the two things it is not
+//! # Case, and the accent that is still a difference
 //!
 //! §5.1 also says a lexical label is "a string of UNICODE characters", so matching is done over
-//! Unicode and not over bytes: both sides are lowercased with [`str::to_lowercase`], which is the
-//! full Unicode lowercase mapping and is not locale-tailored.
+//! Unicode and not over bytes. Both sides go through [`fold`](crate::fold), which is the Unicode
+//! Standard's §3.13 **canonical caseless** form — case folding and canonical normalisation, not
+//! the lowercasing this used to do. That module documents the definition; what matters here is the
+//! two misses it removes, both of which produced "no results" for a concept the vocabulary held:
 //!
-//! Two things that lowercasing is **not**, and neither is done here:
+//! - `"Straße"` lowercases to itself, so a search for `STRASSE` found nothing. It folds to
+//!   `strasse`, and now it does. Likewise a Greek word-final `ς` against a medial `σ`.
+//! - `"é"` written as one code point (U+00E9) and as two (`e` + U+0301) render identically and
+//!   are different strings. They now normalise together. Both forms occur in real multilingual
+//!   thesauri.
 //!
-//! - It is not *case folding*. `"Straße"` lowercases to itself, so a search for `STRASSE` does not
-//!   find it. Full case folding is what would, and Rust's standard library has no case folding.
-//! - It is not *normalisation*. `"é"` written as one code point (U+00E9) and as two
-//!   (`e` + U+0301) are different strings and do not match each other, whatever they look like on
-//!   screen. Both forms occur in real multilingual thesauri.
-//!
-//! Both are pinned by tests, because the failure mode of an unrecorded gap here is a search that
-//! quietly reports "no results" for a concept that exists. `docs/UNTESTED.md` carries them.
+//! **An accent is still a difference.** `ecole` does not find `École`, and that is deliberate
+//! rather than pending: stripping diacritics is a language-specific editorial guess, not a Unicode
+//! operation, and it manufactures matches between terms that are not the same word. So is
+//! stemming, and so is spelling correction — `skos:hiddenLabel` is the specification's own answer
+//! to the last of those. Each of these non-matches is pinned by a test, because the failure mode
+//! of an unrecorded gap here is a search that quietly reports "no results" for a concept that
+//! exists. `docs/UNTESTED.md` carries what remains.
 //!
 //! # No match offset is reported, and that is deliberate
 //!
-//! Lowercasing is not length-preserving — `İ` (U+0130) lowercases to two code points — so an
-//! offset into the folded form is not an offset into the label the author wrote. A caller that
-//! highlighted the matched characters using such an offset would highlight the wrong ones on
-//! exactly the labels that most need care. [`MatchQuality`] therefore says *how* a label matched,
-//! which is what ranking and explanation need, and no index is exposed.
+//! Folding is not length-preserving — `ß` folds to two characters, `İ` to two — so an offset into
+//! the folded form is not an offset into the label the author wrote. A caller that highlighted the
+//! matched characters using such an offset would highlight the wrong ones on exactly the labels
+//! that most need care. [`MatchQuality`] therefore says *how* a label matched, which is what
+//! ranking and explanation need, and no index is exposed.
 //!
 //! # Language filtering is RFC 4647 basic filtering
 //!
@@ -78,6 +83,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::fold::fold;
 use crate::labels::{LabelKind, LexicalLabel};
 use crate::model::{CoreModel, Node};
 use crate::xl::LabelOrigin;
@@ -297,7 +303,7 @@ impl LabelQuery {
         }
         Ok(LabelQuery {
             text: text.to_owned(),
-            folded: text.to_lowercase(),
+            folded: fold(text),
             mode: MatchMode::Infix,
             language: LanguageFilter::Any,
             kinds: LabelKind::ALL.into_iter().collect(),
@@ -377,7 +383,7 @@ impl LabelQuery {
     ///
     /// The language and the kinds are not consulted here; this is the text comparison alone.
     pub fn matches_text(&self, label: &LexicalLabel) -> Option<MatchQuality> {
-        let folded = label.text.to_lowercase();
+        let folded = fold(&label.text);
         let quality = if folded == self.folded {
             MatchQuality::Exact
         } else if folded.starts_with(&self.folded) {
@@ -796,11 +802,11 @@ mod tests {
         assert_eq!(model.search(&LabelQuery::new("οδός").expect("q")).len(), 1);
     }
 
-    /// **A recorded gap, pinned so it cannot change unnoticed.** Lowercasing is not case folding:
-    /// `ß` lowercases to itself, so the German convention of typing it `ss` does not find it. Full
-    /// case folding is what would, and the standard library has none. `docs/UNTESTED.md`.
+    /// **The gap this test used to pin, now inverted.** Until iteration 60 matching lowercased,
+    /// and `ß` lowercases to itself — so the German convention of typing it `ss` found nothing.
+    /// Matching now folds case (Unicode §3.13), so it does.
     #[test]
-    fn lowercasing_is_not_case_folding_and_a_sharp_s_shows_it() {
+    fn case_folding_finds_a_sharp_s_typed_as_ss() {
         let model = CoreModel::from_statements([Statement::new(
             ex("street"),
             skos("prefLabel"),
@@ -811,47 +817,72 @@ mod tests {
             model.search(&LabelQuery::new("straße").expect("q")).len(),
             1
         );
-        assert!(
-            model
-                .search(&LabelQuery::new("strasse").expect("q"))
-                .is_empty(),
-            "if this ever passes, case folding arrived and UNTESTED.md is stale"
-        );
+        for typed in ["strasse", "STRASSE", "Strasse", "StRaSsE"] {
+            let found = model.search(&LabelQuery::new(typed).expect("q"));
+            assert_eq!(found.len(), 1, "{typed} should find Straße");
+            // And it is an *exact* match, not a partial one: the two strings are the same term.
+            assert_eq!(found.hits()[0].quality, MatchQuality::Exact, "{typed}");
+        }
 
         // The same gap in Greek, and the likelier one to be hit: a user typing a medial σ where
-        // the label ends in ς finds nothing. Case folding maps both to σ; lowercasing does not.
+        // the label ends in ς found nothing. Case folding maps both to σ; lowercasing does not.
         let greek = CoreModel::from_statements([Statement::new(
             ex("street"),
             skos("prefLabel"),
             text("ΟΔΌΣ", Some("el")),
         )]);
-        assert!(greek
-            .search(&LabelQuery::new("οδόσ").expect("q"))
-            .is_empty());
+        assert_eq!(greek.search(&LabelQuery::new("οδόσ").expect("q")).len(), 1);
+        assert_eq!(greek.search(&LabelQuery::new("οδός").expect("q")).len(), 1);
     }
 
-    /// **The other recorded gap.** A composed `é` and a decomposed `e` + U+0301 look identical and
-    /// are different strings; nothing here normalises. Both forms occur in real thesauri.
+    /// **The other gap, also inverted.** A composed `é` and a decomposed `e` + U+0301 look
+    /// identical and are different strings. Matching now normalises, so either spelling of the
+    /// query finds either spelling of the label — and both forms occur in real thesauri.
     #[test]
-    fn matching_does_not_normalise_and_two_spellings_of_e_acute_show_it() {
-        let model = CoreModel::from_statements([Statement::new(
-            ex("school"),
-            skos("prefLabel"),
-            text("E\u{301}cole", Some("fr")),
-        )]);
+    fn normalisation_finds_either_spelling_of_an_accented_label() {
+        for stored in ["E\u{301}cole", "\u{c9}cole"] {
+            let model = CoreModel::from_statements([Statement::new(
+                ex("school"),
+                skos("prefLabel"),
+                text(stored, Some("fr")),
+            )]);
 
-        assert_eq!(
-            model
-                .search(&LabelQuery::new("e\u{301}cole").expect("q"))
-                .len(),
-            1
-        );
-        assert!(
-            model
-                .search(&LabelQuery::new("\u{c9}cole").expect("q"))
-                .is_empty(),
-            "if this ever passes, normalisation arrived and UNTESTED.md is stale"
-        );
+            for typed in ["e\u{301}cole", "\u{e9}cole", "\u{c9}COLE", "E\u{301}COLE"] {
+                let found = model.search(&LabelQuery::new(typed).expect("q"));
+                assert_eq!(
+                    found.len(),
+                    1,
+                    "a label stored as {stored:?} should be found by {typed:?}"
+                );
+                assert_eq!(found.hits()[0].quality, MatchQuality::Exact);
+            }
+        }
+    }
+
+    /// **What matching still will not do, pinned in the direction that now matters.** With folding
+    /// and normalisation in, the risk has flipped: the next plausible step is stripping accents,
+    /// which would silently merge terms that are not the same word. Each of these must stay a
+    /// miss, and each is the kind of miss an authored `skos:hiddenLabel` is the specification's
+    /// own answer to.
+    #[test]
+    fn matching_still_does_not_strip_accents_or_correct_spelling() {
+        let model = CoreModel::from_statements([
+            Statement::new(ex("school"), skos("prefLabel"), text("École", Some("fr"))),
+            Statement::new(
+                ex("ecology"),
+                skos("prefLabel"),
+                text("Ökologie", Some("de")),
+            ),
+            Statement::new(ex("colour"), skos("prefLabel"), text("colour", Some("en"))),
+        ]);
+
+        for typed in ["ecole", "okologie", "color", "schools"] {
+            assert!(
+                model.search(&LabelQuery::new(typed).expect("q")).is_empty(),
+                "{typed} must not match: stripping accents or correcting spelling would merge \
+                 terms that are not the same word (docs/UNTESTED.md)"
+            );
+        }
     }
 
     /// RFC 4647 §3.3.1, with the specification's own shape of example: the range selects the tag

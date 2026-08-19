@@ -8,6 +8,7 @@
 mod ancestry;
 mod deprecate;
 mod equivalence;
+mod fold;
 mod hierarchy;
 mod integrity;
 mod labels;
@@ -40,6 +41,7 @@ pub use deprecate::{
     DCTERMS_IS_REPLACED_BY, OWL_DEPRECATED, XSD_BOOLEAN,
 };
 pub use equivalence::{EquivalenceBound, ExactMatchCluster};
+pub use fold::fold;
 pub use hierarchy::WalkBound;
 pub use integrity::{
     newly_violated, Authority, Caveat, ConditionOutcome, Declaration, DeclaredRefinements,

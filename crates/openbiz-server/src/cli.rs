@@ -361,7 +361,9 @@ duplicate concept gets created. Narrow it with:
   --kind pref|alt|hidden     only this kind; repeat for more than one
   --limit <n>                report at most n hits (default 200)
   --current                  leave out the hits on concepts the vocabulary marks retired
-Matching ignores case but not accents, spelling, or Unicode normalisation.
+Matching folds case and normalises Unicode, so `STRASSE` finds `Straße` and either way of
+encoding an accented character finds the other. It does not strip the accent itself or
+correct spelling: `ecole` does not find `École`.
 
 Nothing else hides a retired concept, and neither does this: --current leaves its hits out of the
 list and still reports how many there were and on how many concepts, including when they were all
