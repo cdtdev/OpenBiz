@@ -129,6 +129,13 @@ pub enum Command {
         /// The pattern to mint under, overriding the one the vocabulary suggests.
         pattern: Option<String>,
     },
+    /// Show, or record, the IRI-minting pattern a vocabulary's new concepts are given.
+    Policy {
+        /// The IRI of the vocabulary the policy belongs to.
+        graph: String,
+        /// The pattern to record. Without it, this shows what is recorded and writes nothing.
+        pattern: Option<String>,
+    },
     /// Report what a vocabulary documents one resource with, and why. Reads and nothing else.
     Notes {
         /// The IRI of the vocabulary graph to read.
@@ -188,6 +195,8 @@ Usage:
                              find the concepts <graph> labels with <text>
   openbiz mint <graph> [<label>] [--pattern <p>]
                              report the IRI a new concept in <graph> would be given
+  openbiz policy <graph> [--pattern <p>]
+                             show, or record, the pattern <graph> mints new IRIs under
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -246,6 +255,14 @@ concepts, and a vocabulary with no majority namespace gets no suggestion rather 
 number goes above the highest in use and never fills a gap; a slug that is already taken is
 refused rather than given a disambiguating suffix. Every IRI under the namespace is checked,
 across every vocabulary in the store and every change staged against one.
+
+Policy is where that pattern stops being a guess. With no --pattern it shows what <graph> records
+and writes nothing; with one it records it, replacing any pattern already recorded and saying what
+it replaced. A recorded pattern is what every producer mints under — an import, a match against
+another vocabulary, a curator here — so the same vocabulary cannot be given IRIs two ways. Without
+one, mint infers a pattern from the vocabulary's own concepts, which is a reading of them as they
+stand and therefore moves as they grow. Nothing already minted changes either way: a policy governs
+the next mint. Recording one needs a name, from the same place approving does.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -455,6 +472,10 @@ impl Command {
                 let graph = Self::text("mint", "the IRI of a vocabulary to read", &mut args)?;
                 return Self::mint_command(graph, args);
             }
+            "policy" => {
+                let graph = Self::text("policy", "the IRI of a vocabulary", &mut args)?;
+                return Self::policy_command(graph, args);
+            }
             "integrity" => (
                 "integrity",
                 Self::Integrity {
@@ -583,6 +604,42 @@ impl Command {
             label,
             pattern,
         })
+    }
+
+    /// Read `openbiz policy`'s one option.
+    ///
+    /// The pattern is only ever a `--pattern` value and never a positional, which is deliberate:
+    /// `openbiz policy <graph>` shows and writes nothing, so a typo in the pattern must not be the
+    /// difference between reading and recording. Recording is something you ask for by name.
+    fn policy_command(
+        graph: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut pattern: Option<String> = None;
+        let mut args = args.map(|arg| arg.into_string());
+
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            match arg.as_str() {
+                "--pattern" => {
+                    let given = args
+                        .next()
+                        .ok_or(ArgsError::MissingOptionValue {
+                            option: "--pattern",
+                        })?
+                        .map_err(|_| ArgsError::NotUnicode)?;
+                    set(&mut pattern, given, "--pattern")?;
+                }
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "policy",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        Ok(Self::Policy { graph, pattern })
     }
 
     /// Read the options `openbiz search` accepts, refusing anything it does not.
@@ -783,13 +840,35 @@ pub enum CommandError {
     /// The pattern given with `--pattern` is not one this build mints under.
     #[error(transparent)]
     Pattern(#[from] PatternError),
-    /// No pattern was given and the vocabulary does not suggest one.
+    /// No pattern was given, nothing is recorded, and the vocabulary does not suggest one.
     ///
     /// Refused rather than defaulted. A pattern invented here would mint IRIs in a namespace
     /// nothing else in the deployment uses, and they would look every bit as official as the real
     /// ones — which is worse than being asked to type one.
-    #[error("{0}; give one with --pattern")]
+    #[error("{0}; give one with --pattern, or record one with `openbiz policy`")]
     NoConvention(NoConvention),
+    /// The vocabulary records a minting pattern this build cannot read.
+    ///
+    /// Refused rather than fallen back from. The vocabulary has a written decision about how its
+    /// IRIs are named; minting under something else because we could not parse that decision would
+    /// put concepts in a namespace nobody chose, and the IRIs would be permanent before anyone
+    /// looked. Recording a correct one is a single command, and the refusal names it.
+    #[error(
+        "{graph} records the minting pattern {pattern:?} — set by {recorded_by} — and this build \
+         cannot read it: {source}. Record a pattern this build accepts with `openbiz policy`, or \
+         mint once with --pattern"
+    )]
+    RecordedPatternUnusable {
+        /// The vocabulary whose policy could not be read.
+        graph: String,
+        /// The pattern as it is recorded.
+        pattern: String,
+        /// Who recorded it, so the person to ask is named.
+        recorded_by: String,
+        /// Why it could not be read.
+        #[source]
+        source: PatternError,
+    },
     /// The minted IRI was rejected by the parser that would have stored it.
     #[error(
         "{iri:?} would be minted and the store's own RDF parser will not accept it as an IRI; \
@@ -1059,7 +1138,7 @@ fn staged_in(candidate: &Candidate) -> String {
 /// command — and it says so in the recorded string rather than dressing it up as an identity the
 /// product verified. [`ACTOR_VARIABLE`] overrides it, because the account a cron job runs under is
 /// rarely the team answerable for what it did.
-fn actor() -> Result<String, CommandError> {
+pub(crate) fn actor() -> Result<String, CommandError> {
     [ACTOR_VARIABLE, "USER", "LOGNAME"]
         .into_iter()
         .find_map(|variable| {
@@ -1246,6 +1325,67 @@ mod tests {
                 pattern: Some("http://e.org/v/{n}".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn policy_shows_by_default_and_records_only_when_asked() {
+        assert_eq!(
+            parse(&["policy", "http://e.org/v"]),
+            Ok(Command::Policy {
+                graph: "http://e.org/v".to_owned(),
+                pattern: None,
+            }),
+            "no pattern means show, which writes nothing"
+        );
+        assert_eq!(
+            parse(&[
+                "policy",
+                "http://e.org/v",
+                "--pattern",
+                "http://e.org/v/c_{n}"
+            ]),
+            Ok(Command::Policy {
+                graph: "http://e.org/v".to_owned(),
+                pattern: Some("http://e.org/v/c_{n}".to_owned()),
+            })
+        );
+    }
+
+    /// Recording is asked for by name and never by position. A pattern taken as a positional would
+    /// make a typo in a vocabulary IRI the difference between reading and writing.
+    #[test]
+    fn policy_refuses_a_pattern_given_as_a_positional() {
+        assert_eq!(
+            parse(&["policy", "http://e.org/v", "http://e.org/v/c_{n}"]),
+            Err(ArgsError::UnknownOption {
+                command: "policy",
+                option: "http://e.org/v/c_{n}".to_owned()
+            })
+        );
+    }
+
+    /// The same refusal `mint` makes, for the same reason: two patterns is somebody who does not
+    /// know which they asked for, and the second one is the one that gets written down.
+    #[test]
+    fn policy_refuses_two_patterns() {
+        assert_eq!(
+            parse(&[
+                "policy",
+                "http://e.org/v",
+                "--pattern",
+                "http://e.org/v/c_{n}",
+                "--pattern",
+                "http://e.org/v/{slug}"
+            ]),
+            Err(ArgsError::ConflictingOptions {
+                option: "--pattern"
+            })
+        );
+    }
+
+    #[test]
+    fn policy_needs_a_vocabulary() {
+        assert!(parse(&["policy"]).is_err(), "the graph is not optional");
     }
 
     /// Two patterns is somebody who does not know which they asked for, and obeying the second

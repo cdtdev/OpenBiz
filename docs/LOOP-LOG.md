@@ -3029,3 +3029,72 @@ look competent disables the one signal that catches a stuck loop.
   constant is measured against a distribution I invented", which is better and is not the same as
   settled — and the thing that would actually settle it is iteration 37's LCGFT fixture, which is
   still sitting in `PROPOSED.md` unpromoted for the fourth iteration.
+
+## Iteration 41 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `37fdec1`, tree clean, the CI run for the
+  previous merge already `completed success`, and both human inboxes empty (`promote-queue.json` is
+  `[]`, `feedback.md` is zero bytes). Nothing to drain, so nothing was truncated.
+- **Took: the next unchecked item in Phase 2** — "Concept IRI minting, part 2 — the policy persisted
+  per vocabulary". The item above it in the phase (the candidate seam over HTTP) is recorded in
+  `BLOCKED.md` on authentication and was not re-attempted. This is also the item iteration 39's
+  "still uncertain" line pointed at by name, which is the first time in four iterations the doubt
+  and the next plan item were the same thing.
+- **What shipped.** `openbiz policy <graph>` shows what a vocabulary records and writes nothing;
+  `openbiz policy <graph> --pattern <p>` records it, attributed, and says what it replaced. `openbiz
+  mint` now takes the first of three: `--pattern` for one command, **the recorded policy**, then the
+  convention inferred from the concepts. Three statements in the system graph on the vocabulary's own
+  registry subject — pattern, who, when.
+- **The interesting decisions are all about what the report says**, and two of them were wrong until
+  the command was run by hand. **First**, a recorded pattern that disagrees with the vocabulary's own
+  concepts was being described with the sentence written for `--pattern`: "minting under a different
+  pattern is legitimate and it is also how a concept ends up in the wrong namespace". Showing a
+  stored fact is *nobody doing anything* — the written decision and the existing IRIs simply differ —
+  and telling a reader they are taking a risk they are not taking is how a report stops being read.
+  The two readings now have different sentences and a `PatternStanding` that makes the distinction a
+  type rather than a coincidence. **Second**, `mint --pattern` over a recorded policy never mentioned
+  the policy: it read identically to an override of a vocabulary that had recorded nothing, which is
+  the case where nothing is being contradicted. It now names the record, its author, and that the
+  record is unchanged.
+- **A recorded pattern this build cannot parse is refused, not fallen back from.** The vocabulary has
+  a written decision; minting into a namespace nobody chose because we could not read that decision
+  produces IRIs that look exactly as official as the real ones and are permanent before anyone
+  investigates. Refusing costs one command. `openbiz policy` shows the unusable text and the parse
+  error together, so the operator the refusal sends there can see both.
+- **The record is in the system graph and deliberately not in the vocabulary.** A statement on the
+  `skos:ConceptScheme` would publish it: an export to another tool would carry an OpenBiz
+  configuration statement no standard defines. That is `adr/0007`'s rule applied to a new fact, and
+  its cost is stated rather than hidden — a whole-store backup carries the policy (tested, because
+  the wrong placement would have passed every other test in the file) and a single-vocabulary export
+  does not.
+- **It is not a candidate, and that is a reading of §3 rather than a shortcut.** §3 requires the
+  candidate seam of a change to a *vocabulary*; this changes no statement in one, touches no concept,
+  and alters no IRI already minted. It is the same category as the registry entry written when a
+  vocabulary is created, which is also a direct write. It is attributed by the same rule an approval
+  is, because the pattern a vocabulary mints under is a governance decision and an unattributed one
+  is not one.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **840 Rust tests, up from 809**: 11 in `openbiz-store`, 7 in the server's
+  reports, 4 in argument parsing, 9 against the real binary on disk in separate processes, which is
+  the only way the item's actual claim — a pattern recorded by one invocation is what a later one
+  mints under — can be a claim at all. No new dependency. UI untouched: Phase 2 is the model and the
+  command line, which is the basis every item in this phase was closed on.
+- **Recorded:** `adr/0036`. Three new `UNTESTED.md` entries and **none closed** — "every producer
+  mints under this" has exactly one producer, because nothing else in this build mints at all; a
+  replaced policy is not kept, so there is no history of the decision; and the policy does not travel
+  with a vocabulary export, which is a known absence rather than an untested claim. Iteration 39's
+  three entries are untouched, because none of them claimed the gap this item closed — that gap was
+  in the plan item's own "scope, honestly" line. No proposals: iteration 37's LCGFT fixture still
+  sits unpromoted for the fifth iteration and a second would be noise.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T07:55Z at branch creation.
+- **Still uncertain:** whether a policy that can be replaced with no history is a governance feature
+  at all, or a setting wearing an audit trail's clothes. Every other decision in this build that
+  carries a name and a timestamp is *append-only* — a candidate's provenance, an approval, a
+  migration step — and this one overwrites, so the attribution it records is only ever the
+  attribution of the current state. That is worse than it sounds: the moment somebody replaces a
+  policy, the person who set the previous one stops being recorded anywhere, and the report that
+  named them scrolled past in a terminal. I chose it because a versioned record wants a retention
+  answer this build has not given for a candidate's evidence either, and inventing one here would
+  have been scope this item could not carry — but the argument that I should simply have refused to
+  overwrite, and made the second recording an error until history exists, is not one I can dismiss.
+  It is in `UNTESTED.md` because I do not think I got it right, only that I got it recorded.

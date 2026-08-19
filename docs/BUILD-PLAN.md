@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), **18 of 23 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **19 of 23 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **And the pattern is now a recorded decision rather than a reading of the vocabulary that moves as the vocabulary does**: `openbiz policy` writes one down, attributed, in the system graph and never in the vocabulary, and `openbiz mint` takes the first of `--pattern`, the record, then inference — refusing a recorded pattern it cannot parse rather than falling back to a namespace nobody chose (`adr/0036`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -1182,14 +1182,29 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > `UNTESTED.md` entries: the engine-free IRI check is a subset of RFC 3987 (the store's own
       > parser has the last word, and does), and the collision scan reads every vocabulary in the
       > store on every mint, unmeasured at scale.
-- [ ] Concept IRI minting, part 2 — the policy persisted per vocabulary, so every producer mints
+- [x] Concept IRI minting, part 2 — the policy persisted per vocabulary, so every producer mints
       the same way
-      > Split out at iteration 39. Today `--pattern` is per invocation and the default is inferred
-      > from the vocabulary each time, which is right for one curator at a command line and wrong
-      > for a deployment: an import, a discovery match, and an agent proposal must all mint under
-      > the *same* recorded policy, and a vocabulary whose convention is inferred is a vocabulary
-      > whose convention drifts. Needs a place to keep per-vocabulary settings — the system graph is
-      > the obvious candidate and nothing writes to it yet outside the registry.
+      > Split out at iteration 39, closed at 41. `openbiz policy <graph> [--pattern <p>]` shows what
+      > a vocabulary records and records what it is given, and `openbiz mint` now takes the first
+      > answer that exists of three: `--pattern` for one command, **the recorded policy**, then the
+      > convention inferred from the vocabulary's own concepts. A recorded pattern this build cannot
+      > parse is refused rather than quietly replaced by inference — the vocabulary has a written
+      > decision, and minting into a namespace nobody chose because we could not read it is worse
+      > than not minting.
+      > The record lives in the system graph on the vocabulary's own registry subject, not in the
+      > vocabulary: it is OpenBiz's fact *about* a vocabulary, so a SKOS export does not carry a
+      > configuration statement no standard defines. It is attributed by the same rule an approval
+      > is, and it writes nothing to any vocabulary and changes no IRI already minted — which is why
+      > it does not go through the candidate seam. Both reports say whether the pattern agrees with
+      > what the vocabulary's concepts already do, and neither refuses a disagreement: that is how a
+      > convention is deliberately changed, and it is also how somebody mints into the wrong
+      > namespace, and only the reader can tell which.
+      > **Production caller:** the command line (`openbiz policy`, and `openbiz mint` reading it).
+      > See `adr/0036`.
+      > **Scope, honestly:** three `UNTESTED.md` entries. "Every producer mints under it" has
+      > exactly one producer today, because nothing else mints yet; a replaced policy is not kept,
+      > so there is no history of the decision; and the policy does not travel with a
+      > single-vocabulary export, only with a whole-store backup, which is tested.
 - [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement
 - [ ] Deprecation lifecycle preserving history rather than deleting — auditors need the trail
 - [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation

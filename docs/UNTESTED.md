@@ -2156,3 +2156,62 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** the same table taken with a `Store` open, and a stated policy for what
   the server does when a vocabulary will not fit — which is a product decision, not a measurement.
 - **Opened:** iteration 40
+
+### "Every producer mints under the recorded policy" has exactly one producer
+- **Kind:** built-but-narrow
+- **What is proven:** `openbiz policy` records a pattern and `openbiz mint`, in a **separate
+  process**, mints under it rather than under what the vocabulary's own concepts suggest
+  (`crates/openbiz-server/tests/iri_policy.rs`). The precedence — `--pattern`, then the record, then
+  inference — is pinned in all three directions, and a recorded pattern this build cannot parse is
+  refused rather than fallen back from.
+- **What is not:** the claim the item exists for. `adr/0036`'s value is that an import, a discovery
+  match, and an agent proposal all mint the same way as the curator, and **none of those mint at
+  all today** — `openbiz import` takes IRIs already written in the file, `DiscoveryProvider` is
+  still ahead of us in Phase 2, and agents are Phase 10. So the seam is in place and one caller uses
+  it, and the sentence the reports print — "every producer mints under this" — is a statement about
+  a build with one producer.
+- **Why it is recorded rather than softened:** the sentence is the right thing to print, because it
+  is what the record *means* and it is what the next producer will have to honour. But a reader of
+  `BUILD-PLAN.md` should not conclude that several code paths were made consistent with each other,
+  because there is only one.
+- **What would close it:** the first mint from a path that is not the `mint` command — most likely
+  the discovery-first creation path, which is the next §1.7 item in this phase.
+- **Opened:** iteration 41
+
+### A replaced minting policy is not kept, so there is no history of the decision
+- **Kind:** untested-boundary
+- **What is proven:** recording a second pattern removes the first, leaves exactly one recorded (a
+  test counts the quads, because a replacement that only *added* would make the next read refuse the
+  whole record as corrupt), and prints the displaced pattern with its author and timestamp at the
+  moment it stops being in force.
+- **What is not:** any answer to "what policy was in force in March". The printed line is the only
+  notice; nothing is stored. Today's honest answer is "read the IRIs minted in March" — the
+  vocabulary's own contents are the record — which is true and is not an audit trail.
+- **Why it matters:** `CLAUDE.md` §1 makes governance the substrate and PROV-O the audit model, and
+  this is a governance decision with a deliberate hole in its history. It is a small feature and a
+  real one: it wants an ordering, a retention answer (the same question `UNTESTED.md` already records
+  unanswered for a candidate's evidence), and a place in the provenance model rather than three more
+  quads invented beside it.
+- **What would close it:** a versioned policy record, decided together with the retention question,
+  when PROV-O arrives rather than before.
+- **Opened:** iteration 41
+
+### A recorded policy travels with a whole-store backup and not with a vocabulary export
+- **Kind:** untested-boundary
+- **What is proven:** the backup half. A policy recorded in one store, backed up, and restored into a
+  fresh data directory is read back with its pattern and its author intact
+  (`tests/iri_policy.rs`) — which follows from its living in the system graph, and is tested rather
+  than reasoned about because the alternative placement would have passed every other test in that
+  file.
+- **What is not:** anything about the export half, which is a **known absence** rather than an
+  untested claim. `openbiz export` and `GET /api/export` write one vocabulary's own statements, and
+  the policy is deliberately not one of them (`adr/0036` §3). So moving a vocabulary between two
+  OpenBiz deployments by export rather than by backup arrives with no policy and an inferred
+  default, silently.
+- **Why it is not simply fixed:** putting the policy in the vocabulary would fix the export and
+  break the thing the placement exists for — a SKOS export carrying an OpenBiz configuration
+  statement no standard defines. The real answer is probably an export mode that carries OpenBiz's
+  own facts *alongside* the graph rather than inside it, which is a Phase 3 API question.
+- **What would close it:** either that export mode, or a warning on import that the arriving
+  vocabulary has no recorded policy — the second being cheap and worth considering first.
+- **Opened:** iteration 41
