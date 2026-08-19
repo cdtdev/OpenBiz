@@ -44,8 +44,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use openbiz_skos::{
-    LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, MergeError, NoConvention,
-    PatternError, RelocationError, SearchBound,
+    LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, MergeError, MintError,
+    NoConvention, PatternError, Placement, RelocationError, SearchBound, SplitError,
 };
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
@@ -149,6 +149,21 @@ pub enum Command {
         /// The IRI of the concept that survives and absorbs it.
         target: String,
     },
+    /// Propose dividing one concept into several new ones, minted under the vocabulary's policy.
+    Split {
+        /// The IRI of the vocabulary the concept is in.
+        graph: String,
+        /// The IRI of the concept to divide.
+        concept: String,
+        /// What each new part is called. At least two.
+        labels: Vec<String>,
+        /// Where the parts go relative to the concept. There is no default.
+        placement: Placement,
+        /// The language the parts' labels are in. Without it, the concept's own.
+        language: Option<String>,
+        /// The pattern to mint the parts' IRIs under, overriding the vocabulary's.
+        pattern: Option<String>,
+    },
     /// Show, or record, the IRI-minting pattern a vocabulary's new concepts are given.
     Policy {
         /// The IRI of the vocabulary the policy belongs to.
@@ -221,6 +236,8 @@ Usage:
                              propose moving <concept> and everything below it under <to>
   openbiz merge <graph> <duplicate> <survivor>
                              propose merging <duplicate> into <survivor>, references and all
+  openbiz split <graph> <concept> --place beside|below --into <label> --into <label>
+                             propose dividing <concept> into one new concept per --into
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -308,6 +325,21 @@ It refuses a merge that would close a hierarchy cycle, which SKOS again calls co
 reference from another vocabulary is a change to that vocabulary, so it is counted and named
 rather than rewritten. No tombstone is left behind: the candidate is the record that the IRI
 existed, and deprecating a concept in place is a different change.
+
+Split writes nothing either, and is the one bulk operation that removes nothing at all. It creates
+one concept per --into, mints each an IRI the way `openbiz mint` would, gives it the preferred
+label you named and a prov:wasDerivedFrom back to the concept it came from, and leaves the
+original exactly as it found it. --place says where the parts go: `beside` gives each of them the
+concept's own broader concepts and schemes, which is a term that meant two things; `below` makes
+the concept their broader concept, which is a term that was too coarse. There is no default,
+because the wrong one is consistent SKOS that says something false and nothing downstream would
+report it.
+
+What a split cannot do is decide which part each of the concept's labels, narrower concepts,
+related links and notes belongs to — that is the editorial judgement the split exists to let a
+person make. So it does not guess: the report ends with everything still hanging off the original
+and the command that apportions each kind. Retiring the original is a deprecation, which keeps the
+trail an auditor needs, and is a different change.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -531,6 +563,11 @@ impl Command {
                 )?;
                 return Self::move_command(graph, concept, to, args);
             }
+            "split" => {
+                let graph = Self::text("split", "the IRI of the vocabulary to change", &mut args)?;
+                let concept = Self::text("split", "the IRI of the concept to divide", &mut args)?;
+                return Self::split_command(graph, concept, args);
+            }
             "merge" => (
                 "merge",
                 Self::Merge {
@@ -751,6 +788,71 @@ impl Command {
             concept,
             to,
             from,
+        })
+    }
+
+    /// Read the options `openbiz split` accepts, refusing anything it does not.
+    ///
+    /// `--place` is required and has no default. Both placements are ordinary and the wrong one
+    /// produces a vocabulary that is consistent SKOS and says something false — `Banks (river)` is
+    /// not narrower than `Banks`, because homonymy is not hierarchy — so this asks rather than
+    /// assumes. `--into` accumulates, because a split into two parts and a split into five are the
+    /// same operation.
+    fn split_command(
+        graph: String,
+        concept: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut labels: Vec<String> = Vec::new();
+        let mut placement: Option<String> = None;
+        let mut language: Option<String> = None;
+        let mut pattern: Option<String> = None;
+        let mut args = args.map(|arg| arg.into_string());
+
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            let mut value = |option: &'static str| {
+                args.next()
+                    .ok_or(ArgsError::MissingOptionValue { option })?
+                    .map_err(|_| ArgsError::NotUnicode)
+            };
+            match arg.as_str() {
+                "--into" => labels.push(value("--into")?),
+                "--place" => set(&mut placement, value("--place")?, "--place")?,
+                "--language" => set(&mut language, value("--language")?, "--language")?,
+                "--pattern" => set(&mut pattern, value("--pattern")?, "--pattern")?,
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "split",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        let placement = match placement {
+            Some(word) => Placement::from_word(&word).ok_or(ArgsError::BadOptionValue {
+                option: "--place",
+                value: word,
+                expected: "beside (the parts take the concept's place) or below (the concept \
+                           becomes their broader concept)",
+            })?,
+            None => {
+                return Err(ArgsError::MissingArgument {
+                    command: "split",
+                    what: "--place beside or --place below, which says whether the parts replace \
+                           the concept's position or go under it",
+                })
+            }
+        };
+
+        Ok(Self::Split {
+            graph,
+            concept,
+            labels,
+            placement,
+            language,
+            pattern,
         })
     }
 
@@ -990,18 +1092,39 @@ pub enum CommandError {
         /// What would have been minted.
         iri: String,
     },
-    /// A merge would leave a graph that is not a SKOS vocabulary.
+    /// A change would leave a graph that is not a SKOS vocabulary.
     ///
     /// Boxed because it carries the counter-examples, which is far the largest thing any variant
     /// here holds and which every other refusal would otherwise pay for on the stack.
-    #[error("that merge is refused: {0}")]
-    MergeBreaksIntegrity(Box<crate::merge::BrokenConditions>),
+    #[error("that {operation} is refused: {conditions}")]
+    BreaksIntegrity {
+        /// The word for what was being proposed — "merge", "split".
+        operation: &'static str,
+        /// The conditions, and what they say.
+        conditions: Box<crate::staging::BrokenConditions>,
+    },
     /// A merge could not be computed. The reason is the operator's to resolve.
     ///
     /// Wrapped without `#[from]` deliberately: `#[from]` makes the inner error `source()`, and
     /// `anyhow` then prints the same sentence twice — once as the message and once as its cause.
     #[error("that merge is refused: {0}")]
     Merge(MergeError),
+    /// A split could not be computed. The reason is the operator's to resolve.
+    ///
+    /// Wrapped without `#[from]` for the same reason as [`CommandError::Merge`].
+    #[error("that split is refused: {0}")]
+    Split(SplitError),
+    /// A part of a split could not be given an IRI.
+    ///
+    /// `openbiz mint` *reports* a failed mint, because reporting is all it does. A split has to
+    /// stop: a part with no IRI is not a part.
+    #[error("no IRI could be minted for the part named {label:?}: {source}")]
+    CannotMint {
+        /// The part that could not be named.
+        label: String,
+        /// What stopped it.
+        source: MintError,
+    },
     /// A move could not be computed. The reason is the operator's to resolve.
     ///
     /// Wrapped rather than sourced — a `#[from]` here makes the inner error `source()`, and the
@@ -1443,6 +1566,103 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: Some("--peculiar".to_owned()),
                 pattern: None,
+            })
+        );
+    }
+
+    /// `--place` has no default, and the refusal says what the two words mean: choosing wrongly
+    /// makes consistent SKOS that says something false, and nothing downstream reports it.
+    #[test]
+    fn split_requires_a_placement_and_names_both_of_them() {
+        let error = parse(&[
+            "split",
+            "http://e.org/v",
+            "http://e.org/v/banks",
+            "--into",
+            "One",
+            "--into",
+            "Two",
+        ])
+        .expect_err("a split with no --place");
+
+        assert!(
+            matches!(
+                error,
+                ArgsError::MissingArgument {
+                    command: "split",
+                    ..
+                }
+            ),
+            "got {error}"
+        );
+        assert!(error
+            .to_string()
+            .contains("--place beside or --place below"));
+
+        let bad = parse(&[
+            "split",
+            "http://e.org/v",
+            "http://e.org/v/banks",
+            "--place",
+            "under",
+            "--into",
+            "One",
+            "--into",
+            "Two",
+        ])
+        .expect_err("`under` is not one of the two");
+        assert!(
+            matches!(
+                bad,
+                ArgsError::BadOptionValue {
+                    option: "--place",
+                    ..
+                }
+            ),
+            "got {bad}"
+        );
+    }
+
+    /// `--into` accumulates: a split into two and a split into five are the same operation, and
+    /// last-wins would silently discard every part but the last.
+    #[test]
+    fn split_collects_every_into_in_the_order_they_were_given() {
+        assert_eq!(
+            parse(&[
+                "split",
+                "http://e.org/v",
+                "http://e.org/v/banks",
+                "--place",
+                "below",
+                "--into",
+                "One",
+                "--into",
+                "Two",
+                "--into",
+                "Three",
+                "--language",
+                "fr",
+            ]),
+            Ok(Command::Split {
+                graph: "http://e.org/v".to_owned(),
+                concept: "http://e.org/v/banks".to_owned(),
+                labels: vec!["One".to_owned(), "Two".to_owned(), "Three".to_owned()],
+                placement: Placement::Below,
+                language: Some("fr".to_owned()),
+                pattern: None,
+            })
+        );
+    }
+
+    /// The two positionals are required, and a split with only a vocabulary named would otherwise
+    /// take `--place` as the concept.
+    #[test]
+    fn split_needs_a_vocabulary_and_a_concept() {
+        assert_eq!(
+            parse(&["split", "http://e.org/v"]),
+            Err(ArgsError::MissingArgument {
+                command: "split",
+                what: "the IRI of the concept to divide",
             })
         );
     }

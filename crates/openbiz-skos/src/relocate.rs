@@ -75,11 +75,11 @@ use crate::relations::{RelationOrigin, SemanticRelation};
 /// Both may be, and then both are removed and both are added. Neither being stated is impossible
 /// here: a parent is only a parent because one of them is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StatedDirections {
+pub(crate) struct StatedDirections {
     /// The graph states `<concept> skos:broader <parent>`.
-    broader: bool,
+    pub(crate) broader: bool,
     /// The graph states `<parent> skos:narrower <concept>`.
-    narrower: bool,
+    pub(crate) narrower: bool,
 }
 
 /// What moving one concept under a different broader concept would change.
@@ -482,7 +482,7 @@ impl CoreModel {
     }
 
     /// Which of `skos:broader` and `skos:narrower` the graph states between a concept and a parent.
-    fn stated_directions(&self, concept: &Node, parent: &Node) -> StatedDirections {
+    pub(crate) fn stated_directions(&self, concept: &Node, parent: &Node) -> StatedDirections {
         StatedDirections {
             broader: self
                 .stated_directly(concept, SemanticRelation::Broader, parent)

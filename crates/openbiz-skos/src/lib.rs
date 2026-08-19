@@ -20,6 +20,7 @@ mod refinement;
 mod relations;
 mod relocate;
 mod search;
+mod split;
 mod tree;
 mod xl;
 
@@ -75,6 +76,9 @@ pub use relocate::{Relocation, RelocationError};
 pub use search::{
     LabelHit, LabelQuery, LabelSearch, LanguageFilter, LanguageRange, MatchMode, MatchQuality,
     QueryError, SearchBound,
+};
+pub use split::{
+    Part, PartRequest, Placement, Split, SplitError, Unapportioned, PROV_WAS_DERIVED_FROM,
 };
 pub use tree::{Descent, Siblings};
 pub use xl::{

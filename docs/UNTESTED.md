@@ -2168,8 +2168,14 @@ module's own tests and end to end against the real binary reading a store off di
   is what the record *means* and it is what the next producer will have to honour. But a reader of
   `BUILD-PLAN.md` should not conclude that several code paths were made consistent with each other,
   because there is only one.
-- **What would close it:** the first mint from a path that is not the `mint` command — most likely
-  the discovery-first creation path, which is the next §1.7 item in this phase.
+- **What would close it:** a mint from each of the paths `adr/0036` names — import, discovery,
+  agents — since those are the ones the record was written for.
+- **Narrowed at iteration 44:** there is now a **second** producer. `openbiz split` mints one IRI
+  per part through the same `pattern_for` resolution, offering each back to the scan before the
+  next, and `crates/openbiz-server/tests/split_concept.rs` proves three parts get three numbers
+  under a recorded pattern in a separate process. So "several code paths were made consistent with
+  each other" is true now, of two of them. The entry stays open because the three paths `adr/0036`
+  was actually written for still do not mint.
 - **Opened:** iteration 41
 
 ### A replaced minting policy is not kept, so there is no history of the decision
@@ -2351,3 +2357,72 @@ module's own tests and end to end against the real binary reading a store off di
   the honest note that making it optional is how a governance product ends up shipping the default
   that skips it.
 - **Opened:** iteration 43
+
+### A refined `prov:wasDerivedFrom` makes a split entail a violation this build cannot see
+- **Kind:** partial-coverage
+- **What is proven:** `openbiz split` writes `prov:wasDerivedFrom` into the **vocabulary** graph, and
+  the whole SKOS condition set is run against the vocabulary the change would leave (`adr/0038`'s
+  check, generalised into `crate::staging::newly_broken`). No input could be constructed that trips
+  it, which is stated in `adr/0039` rather than presented as a guarantee.
+- **What is not:** a vocabulary that declares `prov:wasDerivedFrom rdfs:subPropertyOf skos:related`
+  makes a `--place below` split entail `skos:related` **and** `skos:broader` between the same pair,
+  which S27 forbids. The check does not catch it, and the reason is honest behaviour elsewhere: this
+  build reports S27 as **unchecked** in such a vocabulary — "this build entails nothing from it" —
+  rather than falsely held, and a condition with no verdict on either side cannot be *newly*
+  violated. Reproduced by hand at iteration 44 against a store on disk; the split succeeded, was
+  approved, and `openbiz integrity` afterwards said `unchecked`, not `VIOLATED`.
+- **Why it matters beyond this command:** it is a general property of the guard, not of splits. Any
+  change whose statements interact with a refinement this build cannot read is invisible to it. The
+  guard protects a vocabulary whose declarations we understand, and is silent about one whose
+  declarations we have already admitted we do not.
+- **What would close it:** either entailing through declared refinements of the SKOS properties, or
+  refusing a change that touches a property whose refinements leave a condition unchecked. The
+  second is cheap and may be too blunt; neither was attempted.
+- **Opened:** iteration 44
+
+### A part named what something here is already named behaves differently under the two minting policies
+- **Kind:** partial-coverage
+- **What is proven:** both behaviours, in
+  `crates/openbiz-server/src/split.rs`. Under an **opaque** pattern (`{n}`) the report warns —
+  "this vocabulary already has a concept by that name" — before it lists the parts, and stages the
+  candidate anyway, because a large vocabulary has legitimate homonyms. Under a **readable** pattern
+  (`{slug}`) the label becomes the local name, the IRI is therefore taken, and `openbiz mint`
+  refuses rather than suffixing it, which is `CLAUDE.md` §1.7 working as designed.
+- **What is not:** that the operator can act on the second one. The refusal they get is about an
+  **IRI** — "already in use ... a new concept must not take an IRI something else denotes" — when
+  their actual problem is that they tried to create a second concept with an existing name. The two
+  are the same event and the message names the wrong one. Found by a test failing, not by design.
+- **What would close it:** `CommandError::CannotMint` carrying whether the vocabulary also already
+  carries that *label*, and saying so first. One field and one lookup, deliberately not folded into
+  the item that discovered it.
+- **Opened:** iteration 44
+
+### A split propagates `skos:topConceptOf` in a direction it chose rather than one it read
+- **Kind:** partial-coverage
+- **What is proven:** under `--place beside`, a part of a split of a top concept becomes
+  `<part> skos:topConceptOf <scheme>`, and under `--place below` it does not, which is right because
+  a part below a top concept is not one. Both are tested in `openbiz-skos`.
+- **What is not:** that the direction matches the vocabulary. `CoreModel` closes S8 on read, so it
+  cannot say whether the graph asserted `skos:topConceptOf` or `skos:hasTopConcept`, and the
+  subject-first form was chosen so a part reads the way `skos:broader` does everywhere else here.
+  The same split gets the **broader** direction right, by reading `stated_directions`, which makes
+  the inconsistency visible in one command's output: a downward-authored thesaurus gets
+  `<parent> skos:narrower <part>` and `<part> skos:topConceptOf <scheme>` in the same diff.
+- **Note:** this is the same core-model gap iteration 42 recorded against `openbiz move`, reached
+  from a different direction. It is one gap, not two.
+- **What would close it:** `Resource` recording the asserted direction of S8 the way it records the
+  asserted direction of S25.
+- **Opened:** iteration 44
+
+### Nothing about `openbiz split` is measured on a large vocabulary
+- **Kind:** partial-coverage
+- **What is proven:** correctness on fixtures of a handful of concepts, in-process and against the
+  real binary on disk.
+- **What is not:** cost. A split reads the vocabulary once for the model, once more for the mint
+  scan across **every** vocabulary in the store, and twice more for `newly_broken` — so it is at
+  least four passes and one of them is store-wide. That is the same unmeasured claim `adr/0038`
+  made about a merge, now made by a second command, and the recurrence is the finding: this is the
+  seventh unmeasured cost or constant in this crate.
+- **What would close it:** the split run against the 100k and 1M generated vocabularies `adr/0013`
+  and `adr/0024` already build, with wall-clock and peak memory recorded.
+- **Opened:** iteration 44
