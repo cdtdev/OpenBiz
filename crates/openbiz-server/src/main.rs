@@ -136,6 +136,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Search { graph, query } => {
             one_shot(store, |store| openbiz_server::search(store, &graph, &query))
         }
+        Command::Mint {
+            graph,
+            label,
+            pattern,
+        } => one_shot(store, |store| {
+            openbiz_server::mint(store, &graph, label.as_deref(), pattern.as_deref())
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

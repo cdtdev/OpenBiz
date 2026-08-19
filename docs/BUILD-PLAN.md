@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), **17 of 22 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split, so the denominator is unchanged and recounted rather than assumed. **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **18 of 23 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -1131,7 +1131,44 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > assert the miss, both needing a dependency decision. RFC 4647 extended filtering is absent.
       > Every search is a linear scan of a model rebuilt per request, and nothing indexes anything.
       > Four `UNTESTED.md` entries.
-- [ ] Concept IRI minting: configurable patterns, collision detection, opaque-vs-readable policy
+- [x] Concept IRI minting, part 1 — the pattern, the two policies, and collision detection
+      > **Split in place at iteration 39.** The item read as one thing and is two: minting an IRI,
+      > and *persisting* the policy so every producer mints the same way. The second waits on a
+      > place to keep per-vocabulary settings, which does not exist; the first waits on nothing and
+      > is what somebody writing an import file needs today.
+      > **Done at iteration 39.** `openbiz mint <graph> [<label>] [--pattern <p>]` reports the IRI
+      > a new concept would be given, under a pattern with one placeholder — `{n}` for an opaque
+      > IRI, `{slug}` for one read from the label. It reads and **reserves nothing**, and the
+      > report says so: a minter that looks like an allocator would have somebody mint twice and
+      > create two concepts on one IRI.
+      > **Better, not parity.** Every incumbent has a configurable URI pattern and every one makes
+      > you configure it against nothing. Here the default is **read off the vocabulary** — the
+      > namespace most of its concepts are in, and whether their local names are numbered or
+      > worded — with the counts printed, and a vocabulary with no majority namespace gets **no**
+      > suggestion rather than a confident wrong one. The two collision rules then differ on
+      > purpose: a number goes *above the highest in use* and never fills a gap, because a gap is
+      > evidence something was there and a reused IRI is a permanent lie; a slug that is taken is
+      > **refused**, because `renewable-energy-2` is a silo with a suffix (§1.7) and thesaurus
+      > practice qualifies a homograph rather than numbering it. Collisions are checked against
+      > every vocabulary in the store *and* every change staged against one, so two curators
+      > preparing imports on the same day cannot mint the same IRI.
+      > **Nothing is transliterated.** RFC 3987 §2.2 allows the whole of assigned Unicode in an
+      > IRI, so `Énergie marémotrice` mints `…/énergie-marémotrice`, and an integration test puts
+      > that IRI through `openbiz import` and gets it back out of the store unchanged. Mapping `ö`
+      > to `o` is a language-specific guess that manufactures collisions between different words.
+      > **Production caller:** the command line. See `adr/0035`.
+      > **Scope, honestly:** the pattern is per invocation, not per vocabulary — part 2 below. Two
+      > `UNTESTED.md` entries: the engine-free IRI check is a subset of RFC 3987 (the store's own
+      > parser has the last word, and does), and the collision scan reads every vocabulary in the
+      > store on every mint, unmeasured at scale.
+- [ ] Concept IRI minting, part 2 — the policy persisted per vocabulary, so every producer mints
+      the same way
+      > Split out at iteration 39. Today `--pattern` is per invocation and the default is inferred
+      > from the vocabulary each time, which is right for one curator at a command line and wrong
+      > for a deployment: an import, a discovery match, and an agent proposal must all mint under
+      > the *same* recorded policy, and a vocabulary whose convention is inferred is a vocabulary
+      > whose convention drifts. Needs a place to keep per-vocabulary settings — the system graph is
+      > the obvious candidate and nothing writes to it yet outside the registry.
 - [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement
 - [ ] Deprecation lifecycle preserving history rather than deleting — auditors need the trail
 - [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation

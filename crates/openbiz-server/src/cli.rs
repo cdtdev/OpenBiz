@@ -43,7 +43,10 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use openbiz_skos::{LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, SearchBound};
+use openbiz_skos::{
+    LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, NoConvention, PatternError,
+    SearchBound,
+};
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
     Decision, GraphId, GraphIdError, Provenance, RdfSyntax, Store, StoreError, BACKUP_SYNTAX,
@@ -117,6 +120,15 @@ pub enum Command {
         /// What to look for, and how.
         query: Box<LabelQuery>,
     },
+    /// Report the IRI a new concept in a vocabulary would be given. Reads and nothing else.
+    Mint {
+        /// The IRI of the vocabulary graph the concept would go in.
+        graph: String,
+        /// What the new concept would be called. Required by a `{slug}` pattern.
+        label: Option<String>,
+        /// The pattern to mint under, overriding the one the vocabulary suggests.
+        pattern: Option<String>,
+    },
     /// Report what a vocabulary documents one resource with, and why. Reads and nothing else.
     Notes {
         /// The IRI of the vocabulary graph to read.
@@ -174,6 +186,8 @@ Usage:
                              report what is below <concept> and beside it, and why
   openbiz search <graph> <text> [options]
                              find the concepts <graph> labels with <text>
+  openbiz mint <graph> [<label>] [--pattern <p>]
+                             report the IRI a new concept in <graph> would be given
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -224,6 +238,14 @@ duplicate concept gets created. Narrow it with:
   --kind pref|alt|hidden     only this kind; repeat for more than one
   --limit <n>                report at most n hits (default 200)
 Matching ignores case but not accents, spelling, or Unicode normalisation.
+
+Mint only reads, and reserves nothing: run it twice and it answers the same. It reports the IRI a
+new concept would be given, under a pattern with one placeholder — {n} for an opaque IRI, {slug}
+for one read from the label. With no --pattern the pattern is read off the vocabulary's own
+concepts, and a vocabulary with no majority namespace gets no suggestion rather than a guess. A
+number goes above the highest in use and never fills a gap; a slug that is already taken is
+refused rather than given a disambiguating suffix. Every IRI under the namespace is checked,
+across every vocabulary in the store and every change staged against one.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -429,6 +451,10 @@ impl Command {
                     query: Box::new(Self::search_query(&text, args)?),
                 });
             }
+            "mint" => {
+                let graph = Self::text("mint", "the IRI of a vocabulary to read", &mut args)?;
+                return Self::mint_command(graph, args);
+            }
             "integrity" => (
                 "integrity",
                 Self::Integrity {
@@ -503,6 +529,60 @@ impl Command {
             .ok_or(ArgsError::MissingArgument { command, what })?
             .into_string()
             .map_err(|_| ArgsError::NotUnicode)
+    }
+
+    /// Read what `openbiz mint` takes after the vocabulary.
+    ///
+    /// The label is positional, because `openbiz mint <graph> "Renewable energy"` is how anyone
+    /// would write it — but it is optional, since a `{n}` pattern needs no label, and an optional
+    /// positional followed by options is ambiguous the moment a label begins with a hyphen. So the
+    /// rule is stated rather than guessed at: the first argument after the vocabulary is the label
+    /// unless it begins with `--`, and `--label` is there for the term that does.
+    fn mint_command(
+        graph: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut label: Option<String> = None;
+        let mut pattern: Option<String> = None;
+
+        let mut args = args.map(|arg| arg.into_string()).peekable();
+        // The positional, taken only when it cannot be an option.
+        if let Some(Ok(first)) = args.peek() {
+            if !first.starts_with("--") {
+                label = args.next().transpose().map_err(|_| ArgsError::NotUnicode)?;
+            }
+        }
+
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            let mut value = |option: &'static str| -> Result<String, ArgsError> {
+                args.next()
+                    .ok_or(ArgsError::MissingOptionValue { option })?
+                    .map_err(|_| ArgsError::NotUnicode)
+            };
+            match arg.as_str() {
+                "--label" => {
+                    let given = value("--label")?;
+                    set(&mut label, given, "--label")?;
+                }
+                "--pattern" => {
+                    let given = value("--pattern")?;
+                    set(&mut pattern, given, "--pattern")?;
+                }
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "mint",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        Ok(Self::Mint {
+            graph,
+            label,
+            pattern,
+        })
     }
 
     /// Read the options `openbiz search` accepts, refusing anything it does not.
@@ -699,6 +779,25 @@ pub enum CommandError {
         concept: String,
         /// The vocabulary that was read.
         graph: String,
+    },
+    /// The pattern given with `--pattern` is not one this build mints under.
+    #[error(transparent)]
+    Pattern(#[from] PatternError),
+    /// No pattern was given and the vocabulary does not suggest one.
+    ///
+    /// Refused rather than defaulted. A pattern invented here would mint IRIs in a namespace
+    /// nothing else in the deployment uses, and they would look every bit as official as the real
+    /// ones — which is worse than being asked to type one.
+    #[error("{0}; give one with --pattern")]
+    NoConvention(NoConvention),
+    /// The minted IRI was rejected by the parser that would have stored it.
+    #[error(
+        "{iri:?} would be minted and the store's own RDF parser will not accept it as an IRI; \
+         the pattern is at fault"
+    )]
+    NotAnIri {
+        /// What would have been minted.
+        iri: String,
     },
     /// The vocabulary says nothing in SKOS terms about the resource that was asked about.
     ///
@@ -1091,6 +1190,94 @@ mod tests {
         assert_eq!(query.language(), &LanguageFilter::Any);
         assert_eq!(query.kinds().len(), 3, "all three kinds, hidden included");
         assert_eq!(query.bound(), SearchBound::DEFAULT);
+    }
+
+    /// The ordinary form: a vocabulary and the term the new concept will be called.
+    #[test]
+    fn mint_takes_a_vocabulary_and_an_optional_label() {
+        assert_eq!(
+            parse(&["mint", "http://e.org/v", "Renewable energy"]),
+            Ok(Command::Mint {
+                graph: "http://e.org/v".to_owned(),
+                label: Some("Renewable energy".to_owned()),
+                pattern: None,
+            })
+        );
+        assert_eq!(
+            parse(&["mint", "http://e.org/v"]),
+            Ok(Command::Mint {
+                graph: "http://e.org/v".to_owned(),
+                label: None,
+                pattern: None,
+            })
+        );
+    }
+
+    /// The positional label is optional, so an argument that begins with `--` is read as an option
+    /// and never silently swallowed as the label. `--label` is how the awkward term is given.
+    #[test]
+    fn a_label_beginning_with_two_hyphens_needs_the_option() {
+        let error = parse(&["mint", "http://e.org/v", "--peculiar"]).expect_err("not an option");
+        assert_eq!(
+            error,
+            ArgsError::UnknownOption {
+                command: "mint",
+                option: "--peculiar".to_owned()
+            }
+        );
+
+        assert_eq!(
+            parse(&["mint", "http://e.org/v", "--label", "--peculiar"]),
+            Ok(Command::Mint {
+                graph: "http://e.org/v".to_owned(),
+                label: Some("--peculiar".to_owned()),
+                pattern: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mint_takes_a_pattern() {
+        assert_eq!(
+            parse(&["mint", "http://e.org/v", "--pattern", "http://e.org/v/{n}"]),
+            Ok(Command::Mint {
+                graph: "http://e.org/v".to_owned(),
+                label: None,
+                pattern: Some("http://e.org/v/{n}".to_owned()),
+            })
+        );
+    }
+
+    /// Two patterns is somebody who does not know which they asked for, and obeying the second
+    /// mints into a namespace they did not read.
+    #[test]
+    fn two_patterns_are_refused_rather_than_taken_last_wins() {
+        let error = parse(&[
+            "mint",
+            "http://e.org/v",
+            "--pattern",
+            "http://e.org/a/{n}",
+            "--pattern",
+            "http://e.org/b/{n}",
+        ])
+        .expect_err("two patterns");
+
+        assert_eq!(
+            error,
+            ArgsError::ConflictingOptions {
+                option: "--pattern"
+            }
+        );
+    }
+
+    #[test]
+    fn a_pattern_with_no_value_is_refused() {
+        assert_eq!(
+            parse(&["mint", "http://e.org/v", "--pattern"]),
+            Err(ArgsError::MissingOptionValue {
+                option: "--pattern"
+            })
+        );
     }
 
     /// The options are read after both positionals, so a term beginning with a hyphen needs no

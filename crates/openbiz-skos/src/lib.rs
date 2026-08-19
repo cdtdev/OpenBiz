@@ -11,6 +11,7 @@ mod hierarchy;
 mod integrity;
 mod labels;
 mod mapping;
+mod mint;
 mod model;
 mod notes;
 mod paths;
@@ -41,6 +42,11 @@ pub use labels::{
 pub use mapping::{
     ExactMatchDisjointness, MappingProperty, SKOS_BROAD_MATCH, SKOS_CLOSE_MATCH, SKOS_EXACT_MATCH,
     SKOS_MAPPING_RELATION, SKOS_NARROW_MATCH, SKOS_RELATED_MATCH,
+};
+pub use mint::{
+    mint, slug, Evidence, HighestInUse, IriConvention, MintDerivation, MintError, MintPattern,
+    MintPolicy, MintScan, Minted, NoConvention, PatternError, Placeholder, Slug, SlugBound,
+    SlugError, Suggestion,
 };
 pub use model::{
     ClassOrigin, CoreModel, CoreModelBuilder, Derivation, Finding, ListDefect, Literal, MemberList,

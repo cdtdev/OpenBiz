@@ -2028,3 +2028,52 @@ module's own tests and end to end against the real binary reading a store off di
   and only then a decision about indexing, which is a Phase 13 concern and should not be
   pre-empted here.
 - **Opened:** iteration 38
+
+### The engine-free IRI check is a subset of RFC 3987, and the store's parser is the real gate
+- **Kind:** partial-standard
+- **What is proven:** `openbiz-skos` will not mint anything that is not absolute (RFC 3986 §3.1's
+  scheme grammar) or that carries a character an IRI may not, and `ucschar`'s ranges are
+  transcribed from RFC 3987 §2.2 with the boundaries pinned by test (U+009F out, U+00A0 in,
+  U+D7FF in, U+E000 out). Everything minted is then put to `openbiz_store::accepts_iri`, which is
+  Oxigraph's own `NamedNode` parser, before it is shown to anybody — a pattern with a broken
+  percent-escape is refused there and a test proves it. A minted non-ASCII IRI is imported into a
+  real store and read back out unchanged (`tests/mint_iri.rs`).
+- **What is not:** `plausible_iri` is not the RFC 3987 grammar and cannot be, in a crate that will
+  not depend on an engine. It does not check percent-encoding, `iprivate` placement, the authority
+  or path grammar, or IPv6 host literals. A caller of `openbiz-skos` that is *not* `openbiz-server`
+  would get a weaker guarantee than the command line does, and there is no such caller today —
+  which is exactly the sort of thing that stops being true quietly.
+- **What would close it:** either an IRI grammar in `openbiz-skos` tested against RFC 3987's own
+  examples, or a trait boundary that makes the engine's parser a required collaborator of minting
+  rather than a courtesy the server happens to perform.
+- **Opened:** iteration 39
+
+### Every mint scans every vocabulary in the store, and that is unmeasured
+- **Kind:** partial-coverage
+- **What is proven:** correctness at fixture scale, across several vocabularies and staged
+  candidates, and that memory is bounded by the *namespace* rather than the store — only IRIs
+  under the pattern's prefix are kept, and a test pins that an IRI outside it is counted and
+  dropped. The report prints both numbers, so the scan's cost is legible in its own output.
+- **What is not:** the time. `openbiz mint` reads every statement of every registered vocabulary
+  graph plus every pending candidate's additions, once per invocation, and builds the full
+  `CoreModel` of the target on top of that. At iteration 37's measured AGROVOC scale (10M triples)
+  that is a full store scan to answer one question, and nothing has been timed. The narrower
+  alternative — scan only the target vocabulary — was rejected deliberately, because an IRI is a
+  global identifier and two vocabularies extending one namespace is an ordinary enterprise case;
+  the cost of being right about that has not been paid in measurement.
+- **What would close it:** the scan timed against the 100k- and 1M-concept generators
+  `openbiz-store`'s `scale` module already has, with the number recorded beside `adr/0013`'s.
+- **Opened:** iteration 39
+
+### `SlugBound::DEFAULT` is the fourth unmeasured constant
+- **Kind:** partial-coverage
+- **What is proven:** the bound cuts at a word boundary rather than mid-word, the result says it
+  was truncated, and the derivation printed to the user says the IRI no longer carries the whole
+  term.
+- **What is not:** the number 96. No corpus of enterprise labels was consulted, and the label
+  lengths of a real thesaurus are exactly the thing iteration 37's proposed LCGFT fixture would
+  answer. This is the fourth constant of its kind after `WalkBound::DEFAULT`, `PathBound::DEFAULT`
+  and `SearchBound::DEFAULT`, and the pattern of writing a plausible number and recording it here
+  is now four iterations old.
+- **What would close it:** label-length percentiles from a real published thesaurus.
+- **Opened:** iteration 39

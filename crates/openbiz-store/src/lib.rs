@@ -83,6 +83,18 @@ pub use graph::{
     CANDIDATE_REMOVALS_SUFFIX, INFERRED_GRAPH_PREFIX, OPENBIZ_NAMESPACE, SYSTEM_GRAPH_IRI,
 };
 
+/// Whether the RDF parser this store is built on accepts `iri` as an IRI.
+///
+/// Exposed because minting a concept IRI (`openbiz-skos`) happens in a crate that is deliberately
+/// engine-free and can therefore only apply a *subset* check of RFC 3987 — absolute, and made of
+/// characters an IRI may carry. That subset misses things a real parser catches, a broken
+/// percent-escape being the likeliest. Since the whole point of a minted IRI is that it will be
+/// stored, the parser that will store it is the one entitled to the last word, and this is how a
+/// caller asks it before showing the IRI to anybody.
+pub fn accepts_iri(iri: &str) -> bool {
+    NamedNode::new(iri).is_ok()
+}
+
 /// Subdirectory of the configured data directory that holds the RDF store.
 ///
 /// The store gets its own subdirectory so backups, exports, and future artefacts can be siblings
