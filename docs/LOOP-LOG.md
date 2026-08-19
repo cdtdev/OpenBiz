@@ -4330,3 +4330,78 @@ look competent disables the one signal that catches a stuck loop.
   it is a human either promoting the enforcement proposal or saying the record is enough — and,
   again, whether a curator shown "STOP" acts on it, which nothing in this repository can answer and
   which is now the fourth iteration to arrive at "this needs one usability session".
+
+## Iteration 58 — 2026-08-20 (NZST, UTC+12)
+- **Clean start, verified rather than assumed.** `main` at `aac185a`, tree clean, and the CI run for
+  that exact SHA was `success` — read from `gh run list --branch main`, not from iteration 57's
+  claim. Both human inboxes empty: `promote-queue.json` is `[]` and `feedback.md` is zero bytes.
+  Iteration 37's LCGFT fixture is unpromoted for the twenty-second iteration.
+- **The item as written, not split.** The last unblocked item in Phase 2: the record `adr/0049`
+  built, on `openbiz split`. It named two governance questions and one rule to carry through, and
+  answering all three is what made it one item rather than three. Phase 2 is now **33 of 34**, the
+  remainder blocked on authentication, so Phase 3 — the interface — is next.
+- **Decision one: one `--because` covers every part; the findings are per part.** N reasons would
+  have to be aligned to N `--into` labels by position, and a list that drifted by one would file
+  every reason against the wrong part with nothing in the output to show it — a governance record
+  that is confidently wrong is worse than one that is coarse. `adr/0003` §4 pushes the same way:
+  three reasons for a three-part split is a mechanism people route around. What is genuinely per
+  part is *what was found*, which is what an auditor queries and what one field on a candidate could
+  never have said. The cost is real and recorded: a curator whose reasons differ per part has one
+  sentence.
+- **Decision two, and it is the one that changed the shape of the code.** A rejected candidate keeps
+  its justifications — a statement made at a time is not deleted because the world moved on — but
+  standing unqualified would over-report proliferation, which is `UNTESTED.md`'s own entry from
+  iteration 57. So the record **names the candidate it arose from, as an IRI in the object
+  position**, the same representational decision as the considered resources and for the same
+  reason: `?j <justificationCandidate> ?c . ?c <candidateState> "rejected"` is a query. There is a
+  store test that runs exactly that join, and mutating the reader to report a rejection as an
+  approval fails it end to end.
+- **So `openbiz justifications` now reports a fate per record**, and the honest one in four cases:
+  nothing proposed (the mint path stages nothing at all, so a record there says somebody *looked*),
+  undecided, approved, refused. The headline had to be reworded with it — "of which N **passed over
+  something that already existed**", because "created something" contradicted the entries beneath it
+  the moment those entries could say a change was refused.
+- **A batch API, for a reason rather than for tidiness.** `Store::record_justifications` writes a
+  split's records in one transaction and refuses all of them if any one is refusable. "Three parts,
+  two justified" reads as though the third was reused, and nothing distinguishes that from a record
+  lost halfway through. The singular call is now a wrapper, and both take a `NewJustification`
+  struct: eight positional arguments, five of them strings, is a signature where `concept` and
+  `label` can be swapped without the compiler noticing and the record names the wrong thing.
+- **Two report defects found by running the binary, again.** The record block printed IRIs bare while
+  every neighbouring line bracketed them, and the sentence explaining that the concept being divided
+  is not "passed over" printed under every split — including the ones where no part matched the
+  original, which is the paragraph readers learn to skip. Both fixed; the second is now conditional
+  on the original actually having matched. Neither was visible to any assertion I had written.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and never
+  through a pipe. **1202 Rust tests, 0 failed**, up from 1190: twelve new — four in `openbiz-store`,
+  five in `openbiz-server`, three end to end. UI untouched, so no npm run. No new dependency, no new
+  crate, no build artefact.
+- **Mutation-checked, not just green.** Four reversions, each run: dropping the self-match filter
+  fails the `adr/0048`-carry-through test; recording `arising_from: None` fails the candidate test;
+  validating a batch inside the write loop instead of up front fails the atomicity test; and
+  reporting a rejected candidate as approved fails the end-to-end rejection test.
+- **Recorded:** `adr/0050`. Two `UNTESTED.md` entries **closed** — the reuse ladder recording
+  nothing (both creation paths now file the record) and a justification surviving its abandoned
+  creation (the reviewer half of it) — and four opened, which is the honest half. One reason per
+  split, with the case it loses spelled out. The fate reported is what a *reviewer* did, not what the
+  vocabulary holds: an approved change later deprecated or merged still reads as approved. Two
+  branches of the fate reporting have no production caller — the `#[non_exhaustive]` unknown state,
+  and a record naming a candidate the store does not hold, which nothing can produce because
+  candidates are never deleted. And the report now reads **one candidate per record on top of reading
+  every record**, unmeasured: the eleventh entry in that family, widened by my own change. The
+  iteration-57 proposal "say whether a justified creation ever happened" is marked half-landed with
+  the remaining half stated. `BUILD-PLAN.md` and `CAPABILITIES.md` updated. Nothing self-promoted.
+- **Still uncertain:** whether the fate line is the honest correction it looks like or a more
+  convincing version of the same over-claim. It fixes the direction that mattered — a rejected split
+  no longer reads as proliferation — but what it reports is a *candidate's* state, and the question a
+  governance team asks is about the vocabulary. A concept approved in March and merged away in June
+  reads here as approved, forever, and the report says so only in the sense that it never uses the
+  word "exists". I left the vocabulary lookup out for two reasons I believe (it doubles an unmeasured
+  cost; a live view invites reading an audit trail as a dashboard) and one I am less sure of, which is
+  that I have now spent four iterations on this feature and each one has ended by adding a line to a
+  report rather than a constraint to the system. Nothing still refuses a creation without a
+  justification. That is the fourth iteration to end on that sentence, it is in `PROPOSED.md`
+  unpromoted, and the difference between "waiting for a human to decide how strict OpenBiz is" and
+  "building an ever more articulate description of a thing that does not happen" is not visible from
+  inside the loop.

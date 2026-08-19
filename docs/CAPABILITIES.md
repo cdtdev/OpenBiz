@@ -271,8 +271,24 @@ parts are named. A part named after one of the original's own labels is shown an
 concept being divided rather than offered as a concept to reuse
 ([`adr/0048`](adr/0048-discovery-on-every-name-a-split-creates.md)).
 
-`openbiz split`, the other creation path, prints the ladder and does not yet file the record; it is
-the next item and the report says so rather than implying otherwise.
+**A split files the record too, one per part.** `openbiz split … --because "…"` writes a
+justification for each concept it would create, each naming what *that part's* own name found and
+passed over — one field on the change could never have said which of three parts had a match. One
+reason covers the split, because the judgement that nothing existing fitted is made once, and a
+reason per part would have to be lined up against the `--into` labels by position, which misfiles
+silently when the counts drift.
+
+Each record also **names the change it arose from**, which is what makes it honest about a split
+that never happens: `openbiz justifications` reads that change's state back and reports a refused
+one as a concept that *was never created*, counted apart from the rest, rather than as another
+overlapping concept somebody made. The records themselves stay whatever the reviewer decides — a
+justification is a statement somebody made at a time. On the `mint` path there is no change to name,
+because minting stages nothing, and the report says that in as many words rather than letting a
+record read as proof that a concept exists
+([`adr/0050`](adr/0050-the-record-on-a-path-that-creates-several-things.md)).
+
+What the fate line reports is what a *reviewer* did, not what the vocabulary holds today: an
+approved change that was later deprecated or merged away still reads as approved.
 
 `mint` **stages and reserves nothing** — run it twice, get the same answer, and it says so. Without
 `--because` it writes nothing whatsoever, and the closing line of the report says the stronger of
@@ -325,7 +341,7 @@ The editorial operations all produce candidates:
 |---|---|
 | `openbiz move <graph> <concept> <to>` | Re-parents a concept **and everything below it** as *one* candidate that both removes and adds — approving half of a move would leave a branch hanging off nothing ([`adr/0037`](adr/0037-a-move-is-one-candidate-with-two-halves.md)). |
 | `openbiz merge <graph> <duplicate> <survivor>` | Repoints every reference in the vocabulary, **including statements SKOS has no reading of** (which is why it reads the raw graph, not the model), demotes a colliding preferred label rather than dropping it, and **refuses any change that would leave the graph failing an integrity condition that holds now** ([`adr/0038`](adr/0038-a-merge-is-checked-against-the-vocabulary-it-would-leave.md)). |
-| `openbiz split <graph> <concept> --into … --into …` | Asks what already exists under every part name first, across the store ([`adr/0048`](adr/0048-discovery-on-every-name-a-split-creates.md)), then creates the parts under the vocabulary's own minting policy, records with `prov:wasDerivedFrom` where each came from, and **removes nothing** — then reports every label, child, link and note still hanging off the original that only a person can apportion ([`adr/0039`](adr/0039-a-split-creates-the-parts-and-refuses-to-apportion.md)). |
+| `openbiz split <graph> <concept> --into … --into … [--because …]` | Asks what already exists under every part name first, across the store ([`adr/0048`](adr/0048-discovery-on-every-name-a-split-creates.md)), files one justification per part with `--because` ([`adr/0050`](adr/0050-the-record-on-a-path-that-creates-several-things.md)), then creates the parts under the vocabulary's own minting policy, records with `prov:wasDerivedFrom` where each came from, and **removes nothing** — then reports every label, child, link and note still hanging off the original that only a person can apportion ([`adr/0039`](adr/0039-a-split-creates-the-parts-and-refuses-to-apportion.md)). |
 | `openbiz deprecate <graph> <concept> [--replaced-by …]` | Retires a term **in place**: marks it `owl:deprecated`, records the successor with `dcterms:isReplacedBy`, and **deletes nothing at all**, so the IRI keeps resolving — the one thing a merge cannot offer. SKOS has no deprecation term, so both come from OWL 2 and Dublin Core rather than from anything invented here ([`adr/0040`](adr/0040-a-deprecation-retires-a-concept-and-strands-what-it-cannot-decide.md)). |
 | `openbiz reinstate <graph> <resource>` | Takes a retirement back, removing the marker and the recorded successor **together** — a current concept that records a successor is a contradiction — and keeping every `skos:changeNote`, because the retirement happened and a history tidied until it never appears is the opaque change log this product exists to replace ([`adr/0042`](adr/0042-a-reinstatement-removes-the-status-and-keeps-the-history.md)). |
 

@@ -1106,6 +1106,20 @@ fn candidate_id_of(
     CandidateId::parse(text).map_err(|error| corrupt(error.to_string()))
 }
 
+/// The IRI of a candidate's record in the system graph, and the identifier it stands for.
+///
+/// Shared with [`crate::justification`], which names the candidate a justified creation was
+/// proposed as. One spelling of that IRI, in one place, because two would be two nodes an auditor's
+/// join could not bring together.
+pub(crate) fn candidate_subject(id: CandidateId) -> NamedNode {
+    id.subject()
+}
+
+/// The identifier a candidate record's IRI stands for, or `None` if it names no candidate.
+pub(crate) fn candidate_of_subject(iri: &str) -> Option<CandidateId> {
+    CandidateId::parse(iri.strip_prefix(CANDIDATE_SUBJECT_PREFIX)?).ok()
+}
+
 /// Write a freshly raised candidate's record into the system graph.
 fn write_record(txn: &mut Transaction<'_>, candidate: &Candidate) -> Result<(), StoreError> {
     let subject = candidate.id.subject();

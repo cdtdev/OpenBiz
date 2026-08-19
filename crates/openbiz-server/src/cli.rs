@@ -193,6 +193,8 @@ pub enum Command {
         language: Option<String>,
         /// The pattern to mint the parts' IRIs under, overriding the vocabulary's.
         pattern: Option<String>,
+        /// Why the parts are being created rather than something existing reused.
+        because: Option<String>,
     },
     /// Propose retiring a concept in place, without deleting it or anything that points at it.
     Deprecate {
@@ -291,6 +293,7 @@ Usage:
   openbiz merge <graph> <duplicate> <survivor>
                              propose merging <duplicate> into <survivor>, references and all
   openbiz split <graph> <concept> --place beside|below --into <label> --into <label>
+                             [--because <text>]
                              propose dividing <concept> into one new concept per --into
   openbiz deprecate <graph> <concept> [--replaced-by <iri>] [--note <text>]
                              propose retiring <concept> in place, without deleting anything
@@ -418,6 +421,14 @@ concept's own broader concepts and schemes, which is a term that meant two thing
 the concept their broader concept, which is a term that was too coarse. There is no default,
 because the wrong one is consistent SKOS that says something false and nothing downstream would
 report it.
+
+Every part's name is asked about across the whole store before any of them is named, because a
+split is several creations at once and the concept a part duplicates is usually in the vocabulary
+you are not looking at. --because files the record adr/0003 §3 requires, one per part, each
+naming what that part's own name found and passed over; `openbiz justifications` reads them back.
+One reason covers the whole split, because the judgement that nothing existing fitted is made once.
+The records name the candidate they arose from, so a part whose split is rejected is reported as a
+creation that did not happen rather than counted as one that did.
 
 What a split cannot do is decide which part each of the concept's labels, narrower concepts,
 related links and notes belongs to — that is the editorial judgement the split exists to let a
@@ -973,6 +984,7 @@ impl Command {
         let mut placement: Option<String> = None;
         let mut language: Option<String> = None;
         let mut pattern: Option<String> = None;
+        let mut because: Option<String> = None;
         let mut args = args.map(|arg| arg.into_string());
 
         while let Some(arg) = args.next() {
@@ -987,6 +999,7 @@ impl Command {
                 "--place" => set(&mut placement, value("--place")?, "--place")?,
                 "--language" => set(&mut language, value("--language")?, "--language")?,
                 "--pattern" => set(&mut pattern, value("--pattern")?, "--pattern")?,
+                "--because" => set(&mut because, value("--because")?, "--because")?,
                 other => {
                     return Err(ArgsError::UnknownOption {
                         command: "split",
@@ -1019,6 +1032,7 @@ impl Command {
             placement,
             language,
             pattern,
+            because,
         })
     }
 
@@ -2139,6 +2153,7 @@ mod tests {
                 placement: Placement::Below,
                 language: Some("fr".to_owned()),
                 pattern: None,
+                because: None,
             })
         );
     }

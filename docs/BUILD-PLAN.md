@@ -3,21 +3,20 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **62 of 227 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **63 of 227 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 32 of 34; the denominator moved again at
-iteration 57, which split the record and the `mint` path from the same record on `split`, because a
-split is *N* creations from one command and raises two governance questions the mint path does not.
+wait on authorisation, not on anything else. Phase 2 is **33 of 34**, and the one item left is
+blocked on authentication rather than on work: the candidate seam over HTTP and in the interface.
 Every count on this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory
 of what was left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which
 also records how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **32 of 34**. Iteration 57 gave the reuse
-ladder teeth on the path that had none: `openbiz mint --because "…"` files a first-class record of
-what discovery found and why none of it fitted, and `openbiz justifications` reads it back across
-every vocabulary (`adr/0049`). Of the two items left, one — the candidate seam over HTTP and in the
-interface — is **blocked on authentication** (`BLOCKED.md`); the other is the same record on
-`openbiz split`, where one command creates several concepts at once.
+**Current position:** Phase 2 (SKOS authoring model), **33 of 34**. Iteration 58 put the record on
+the second creation path: `openbiz split … --because "…"` files one justification per part, each
+naming what that part's own name found, and every record names the candidate it arose from — so a
+split that is rejected is reported as a creation that did not happen rather than counted as
+proliferation (`adr/0050`). The one item left, the candidate seam over HTTP and in the interface,
+is **blocked on authentication** (`BLOCKED.md`), so Phase 3 — the interface — is what comes next.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1327,18 +1326,28 @@ the interface is a core differentiator, and building it late means retrofitting 
       > full and the empty case. A blank-node match cannot be named in the record and is counted
       > instead. The unavailable-source half of "the search did not finish" has no production
       > caller: this build has one source and it always answers. In `docs/UNTESTED.md`.
-- [ ] The same record on the other creation path — `openbiz split`
-      > `openbiz split` prints the ladder over every part name (`adr/0048`) and still records
-      > nothing, so half the creation surface remains outside the mechanism `adr/0049` built.
-      > It is a separate item because a split is *N* creations from one command, and the two
-      > questions that raises are not the mint path's: does one `--because` cover every part, or
-      > does each part need its own reason — and what does a justification mean for a part whose
-      > candidate is later **rejected**, since nothing was created after all. The record already
-      > survives its candidate's fate by construction; whether that is right for a rejection is
-      > the decision this item has to take, and it is a governance question rather than a coding
-      > one. `adr/0048`'s self-match rule also has to carry through: the concept being divided is
-      > not something the split "passed over", and recording it as such would file the original as
-      > a duplicate of its own parts.
+- [x] **The same record on the other creation path — `openbiz split`** (`adr/0050`)
+      > Landed at iteration 58. `openbiz split … --because "…"` files **one justification per
+      > part**, each naming what *that part's* own name found and passed over, so both creation
+      > paths in this build now write the record `adr/0003` §3 requires.
+      > **The two governance questions, answered.** One `--because` covers every part: the
+      > judgement being justified is made once, and N reasons aligned positionally to N `--into`
+      > labels would misfile silently, which a governance record cannot afford — while §4 says the
+      > record must cost less than recreating. What is per part is what was *found*, which is the
+      > thing an auditor queries and the thing one field on a candidate could never have said.
+      > And a **rejected** candidate keeps its justifications, because a justification is a
+      > statement made at a time — but each record now **names the candidate it arose from**, as an
+      > IRI in the object position, so `openbiz justifications` reads that candidate's state back
+      > and reports a refused change as a concept that was never created rather than counting it as
+      > proliferation. That closes iteration 57's "a justification survives its creation being
+      > abandoned and nothing notices" for the reviewer half.
+      > `adr/0048`'s rule carries through: the concept being divided never appears in a part's
+      > considered list, and the report says why it is absent — but only where a part actually
+      > matched it.
+      > **Scope, honestly:** nothing is still refused, on either path. One reason covers a split
+      > whose parts may have had different reasons. The fate reported is what a reviewer did, not
+      > what the vocabulary holds today. And the report now reads one candidate per record on top
+      > of reading every record, unmeasured. All in `docs/UNTESTED.md`.
 - [x] **The audit trail says which clock it is on, and its stamps are values** (`adr/0047`)
       > Added on product-owner instruction (`FEEDBACK-LOG.md`, 2026-08-20), which set the rule:
       > for anything a reader must order, an explicit offset or UTC and never a bare date.

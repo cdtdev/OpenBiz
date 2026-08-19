@@ -32,7 +32,7 @@
 //! justification produced by a pass that could not reach a source says less about what exists than
 //! one produced by a pass that could.
 
-use openbiz_store::{GraphId, Justification, Store};
+use openbiz_store::{CandidateState, GraphId, Justification, Store, StoreError};
 
 use crate::cli::CommandError;
 
@@ -46,12 +46,58 @@ pub fn justifications(store: &Store, graph: Option<&str>) -> Result<String, Comm
         .iter()
         .filter(|record| only.as_ref().is_none_or(|id| record.graph() == id))
         .collect();
+    let fates: Vec<Fate> = shown
+        .iter()
+        .map(|record| fate(store, record))
+        .collect::<Result<_, _>>()?;
 
-    Ok(report(only.as_ref(), &shown, all.len()))
+    Ok(report(only.as_ref(), &shown, &fates, all.len()))
+}
+
+/// What became of the creation a record justifies.
+///
+/// The distinction the whole thing turns on: a record is evidence that somebody looked before
+/// naming something, and that is *not* the same as evidence that the thing exists. Reporting the
+/// two as one would count a rejected split as proliferation and would let a mint — which stages
+/// nothing at all — read as a creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fate {
+    /// No candidate: nothing was ever proposed, so nothing here says a concept was created.
+    NothingProposed,
+    /// Proposed as a candidate, in the state that candidate is now in.
+    Proposed(CandidateState),
+}
+
+/// Read the fate of one record's creation, by looking up the candidate it named.
+///
+/// One candidate read per record, which is the cost of answering the question at all; it is
+/// unmeasured at scale and recorded in `docs/UNTESTED.md` with the rest of that family.
+fn fate(store: &Store, record: &Justification) -> Result<Fate, CommandError> {
+    let Some(id) = record.arising_from() else {
+        return Ok(Fate::NothingProposed);
+    };
+    match store.candidate(id) {
+        Ok(candidate) => Ok(Fate::Proposed(candidate.state())),
+        // A record naming a candidate the store no longer holds is a hole in the trail, not a
+        // record to report without one. It stops the report rather than being glossed, because a
+        // fate quietly omitted reads as a fate of "created".
+        Err(error) => Err(CommandError::Store(match error {
+            StoreError::NoSuchCandidate { .. } => StoreError::Corrupt {
+                path: store.path().to_path_buf(),
+                detail: format!(
+                    "justification {} says it arose from candidate {id}, and this store does not \
+                     hold that candidate; whether the concept it justifies was ever created \
+                     cannot be answered",
+                    record.id()
+                ),
+            },
+            other => other,
+        })),
+    }
 }
 
 /// The report itself.
-fn report(only: Option<&GraphId>, shown: &[&Justification], held: usize) -> String {
+fn report(only: Option<&GraphId>, shown: &[&Justification], fates: &[Fate], held: usize) -> String {
     let mut out = match only {
         Some(graph) => format!("recorded justifications for creating new concepts in {graph}\n"),
         None => "recorded justifications for creating new concepts, across every vocabulary\n"
@@ -67,13 +113,16 @@ fn report(only: Option<&GraphId>, shown: &[&Justification], held: usize) -> Stri
         .iter()
         .filter(|record| !record.considered().is_empty())
         .count();
+    // "passed over something" rather than "created something": since each record says what became
+    // of its candidate, a headline that called every record a creation would contradict the entries
+    // under it, where a refused change is reported as a concept that was never created.
     out.push_str(&format!(
-        "\n{} record(s), of which {despite} created something despite an existing match\n",
+        "\n{} record(s), of which {despite} passed over something that already existed\n",
         shown.len()
     ));
 
-    for record in shown {
-        out.push_str(&entry(record, only.is_none()));
+    for (record, fate) in shown.iter().zip(fates) {
+        out.push_str(&entry(record, *fate, only.is_none()));
     }
 
     let partial = shown
@@ -87,12 +136,27 @@ fn report(only: Option<&GraphId>, shown: &[&Justification], held: usize) -> Stri
         ));
     }
 
+    // Said as a count as well as per record, because the headline above counts records and not
+    // creations, and a reader who stopped at the headline would take a refused change for a
+    // vocabulary that grew.
+    let refused = fates
+        .iter()
+        .filter(|fate| matches!(fate, Fate::Proposed(CandidateState::Rejected)))
+        .count();
+    if refused > 0 {
+        out.push_str(&format!(
+            "\n{refused} of these justify a creation that was then refused, so the concept named \
+             was never created; the record stands because it is a statement somebody made at a \
+             time\n"
+        ));
+    }
+
     out.push_str(NOT_ENFORCED);
     out
 }
 
 /// One record, laid out so the thing being justified is read before the justification.
-fn entry(record: &Justification, name_the_graph: bool) -> String {
+fn entry(record: &Justification, fate: Fate, name_the_graph: bool) -> String {
     let mut out = format!("\n  {} — {}\n", record.id(), record.concept());
     out.push_str(&format!("    created under {:?}\n", record.label()));
     if name_the_graph {
@@ -113,10 +177,54 @@ fn entry(record: &Justification, name_the_graph: bool) -> String {
         record.recorded_by(),
         record.recorded_at()
     ));
+    out.push_str(&became(record, fate));
     if !record.search_was_complete() {
         out.push_str("    the search behind this record did not finish\n");
     }
     out
+}
+
+/// Whether the concept this record justifies was ever actually created.
+///
+/// Four answers and none of them is "created", because nothing in this build can say that: what it
+/// can say is what was proposed and what a reviewer did with it. A candidate that was applied put
+/// the statements in the vocabulary; anything since is a later change this record knows nothing
+/// about.
+fn became(record: &Justification, fate: Fate) -> String {
+    match fate {
+        Fate::NothingProposed => format!(
+            "    nothing was proposed: {} was minted and staged nowhere, so this record says \
+             somebody looked, not that the concept exists\n",
+            record.concept()
+        ),
+        Fate::Proposed(CandidateState::Proposed) => format!(
+            "    proposed as candidate {}, which nobody has decided yet\n",
+            display(record)
+        ),
+        Fate::Proposed(CandidateState::Applied) => format!(
+            "    proposed as candidate {}, which was approved\n",
+            display(record)
+        ),
+        Fate::Proposed(CandidateState::Rejected) => format!(
+            "    proposed as candidate {}, which was refused — the concept was never created\n",
+            display(record)
+        ),
+        // `CandidateState` is `#[non_exhaustive]`: a state a later build adds is named rather than
+        // folded into one of the others, because a fate reported wrongly is worse than one
+        // reported as unknown.
+        Fate::Proposed(other) => format!(
+            "    proposed as candidate {}, which is in a state this build does not know ({other})\n",
+            display(record)
+        ),
+    }
+}
+
+/// The candidate a record names, for a line that has already established there is one.
+fn display(record: &Justification) -> String {
+    match record.arising_from() {
+        Some(id) => id.to_string(),
+        None => "(none)".to_owned(),
+    }
 }
 
 /// Nothing to show, and what that does and does not mean.

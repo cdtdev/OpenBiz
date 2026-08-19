@@ -199,15 +199,22 @@ fn record_justification(
     }
     let complete = found.is_complete() && found.unavailable().next().is_none();
 
-    Ok(store.record_justification(
-        &GraphId::vocabulary(graph)?,
-        concept,
-        label,
-        &considered.into_iter().collect::<Vec<_>>(),
-        reason,
-        complete,
-        &actor()?,
-    )?)
+    // No candidate: `openbiz mint` computes an IRI and stages nothing, so there is no proposal
+    // whose fate could say whether the concept was ever created. Left absent rather than filled in
+    // with something plausible, and `openbiz justifications` says so where a reader would
+    // otherwise assume.
+    Ok(
+        store.record_justification(&openbiz_store::NewJustification {
+            graph: &GraphId::vocabulary(graph)?,
+            concept,
+            label,
+            considered: &considered.into_iter().collect::<Vec<_>>(),
+            reason,
+            search_was_complete: complete,
+            arising_from: None,
+            recorded_by: &actor()?,
+        })?,
+    )
 }
 
 /// How many matches could not be named in a justification record, because they are blank nodes.
