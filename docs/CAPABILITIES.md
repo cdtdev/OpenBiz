@@ -216,12 +216,33 @@ parent gets chosen for the next one.
 
 ---
 
-## Naming a new concept
+## Creating a concept — what already exists comes first
 
 ```sh
-openbiz mint <graph> [<label>] [--pattern <p>]   # what IRI would a new concept get?
+openbiz mint <graph> [<label>] [--pattern <p>]   # what already exists, then what IRI a new one gets
 openbiz policy <graph> [--pattern <p>]           # show, or record, the pattern
 ```
+
+There is no "create concept" command. A concept is created by staging a change, and to write that
+change somebody has to decide its IRI — which makes `mint` the creation path, and **discovery runs
+on it, before the IRI and with no flag to enable**. Given a label, `mint` searches every vocabulary
+in the store and every change waiting for a decision — every label kind, any language, anywhere
+inside the label — and prints what it found above the IRI, each match with the vocabulary it lives
+in. A term that already exists in the vocabulary you are *not* looking at is the concept you were
+about to duplicate.
+
+The IRI is still offered: two concepts can legitimately share a label, and a tool that refuses on a
+lexical match is one people work around. What the report will not do is let "nothing found" read as
+"nothing exists" — it always names what answered, what each source read, and what was never asked.
+No peer, data catalog, or public registry is consulted, because this build has no connector for one
+(Phase 12), and the report says so on every run. A source that cannot answer is reported as
+unavailable and never blocks the mint
+([`adr/0046`](adr/0046-discovery-runs-on-the-creation-path.md)).
+
+Matching is lexical: case-insensitive, and **not** insensitive to accents, spelling, or Unicode
+normalisation. What `adr/0003` §3 calls the reuse ladder is printed when something is found, and
+the report is honest that this build has nowhere to record a justification for creating a new
+concept anyway, except the note on the change that creates it.
 
 `mint` **reads and reserves nothing** — run it twice, get the same answer, and it says so. A number
 goes above the highest in use and never fills a gap; a slug already taken is *refused* rather than

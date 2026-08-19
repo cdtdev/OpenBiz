@@ -22,7 +22,16 @@ const BACKUP: &str = concat!(
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<https://example.org/energy> <urn:openbiz:graphKind> \"vocabulary\" ",
     "<urn:openbiz:graph:system> .\n",
+    // A second vocabulary, because the thing this command must find is the concept somebody else
+    // already created in the vocabulary the curator is not looking at.
+    "<https://example.org/materials> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/materials> <urn:openbiz:graphKind> \"vocabulary\" ",
+    "<urn:openbiz:graph:system> .\n",
 );
+
+/// The other vocabulary the fixture registers.
+const MATERIALS: &str = "https://example.org/materials";
 
 /// The vocabulary IRI the fixture registers.
 const ENERGY: &str = "https://example.org/energy";
@@ -97,6 +106,94 @@ fn import(data_dir: &Path, file: &str, turtle: &str) -> String {
         .nth(2)
         .expect("the import names the candidate it raised")
         .to_owned()
+}
+
+/// Propose `turtle` against `graph` and approve it.
+fn import_and_approve_into(data_dir: &Path, graph: &str, file: &str, turtle: &str) {
+    std::fs::write(data_dir.join(file), turtle).expect("write the import");
+    let imported = run(data_dir, &["import", graph, file]);
+    assert!(
+        imported.status.success(),
+        "the import failed: {}",
+        stderr(&imported)
+    );
+    let id = stdout(&imported)
+        .split_whitespace()
+        .nth(2)
+        .expect("the import names the candidate it raised")
+        .to_owned();
+    let approved = run(data_dir, &["approve", &id]);
+    assert!(
+        approved.status.success(),
+        "the approval failed: {}",
+        stderr(&approved)
+    );
+}
+
+/// **Discovery on the creation path, against the real binary.** The term the curator is about to
+/// mint already exists — in the *other* vocabulary in the same store, which is the concept no
+/// amount of care inside one vocabulary would have found. It is reported before the IRI, with
+/// the vocabulary it is in and the rung above creating a second one.
+#[test]
+fn a_concept_in_another_vocabulary_is_discovered_before_the_iri_is_offered() {
+    let dir = authored();
+    import_and_approve_into(
+        dir.path(),
+        MATERIALS,
+        "materials.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         <https://example.org/materials/m_1> a skos:Concept ; \
+         skos:prefLabel \"Tidal power\"@en .\n",
+    );
+
+    let output = run(dir.path(), &["mint", ENERGY, "Tidal power"]);
+    assert!(output.status.success(), "mint failed: {}", stderr(&output));
+    let report = stdout(&output);
+
+    let stop = report.find("STOP").expect("the §1.7 warning");
+    let minted = report.find("minted:").expect("an IRI");
+    assert!(stop < minted, "the warning comes first: {report}");
+    assert!(
+        report.contains("https://example.org/materials/m_1"),
+        "{report}"
+    );
+    assert!(
+        report.contains("in the vocabulary https://example.org/materials"),
+        "{report}"
+    );
+    assert!(report.contains("reuse outranks creation"), "{report}");
+    assert!(
+        report.contains("this store — 2 vocabularies"),
+        "the report says how far it looked: {report}"
+    );
+    assert!(
+        report.contains("no peer, no data catalog, and no public registry was consulted"),
+        "and how far it did not: {report}"
+    );
+}
+
+/// The report that creates duplicates is the one that says "nothing found" and stops. A clean
+/// pass has to name what answered, what it read, and what was never asked.
+#[test]
+fn a_clean_pass_says_what_was_consulted_and_what_was_not() {
+    let dir = authored();
+
+    let output = run(dir.path(), &["mint", ENERGY, "Geothermal heat"]);
+    assert!(output.status.success(), "mint failed: {}", stderr(&output));
+    let report = stdout(&output);
+
+    assert!(
+        report.contains("nothing discovery reached is called \"Geothermal heat\""),
+        "{report}"
+    );
+    assert!(
+        report.contains("discovery consulted 1 source(s)"),
+        "{report}"
+    );
+    assert!(
+        report.contains("no peer, no data catalog, and no public registry was consulted"),
+        "{report}"
+    );
 }
 
 /// The command as a curator runs it: no pattern, no configuration, one term.

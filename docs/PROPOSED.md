@@ -1217,6 +1217,30 @@ of which we own and can document exactly. An LLM-written runbook is a plausible 
 nobody verified against the binary, and it would be discovered wrong on the worst day the customer
 has. `README.md` is the right home for it and a human wrote it._
 
+_Iteration 54 (discovery on the creation path): **one, and it is the largest yet, because it is the
+one `adr/0003` §6 already predicted.** Discovery now finds a concept whose label contains the term
+you typed. It does not find "Photovoltaic generation" when you type "Solar power", or the German
+concept when you type the English term, or the concept that is the same idea under an unrelated
+name — and on the creation path a miss is not an empty result the user retries, it is a duplicate
+concept created. Lexical matching is the baseline `adr/0003` §6 says must carry the feature
+alone, and it does; what an LLM would add is **recall on the near-misses**, as ranked candidates a
+human accepts or rejects. **The guard rails are unusually clear here and are worth writing down
+while the seam is fresh:** (1) it emits *proposals* and writes nothing, which the `Match` shape
+already is; (2) it must never suppress a lexical match, only add to the list, so an air-gapped
+deployment loses recall and no correctness; (3) sending the label being created plus the
+vocabulary's labels to a provider is a **data-egress event** under §1.6 and has to be refusable
+per vocabulary; and (4) every suggested match needs its reason in the same field the lexical ones
+use, because "the model thought so" is not a derivation a governance team can defend to an
+auditor. Note also that this is the same capability `adr/0003` §6 asks for as a standing overlap
+report — one mechanism, two surfaces — and Phase 10 should not build it twice._
+
+_Also iteration 54, a **deliberate nil** on the adjacent temptation: "have a model write the
+justification for creating a new concept". The justification exists to make proliferation visible
+to the people accountable for it, and a generated one is a plausible paragraph that nobody meant —
+click-through noise with better grammar, which `adr/0003` §3 already names as the failure mode of
+warning dialogs. The person creating the concept is the only one who knows why, and the record is
+worth nothing if they did not write it._
+
 ### Cut what a semantic relation costs, starting with the derivation text
 
 - **Status:** proposed.

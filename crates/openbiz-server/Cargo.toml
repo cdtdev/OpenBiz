@@ -17,6 +17,7 @@ path = "src/main.rs"
 # caller" pattern CLAUDE.md §4 rules out, so this list stays honest about what is actually used.
 [dependencies]
 openbiz-api.workspace = true
+openbiz-discovery.workspace = true
 openbiz-skos.workspace = true
 openbiz-store.workspace = true
 

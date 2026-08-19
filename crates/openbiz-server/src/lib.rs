@@ -12,6 +12,7 @@ mod ancestors;
 mod cli;
 mod config;
 mod deprecate;
+mod discovery;
 mod export;
 mod graphs;
 mod inspect;
