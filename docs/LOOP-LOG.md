@@ -3178,3 +3178,88 @@ look competent disables the one signal that catches a stuck loop.
   check that does not need the whole subtree, which is a different algorithm and one I did not
   look for because the refusal was easy to write and easy to justify. That is exactly the shape of
   reasoning that has pointed the wrong way three times in this module's history.
+
+## Iteration 43 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `958ddf2`, tree clean, and the CI run
+  for that commit was **still in progress** when I looked — so I read the files I needed while it
+  ran and checked it again before creating the branch, rather than treating an empty `conclusion`
+  as either green or red. It completed `success`. Both human inboxes empty (`promote-queue.json`
+  is `[]`, `feedback.md` zero bytes). Nothing to drain, so nothing truncated.
+- **Took the next unblocked item and did not split it.** Phase 2's next unchecked line above it is
+  the candidate seam over HTTP, recorded in `BLOCKED.md` on authentication and not re-attempted.
+  The one after it is iteration 42's second split: **merge two concepts into one, with every
+  reference repointed**. I considered splitting it again — cross-vocabulary repointing is the
+  obvious seam — and decided against, because the piece that would have been left is a boundary
+  worth *stating* rather than a piece worth deferring, and an item that merges within a vocabulary
+  is complete on its own terms.
+- **What shipped.** `openbiz merge <graph> <duplicate> <survivor>` computes the change and stages
+  it as one candidate that both removes and adds; `openbiz approve` applies it. `MergeScan` streams
+  the **raw** graph and keeps only the statements mentioning the two concepts; `CoreModel::merge` is
+  the SKOS reading of them. `openbiz_skos::newly_violated` is the general check described below.
+- **The decision I would defend hardest is the one that was not in the plan.** The first working
+  version produced, from perfectly ordinary input, a vocabulary violating **two** of the SKOS
+  Reference's own integrity conditions — and I only found out because I ran the binary by hand
+  against a store on disk, for the thirteenth iteration running, to check a claim I was about to
+  write into `UNTESTED.md`. **S14** breaks through SKOS-XL: the label reconciliation works on plain
+  `skos:prefLabel` statements, a `skosxl:prefLabel` points at a label *resource* so the
+  reconciliation never sees it, and S55 then dumbs both down to preferred labels in one language.
+  **S27** breaks through `skos:related`, whenever the survivor is associatively linked to something
+  the duplicate was below. I had been about to record both as honest gaps and check the item off.
+  What stopped me was noticing that a hand-written check for "the conditions a merge is likely to
+  break" would have caught S14, which is obvious, and missed S27 entirely — so the honest check is
+  not a subset at all. `newly_violated` builds the model of the vocabulary the change **would
+  leave** and runs every condition, using code already tested against the specification's examples.
+  Only newly-broken conditions refuse, or a vocabulary that is already violating one could never be
+  edited to fix it.
+- **The cycle check walks upwards, and that is a direct answer to iteration 42's closing doubt.**
+  That doubt was that a move's downward walk hits `WalkBound::DEFAULT` on an ordinary large
+  vocabulary, so the operator most likely to want the operation is the one told it cannot be
+  checked. A merge asks the same question — is there a hierarchy path between these two of length
+  two or more — and asks it as "is the other concept *above* each parent", which is the cheap
+  direction. Same question, cheaper walk. It does not fix the move; it declines to repeat it.
+- **I found a defect in an already-checked-off item and did not fix it.** `openbiz move` does not
+  run this check and leaves an S27 violation on input I reproduced by hand. The fix is one call and
+  one test, the mechanism is now sitting right there, and I did not take it: the rule is one item
+  per iteration, and "the fix is small and I am already here" is exactly the reasoning that rule
+  exists to refuse. It is in `UNTESTED.md` with the full reproduction and in `PROPOSED.md` as work
+  a human authorises — along with the observation that `openbiz import` and `openbiz retract` have
+  the same hole and matter more, because an import is what a customer's first day runs through.
+- **Two things were wrong until I read the refusal's actual output.** The message told the operator
+  to run `openbiz integrity <concept>` — but that command takes a **graph**, so the one instruction
+  in the refusal was unrunnable. And it printed each condition's full statement above findings that
+  print it again as part of their own derivation, saying the same sentence twice; `forbids()` is
+  the one-clause form and was already there.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **899 Rust tests, up from 869**: 15 in `openbiz-skos` for the computation
+  and every refusal, 10 in the server for the report and the two integrity cases, 2 in argument
+  parsing, and 5 against the real binary on disk in separate processes — where the item's actual
+  claim lives, because "nothing in the vocabulary mentions the merged IRI" is a statement about a
+  whole graph and is asserted by reading the graph back off disk with `openbiz backup`. No new
+  dependency. UI untouched: Phase 2 is the model and the command line, which is the basis every
+  item in this phase was closed on.
+- **Recorded:** `adr/0038`. `UNTESTED.md` — **four entries opened, none closed**: the move defect
+  above; SKOS-XL labels being refused rather than reconciled, which is a product limit an ISO 25964
+  thesaurus is *more* likely to hit than the plain one; `ReferenceBound::DEFAULT` as the sixth
+  unmeasured ceiling, where the recurrence is itself the finding; and a merge now costing four
+  passes over the graph and two models, unmeasured. Two proposals, which is a change of habit after
+  five iterations of adding none — one to extend the new check to every writing path, one for
+  cross-vocabulary repointing. Iteration 37's LCGFT fixture is still unpromoted for the seventh
+  iteration.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T08:55Z at branch creation.
+- **Still uncertain:** whether refusing on a *newly broken* integrity condition is the right
+  comparison, or whether I have built something that gets steadily more permissive as a vocabulary
+  gets worse. The rule is "violated after, not violated before" — so on a vocabulary that already
+  violates S27 once, this merge will happily add a second, third and tenth S27 violation, because
+  the condition's verdict does not change. I chose the condition as the unit because the
+  alternative — counting counter-examples and refusing an increase — is a number, and a number
+  that goes up for a reason unrelated to the change is a false refusal I have no way to distinguish
+  from a true one. But the effect is that the check protects a clean vocabulary well and a dirty one
+  not at all, which is the wrong way round: the vocabulary that needs protecting from a careless
+  bulk edit is the one already in trouble. I do not know whether the fix is counter-example
+  identity (refuse a violation whose *counter-example* is new, which needs `Finding` to have a
+  stable identity it does not have today) or whether refusing on a dirty vocabulary is simply the
+  correct behaviour and "you must fix S27 before you may merge" is a reasonable thing to tell an
+  operator. I picked the permissive reading because the strict one would make the tool unable to
+  repair the mess it is being pointed at, and I am not confident that argument survives contact
+  with a real thesaurus rather than a three-concept fixture.

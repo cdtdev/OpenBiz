@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), **20 of 26 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). 26 is 23 plus the three items iteration 42 split the bulk-operations line into; the numerator went up by one because that iteration closed the first of the four. **And a vocabulary's hierarchy can now be changed, not only read**: `openbiz move` re-parents a concept and everything below it as **one** candidate that both removes and adds, because approving half of a move would leave a branch hanging off nothing — the first producer of a two-halved candidate, and what closes the "no production caller" entry the seam has carried since iteration 18 (`adr/0037`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **And the pattern is now a recorded decision rather than a reading of the vocabulary that moves as the vocabulary does**: `openbiz policy` writes one down, attributed, in the system graph and never in the vocabulary, and `openbiz mint` takes the first of `--pattern`, the record, then inference — refusing a recorded pattern it cannot parse rather than falling back to a namespace nobody chose (`adr/0036`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **21 of 26 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). 26 is 23 plus the three items iteration 42 split the bulk-operations line into; the numerator went up by one at 42 and by one at 43, which closed the second of the four. **And two concepts that should have been one can now be made one**: `openbiz merge` repoints every reference in the vocabulary — including the statements SKOS has no reading of, which is why it reads the raw graph and not the model — demotes a colliding preferred label rather than dropping it, and **refuses any change that would leave a graph failing a SKOS integrity condition that holds now**. The first working version produced a vocabulary violating S14 and S27 from ordinary input, so the check is the whole condition set run against the vocabulary the change would leave, not the subset an author would have predicted (`adr/0038`). **And a vocabulary's hierarchy can now be changed, not only read**: `openbiz move` re-parents a concept and everything below it as **one** candidate that both removes and adds, because approving half of a move would leave a branch hanging off nothing — the first producer of a two-halved candidate, and what closes the "no production caller" entry the seam has carried since iteration 18 (`adr/0037`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **And the pattern is now a recorded decision rather than a reading of the vocabulary that moves as the vocabulary does**: `openbiz policy` writes one down, attributed, in the system graph and never in the vocabulary, and `openbiz mint` takes the first of `--pattern`, the record, then inference — refusing a recorded pattern it cannot parse rather than falling back to a namespace nobody chose (`adr/0036`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -1233,7 +1233,39 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > parent and so cannot demote a top concept; a directly-stated transitive link to a
       > non-adjacent ancestor is not looked at; and the subtree count is measured on nothing
       > larger than a handful of concepts.
-- [ ] Bulk operations, part 2 — merge two concepts into one, with every reference repointed
+- [x] **Bulk operations, part 2 — merge two concepts into one, with every reference repointed**
+      > `openbiz merge <graph> <duplicate> <survivor>` computes the change and stages it as one
+      > candidate that both removes and adds; `openbiz approve` applies it. Every statement in the
+      > vocabulary mentioning the duplicate goes, and arrives repointed at the survivor —
+      > **including the statements SKOS has no reading of**, which is why this streams the raw
+      > graph past a `MergeScan` rather than reading the interpreted model. The end-to-end test
+      > proves the claim the way it has to be proved: it approves the merge, reads the whole graph
+      > back off disk with `openbiz backup`, and asserts no line mentions the merged IRI. See
+      > `adr/0038`.
+      >
+      > **The one choice it makes for you** is a colliding preferred label, which becomes an
+      > alternative one — S14 allows one per language, refusing would refuse nearly every real
+      > merge, and dropping it would lose the search term that made the duplicate findable. Every
+      > demotion is named in the report. A label the survivor already carries under any kind is
+      > left alone, because S13 forbids one literal being two kinds of label.
+      >
+      > **Refuses**: a merge into itself; either side not being a concept the vocabulary knows; a
+      > merge that would close a hierarchy cycle, checked by an *upward* walk rather than the
+      > downward one a move uses, which is a direct answer to iteration 42's closing doubt; a scan
+      > that hit its bound, because an incomplete answer cannot establish an absence; and — the
+      > decision that was not in the plan when this started — **any change that would leave a graph
+      > failing a SKOS integrity condition that holds now**. The first working version produced,
+      > from ordinary input, a vocabulary violating S14 (through SKOS-XL, which the plain-label
+      > reconciliation cannot see) and S27 (through `skos:related`, which nothing about a merge
+      > predicts). The check is therefore the *whole* condition set run against the vocabulary the
+      > change would leave, not a hand-written subset — which would have caught S14 and missed S27.
+      >
+      > **Scope, honestly:** a reference from another vocabulary is a change to that vocabulary, so
+      > it is counted and named rather than rewritten. No tombstone is left behind; the candidate is
+      > the record that the IRI existed, and deprecating in place is the separate lifecycle item.
+      > Four `UNTESTED.md` entries opened, one of them a defect in an already-checked-off item:
+      > `openbiz move` does **not** run the new integrity check and can leave an S27 violation,
+      > verified by hand.
 - [ ] Bulk operations, part 3 — split one concept into several
 - [ ] Bulk operations, part 4 — deprecate with replacement
       > Overlaps the deprecation-lifecycle item below and should be taken with it or folded into

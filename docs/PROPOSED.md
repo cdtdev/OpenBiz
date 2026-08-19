@@ -1469,3 +1469,54 @@ has. `README.md` is the right home for it and a human wrote it._
   half of. Not taken because deciding where entailment lives is a standing question and I should
   not settle it inside a documentation-properties item.
 - **Suggested phase:** Phase 2.
+
+### Check every writing path against the vocabulary it would leave, starting with `openbiz move`
+- **Status:** proposed.
+- **Gap:** iteration 43 built `openbiz_skos::newly_violated` — build the model of the vocabulary a
+  proposed change would leave, run every SKOS integrity condition, and refuse any that is violated
+  afterwards and was not before (`adr/0038` decision 5). It exists because the first working
+  version of `openbiz merge` produced, from ordinary input, a graph violating **two** of the
+  specification's own conditions, one of which (S27) no hand-written check would have predicted.
+  **`openbiz move` has the same hole and is already checked off.** Reproduced by hand at iteration
+  43 and recorded in `UNTESTED.md`: moving a concept under something it is `skos:related` to is
+  accepted, approves cleanly, and leaves `S27 VIOLATED` where it held before. `openbiz import` and
+  `openbiz retract` are the same shape — a file of statements can break any condition — and they
+  say nothing either.
+- **Why load-bearing:** "governance is the substrate" is one of the eight rows in `CLAUDE.md` §1's
+  wedge table, and an approval path that writes a graph the product's own `openbiz integrity` then
+  calls not-a-SKOS-vocabulary is the plainest possible contradiction of it. It is worse for an
+  import than for a move, because an import is the path a customer's first day runs through.
+- **Options:** (a) wire `would_break` into `relocate.rs`, then into the import and retract paths —
+  smallest, and the move half is one call plus a test. (b) Move the check into `Store::propose_edit`
+  and `propose_import`, so *no* candidate can be staged that breaks a condition — stronger, and
+  wrong as stated, because the store is engine-free by `adr/0019` and cannot read SKOS. (c) Check
+  at **approval** rather than at proposal, which is where the vocabulary actually changes and which
+  would cover a candidate raised before an unrelated edit broke something. (c) is probably the
+  right long-term answer and (a) is the right next step; they are not exclusive.
+- **Cost & impact:** (a) is small — one call, one error variant, one failing test per path. (c) is a
+  design decision about what a candidate means, and needs its own ADR: a proposal that was valid
+  when raised and is not when approved is a state the seam has never had to represent.
+- **Suggested phase:** Phase 2 for (a), because it repairs items already in it. Phase 4 (SHACL and
+  governance rules) for (c), where the same question arises for rule packs.
+
+### Repoint a merged concept's references from the vocabularies that hold them
+- **Status:** proposed.
+- **Gap:** `openbiz merge` repoints every reference **inside one vocabulary** and counts the ones
+  outside it, naming each graph and how many (`adr/0038` decision 6). It does not change them,
+  deliberately: a statement in another named graph is a change to that vocabulary, which somebody
+  else reviews. The result is honest and incomplete — after a merge, another vocabulary's
+  `skos:closeMatch` still points at an IRI that no longer denotes anything, and the only thing that
+  said so was one line of a report that has scrolled past.
+- **Why load-bearing:** `CLAUDE.md` §1.7 makes reuse and mapping outrank creation, so the product
+  actively encourages the cross-vocabulary links this then leaves dangling. The more successfully a
+  customer maps their vocabularies together, the more broken references a merge leaves behind.
+- **Options:** (a) raise one additional candidate **per affected vocabulary**, staged and
+  unapproved, so each owner reviews their own — matches the governance model exactly, and means one
+  merge can produce five candidates. (b) Record the merge in the system graph as a redirect the
+  other vocabularies' reads consult, which is a tombstone by another name and collides with the
+  deprecation-lifecycle item. (c) Report only, as now, and leave it to the deprecation lifecycle to
+  give the merged IRI a forwarding address. (a) is the one that fits the seam; (c) may be the right
+  sequencing, since a merge and a deprecation want the same answer.
+- **Cost & impact:** (a) is moderate and needs a decision the seam has not needed before — a single
+  operator action producing candidates against graphs the operator may not own.
+- **Suggested phase:** Phase 2, or alongside the deprecation-lifecycle item, which it overlaps.
