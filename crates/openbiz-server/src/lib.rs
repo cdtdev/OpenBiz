@@ -18,6 +18,7 @@ mod integrity;
 mod mappings;
 mod notes;
 mod paths;
+mod search;
 mod shutdown;
 mod sparql;
 mod tree;
@@ -35,6 +36,7 @@ pub use integrity::integrity;
 pub use mappings::mappings;
 pub use notes::notes;
 pub use paths::paths;
+pub use search::search;
 pub use shutdown::StopSignals;
 pub use tree::tree;
 

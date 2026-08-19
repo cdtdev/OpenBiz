@@ -43,6 +43,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use openbiz_skos::{LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, SearchBound};
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
     Decision, GraphId, GraphIdError, Provenance, RdfSyntax, Store, StoreError, BACKUP_SYNTAX,
@@ -109,6 +110,13 @@ pub enum Command {
         /// The IRI of the concept to walk down from.
         concept: String,
     },
+    /// Find the concepts a vocabulary labels with some text. Reads and nothing else.
+    Search {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+        /// What to look for, and how.
+        query: Box<LabelQuery>,
+    },
     /// Report what a vocabulary documents one resource with, and why. Reads and nothing else.
     Notes {
         /// The IRI of the vocabulary graph to read.
@@ -164,6 +172,8 @@ Usage:
                              report every route from <concept> up to a root, and why
   openbiz tree <graph> <concept>
                              report what is below <concept> and beside it, and why
+  openbiz search <graph> <text> [options]
+                             find the concepts <graph> labels with <text>
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -201,6 +211,19 @@ ones sharing a broader concept — our term, not one SKOS states — and everyth
 skos:narrowerTransitive, printed as an indented tree in which the indentation is the path S24
 licensed. A concept the graph places below another only transitively is a descendant and not a
 child, and the report says so rather than letting two counts disagree.
+
+Search only reads. It matches <text> against every label the vocabulary holds — preferred,
+alternative, and hidden, which SKOS §5.1 defines for exactly this — ignoring case, anywhere in the
+label, in any language. Those defaults are deliberate: a search that finds nothing is how a
+duplicate concept gets created. Narrow it with:
+  --exact                    the whole label and nothing less
+  --prefix                   the label begins with the text
+  --lang <range>             only labels whose tag the range selects (RFC 4647 basic filtering,
+                             so `en` selects `en-GB`; `*` selects every tagged label)
+  --untagged                 only labels with no language tag
+  --kind pref|alt|hidden     only this kind; repeat for more than one
+  --limit <n>                report at most n hits (default 200)
+Matching ignores case but not accents, spelling, or Unicode normalisation.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -272,6 +295,43 @@ pub enum ArgsError {
     /// An argument was not valid text.
     #[error("an argument is not valid Unicode, so it cannot be a command")]
     NotUnicode,
+    /// An option was given that the command does not have.
+    #[error("`openbiz {command}` has no option {option:?}")]
+    UnknownOption {
+        /// The command it was given to.
+        command: &'static str,
+        /// What was given.
+        option: String,
+    },
+    /// An option that takes a value was the last thing on the line.
+    #[error("{option} needs a value after it")]
+    MissingOptionValue {
+        /// The option.
+        option: &'static str,
+    },
+    /// An option's value is not one the command accepts.
+    #[error("{value:?} is not a value for {option}; expected {expected}")]
+    BadOptionValue {
+        /// The option.
+        option: &'static str,
+        /// What was given.
+        value: String,
+        /// What would have been accepted.
+        expected: &'static str,
+    },
+    /// The same narrowing was asked for twice, in two ways that disagree.
+    #[error("{option} was given after another option that contradicts it; give one or the other")]
+    ConflictingOptions {
+        /// The second of the two.
+        option: &'static str,
+    },
+    /// The options did not make a query this build can run.
+    #[error(transparent)]
+    BadQuery(
+        /// Why not.
+        #[from]
+        openbiz_skos::QueryError,
+    ),
 }
 
 impl Command {
@@ -359,6 +419,16 @@ impl Command {
                     )?,
                 },
             ),
+            "search" => {
+                let graph = Self::text("search", "the IRI of a vocabulary to read", &mut args)?;
+                let text = Self::text("search", "the text to look for", &mut args)?;
+                // The two positionals are taken before any option is read, so a search for a term
+                // that begins with a hyphen needs no escaping and is never mistaken for a flag.
+                return Ok(Self::Search {
+                    graph,
+                    query: Box::new(Self::search_query(&text, args)?),
+                });
+            }
             "integrity" => (
                 "integrity",
                 Self::Integrity {
@@ -435,6 +505,89 @@ impl Command {
             .map_err(|_| ArgsError::NotUnicode)
     }
 
+    /// Read the options `openbiz search` accepts, refusing anything it does not.
+    ///
+    /// Every option that narrows the search is refused twice over rather than taken last-wins: a
+    /// user who typed `--exact --prefix` meant one of them, and quietly obeying the second is how
+    /// a report comes back narrower than the person who ran it believes.
+    fn search_query(
+        text: &str,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<LabelQuery, ArgsError> {
+        let mut query = LabelQuery::new(text).map_err(ArgsError::BadQuery)?;
+        let mut mode: Option<MatchMode> = None;
+        let mut language: Option<LanguageFilter> = None;
+        let mut kinds: Vec<LabelKind> = Vec::new();
+        let mut limit: Option<usize> = None;
+
+        let mut args = args.map(|arg| arg.into_string()).peekable();
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            let mut value = |option: &'static str| -> Result<String, ArgsError> {
+                args.next()
+                    .ok_or(ArgsError::MissingOptionValue { option })?
+                    .map_err(|_| ArgsError::NotUnicode)
+            };
+            match arg.as_str() {
+                "--exact" => set(&mut mode, MatchMode::Exact, "--exact")?,
+                "--prefix" => set(&mut mode, MatchMode::Prefix, "--prefix")?,
+                "--infix" => set(&mut mode, MatchMode::Infix, "--infix")?,
+                "--lang" => {
+                    let range = value("--lang")?;
+                    let range = LanguageRange::parse(&range).map_err(ArgsError::BadQuery)?;
+                    set(&mut language, LanguageFilter::Range(range), "--lang")?;
+                }
+                "--untagged" => set(&mut language, LanguageFilter::Untagged, "--untagged")?,
+                "--kind" => {
+                    let kind = value("--kind")?;
+                    kinds.push(match kind.as_str() {
+                        "pref" | "preferred" | "prefLabel" => LabelKind::Preferred,
+                        "alt" | "alternative" | "altLabel" => LabelKind::Alternative,
+                        "hidden" | "hiddenLabel" => LabelKind::Hidden,
+                        other => {
+                            return Err(ArgsError::BadOptionValue {
+                                option: "--kind",
+                                value: other.to_owned(),
+                                expected: "pref, alt, or hidden",
+                            })
+                        }
+                    });
+                }
+                "--limit" => {
+                    let given = value("--limit")?;
+                    let parsed = given
+                        .parse::<usize>()
+                        .map_err(|_| ArgsError::BadOptionValue {
+                            option: "--limit",
+                            value: given.clone(),
+                            expected: "a whole number of hits",
+                        })?;
+                    set(&mut limit, parsed, "--limit")?;
+                }
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "search",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        if let Some(mode) = mode {
+            query = query.with_mode(mode);
+        }
+        if let Some(language) = language {
+            query = query.with_language(language);
+        }
+        if !kinds.is_empty() {
+            query = query.with_kinds(kinds).map_err(ArgsError::BadQuery)?;
+        }
+        if let Some(max_hits) = limit {
+            query = query.with_bound(SearchBound { max_hits });
+        }
+        Ok(query)
+    }
+
     /// Refuse anything left over rather than ignoring it.
     fn no_more(
         command: Self,
@@ -450,6 +603,20 @@ impl Command {
         }
         Ok(command)
     }
+}
+
+/// Record an option's value, refusing a second one that narrows the same thing.
+///
+/// Last-wins is the usual convention and is wrong here. `--exact --prefix` is not a user changing
+/// their mind mid-line; it is a user who does not know which of the two they asked for, and a
+/// report that silently obeys the second comes back narrower than the person reading it believes.
+/// The same applies to `--lang fr --untagged`, which asks for two disjoint sets of labels.
+fn set<T>(slot: &mut Option<T>, value: T, option: &'static str) -> Result<(), ArgsError> {
+    if slot.is_some() {
+        return Err(ArgsError::ConflictingOptions { option });
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 /// A backup or restore could not be carried out.
@@ -911,6 +1078,140 @@ mod tests {
         }
     }
 
+    /// The two positionals, and the defaults that make the command forgiving by design.
+    #[test]
+    fn search_defaults_to_the_forgiving_query() {
+        let Ok(Command::Search { graph, query }) = parse(&["search", "http://e.org/v", "bag"])
+        else {
+            panic!("search takes a graph and some text");
+        };
+        assert_eq!(graph, "http://e.org/v");
+        assert_eq!(query.text(), "bag");
+        assert_eq!(query.mode(), MatchMode::Infix);
+        assert_eq!(query.language(), &LanguageFilter::Any);
+        assert_eq!(query.kinds().len(), 3, "all three kinds, hidden included");
+        assert_eq!(query.bound(), SearchBound::DEFAULT);
+    }
+
+    /// The options are read after both positionals, so a term beginning with a hyphen needs no
+    /// escaping — `--` is a legitimate thing to look for in a notation-heavy vocabulary.
+    #[test]
+    fn a_search_term_that_looks_like_a_flag_is_still_the_term() {
+        let Ok(Command::Search { query, .. }) = parse(&["search", "http://e.org/v", "--exact"])
+        else {
+            panic!("the second positional is the text, whatever it looks like");
+        };
+        assert_eq!(query.text(), "--exact");
+        assert_eq!(
+            query.mode(),
+            MatchMode::Infix,
+            "it was the term, so it did not also set the mode"
+        );
+    }
+
+    #[test]
+    fn every_narrowing_option_is_read() {
+        let Ok(Command::Search { query, .. }) = parse(&[
+            "search",
+            "http://e.org/v",
+            "bag",
+            "--prefix",
+            "--lang",
+            "en-GB",
+            "--kind",
+            "pref",
+            "--kind",
+            "alt",
+            "--limit",
+            "5",
+        ]) else {
+            panic!("all of these are search options");
+        };
+        assert_eq!(query.mode(), MatchMode::Prefix);
+        assert_eq!(
+            query.language(),
+            &LanguageFilter::Range(LanguageRange::parse("en-GB").expect("a range"))
+        );
+        assert_eq!(
+            query.kinds().iter().copied().collect::<Vec<_>>(),
+            vec![LabelKind::Preferred, LabelKind::Alternative]
+        );
+        assert_eq!(query.bound(), SearchBound { max_hits: 5 });
+    }
+
+    /// Two options that narrow the same thing are refused rather than resolved last-wins. A user
+    /// who typed both does not know which they asked for, and a report that quietly obeys the
+    /// second is narrower than the person reading it believes.
+    #[test]
+    fn two_options_that_contradict_each_other_are_refused() {
+        for line in [
+            vec!["search", "http://e.org/v", "bag", "--exact", "--prefix"],
+            vec![
+                "search",
+                "http://e.org/v",
+                "bag",
+                "--lang",
+                "fr",
+                "--untagged",
+            ],
+            vec![
+                "search",
+                "http://e.org/v",
+                "bag",
+                "--limit",
+                "5",
+                "--limit",
+                "6",
+            ],
+        ] {
+            let error = parse(&line).expect_err("contradictory narrowing must be refused");
+            assert!(
+                matches!(error, ArgsError::ConflictingOptions { .. }),
+                "{line:?} gave {error}"
+            );
+        }
+    }
+
+    /// A search cannot be narrowed to no label kinds at all, and a malformed language range is
+    /// refused rather than kept and matched against nothing — either would report an empty search
+    /// that reads exactly like a vocabulary with no such term.
+    #[test]
+    fn a_query_that_could_never_match_is_refused_at_the_command_line() {
+        assert!(matches!(
+            parse(&["search", "http://e.org/v", ""]),
+            Err(ArgsError::BadQuery(openbiz_skos::QueryError::EmptyQuery))
+        ));
+        assert!(matches!(
+            parse(&["search", "http://e.org/v", "bag", "--lang", "en_GB"]),
+            Err(ArgsError::BadQuery(
+                openbiz_skos::QueryError::MalformedLanguageRange { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn an_option_search_does_not_have_is_refused_rather_than_ignored() {
+        let error = parse(&["search", "http://e.org/v", "bag", "--fuzzy"])
+            .expect_err("an unknown option must be refused");
+        assert!(
+            matches!(&error, ArgsError::UnknownOption { option, .. } if option == "--fuzzy"),
+            "{error}"
+        );
+
+        for option in ["--lang", "--kind", "--limit"] {
+            let error = parse(&["search", "http://e.org/v", "bag", option])
+                .expect_err("an option with no value must be refused");
+            assert!(
+                matches!(error, ArgsError::MissingOptionValue { .. }),
+                "{option} with nothing after it gave {error}"
+            );
+        }
+
+        let error = parse(&["search", "http://e.org/v", "bag", "--kind", "preffered"])
+            .expect_err("a misspelt kind must be refused");
+        assert!(matches!(error, ArgsError::BadOptionValue { .. }), "{error}");
+    }
+
     /// The failure that matters most: a typo must never silently start a server while the
     /// operator believes a backup is being taken.
     #[test]
@@ -1165,6 +1466,7 @@ mod tests {
             "ancestors",
             "paths",
             "tree",
+            "search",
             "notes",
             "mappings",
             "candidates",

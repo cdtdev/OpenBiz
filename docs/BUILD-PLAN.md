@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), **16 of 22 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split, so the denominator is unchanged and recounted rather than assumed. **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **17 of 22 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split, so the denominator is unchanged and recounted rather than assumed. **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -101,6 +101,17 @@ upwards, because S44 puts every link at both ends, so cycles are ordinary (§10.
 with them) and a mapped concept is its own exact match (Example 66, consistent, printed rather than
 hidden). `openbiz mappings <graph> <resource>` is the per-concept view, printing what one concept
 is joined to with the rule behind every link the graph did not state. See `adr/0030`.
+
+**And the vocabulary can now be asked in the only terms a subject-matter expert has.** Every
+command above starts from an IRI the asker already holds; `openbiz search <graph> <text>` starts
+from a *word*. It matches over every lexical label the vocabulary carries — preferred, alternative
+and hidden, the last because SKOS §5.1 justifies that property *in terms of* text search — with
+RFC 4647 basic filtering over languages, and every default set to the forgiving one, because
+`CLAUDE.md` §1.7's silo is created by a search that finds nothing and a person who concludes the
+concept does not exist. Narrowing is explicit and two options that narrow the same thing are
+refused rather than resolved last-wins. A label reachable only by dumbing SKOS-XL down is found and
+quotes the chain that reached it. See `adr/0034` — and note that running the command is what found
+its one real defect, a `--limit 0` that reported "nothing matched" when eight labels had.
 
 **And we now know what that costs, which changed the design of the next item before it was
 written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
@@ -1096,7 +1107,30 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > **Scope, honestly:** the defaults are reasoning and not measurement, and `scale.rs` builds
       > a chain, so it cannot generate a polyhierarchy at all — the one shape that would exercise
       > this bound is the one shape the harness cannot make. Three `UNTESTED.md` entries.
-- [ ] Full-text search across labels with language filtering and prefix/infix matching
+- [x] Full-text search across labels with language filtering and prefix/infix matching
+      > **Done at iteration 38.** `openbiz search <graph> <text>` is the first command in this
+      > build that starts from a *word* rather than an IRI, which is the only thing a
+      > subject-matter expert has when they sit down. Production caller: the command line.
+      > **Every default is the forgiving one**, because `CLAUDE.md` §1.7's silo is created by a
+      > failed search: anywhere in the label, any language, all three lexical labelling properties
+      > — `skos:hiddenLabel` included, since SKOS §5.1 defines that property *in terms of* text
+      > search. §5.1's second clause ("won't otherwise be visible") is a **display** rule and binds
+      > `display_label`, so a hit on a hidden label is reported and the concept is still named by
+      > its preferred one. Narrowing is explicit: `--exact`, `--prefix`, `--lang` (RFC 4647 basic
+      > filtering), `--untagged`, `--kind`, `--limit`. Two options that narrow the same thing are
+      > **refused**, not resolved last-wins.
+      > A label reachable only by dumbing down SKOS-XL (S55–S57) is found and quotes the rule that
+      > reached it, so an ISO 25964-shaped thesaurus is searchable on the same terms as any other.
+      > A hit that is not a concept says what it is. See `adr/0034`.
+      > **Running it found a defect the tests had not.** With `--limit 0`, eight labels matched,
+      > none were shown, and the report said "nothing matched" — a false negative in the one
+      > command whose false negatives cause duplicate concepts. What matched and what is shown are
+      > now two numbers; a failing test was written first.
+      > **Scope, honestly:** matching neither case-folds nor normalises, so `strasse` does not find
+      > `Straße` and a decomposed `é` does not find a composed one — both pinned by tests that
+      > assert the miss, both needing a dependency decision. RFC 4647 extended filtering is absent.
+      > Every search is a linear scan of a model rebuilt per request, and nothing indexes anything.
+      > Four `UNTESTED.md` entries.
 - [ ] Concept IRI minting: configurable patterns, collision detection, opaque-vs-readable policy
 - [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement
 - [ ] Deprecation lifecycle preserving history rather than deleting — auditors need the trail

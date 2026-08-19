@@ -133,6 +133,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Tree { graph, concept } => {
             one_shot(store, |store| openbiz_server::tree(store, &graph, &concept))
         }
+        Command::Search { graph, query } => {
+            one_shot(store, |store| openbiz_server::search(store, &graph, &query))
+        }
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

@@ -1965,3 +1965,66 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** the concept-tree endpoint of Phase 3, carrying the flag, with a test that
   a route through a transitive-only step survives the JSON round trip.
 - **Opened:** iteration 36
+
+### Label matching neither case-folds nor normalises, so real thesaurus labels are unfindable
+- **Kind:** partial-standard
+- **What is proven:** matching is full Unicode lowercasing on both sides (`str::to_lowercase`), not
+  ASCII, and tests cover French, Greek, and the context-sensitive final sigma. Both gaps are pinned
+  by tests that **assert the miss**, so the day either is fixed the test fails rather than the
+  ledger going stale silently.
+- **What is not:** the two misses themselves are defects for a real user. (1) No case folding:
+  `"Straße"` lowercases to itself, so `strasse` finds nothing — and German authoring conventions
+  make that the likelier spelling to be typed. In Greek, `οδόσ` does not find `ΟΔΌΣ`, because a
+  final sigma lowercases to `ς`. (2) No Unicode normalisation: composed `é` (U+00E9) and decomposed
+  `e` + U+0301 are different strings that render identically, and iteration 37's measurement of
+  AGROVOC's 1.25M SKOS-XL labels means multilingual corpora of exactly this kind are in scope. Both
+  produce a report that says "nothing matched" for a concept that exists, which is `CLAUDE.md`
+  §1.7's silo-generating failure precisely.
+- **What would close it:** a dependency decision, which is why it was not taken inside a feature —
+  `unicode-normalization` (MIT/Apache-2.0) for NFC, and a case-folding table for the other, against
+  §1.5's dependency budget. Then the two pinning tests invert.
+- **Opened:** iteration 38
+
+### RFC 4647 extended filtering is not implemented, so a narrowed language range loses script tags
+- **Kind:** partial-standard
+- **What is proven:** basic filtering (§3.3.1) against the RFC's own example shapes — `en` selects
+  `en-GB` and not `enm`; `de-DE` selects `de-DE-1996`; the wildcard selects any tag and never an
+  untagged label; a malformed range is refused rather than silently matching nothing.
+- **What is not:** extended filtering (§3.3.2). `--lang de-DE` does **not** match the tag
+  `de-Latn-DE`, because basic filtering will not skip an intermediate subtag. A user narrowing to a
+  region therefore silently loses script-tagged labels, and script subtags are ordinary in exactly
+  the multilingual vocabularies this option exists for.
+- **What would close it:** implementing §3.3.2's matching over subtag lists, and a test built from
+  the RFC's own `de-DE` / `de-Latn-DE` example.
+- **Opened:** iteration 38
+
+### `SearchBound::DEFAULT` is a judgement about a reader, measured against nothing
+- **Kind:** partial-coverage
+- **What is proven:** the bound is enforced during the scan rather than after it, so memory is
+  bounded by the ceiling and not by the match count; a test asserts the truncated list is exactly
+  the head of the list a global sort gives; and the report distinguishes what matched from what is
+  shown — including the zero case, which this iteration found reporting "nothing matched" when
+  eight labels had.
+- **What is not:** the number 200. It is reasoning about how much a person will read, not a
+  measurement of what a real query against a real thesaurus returns. Iteration 37 measured AGROVOC
+  at 41,825 concepts and 1.25M SKOS-XL labels; a two-letter infix query against that returns far
+  more than 200 and the user is told to narrow, which may be right or may be the tool refusing to
+  answer. This is the third unmeasured constant of its kind after `WalkBound::DEFAULT` and
+  `PathBound::DEFAULT`.
+- **What would close it:** the LCGFT fixture proposed at iteration 37, queried with the terms a
+  cataloguer would actually type, with the match counts recorded.
+- **Opened:** iteration 38
+
+### Every search is a linear scan of a model rebuilt per request, and nothing indexes anything
+- **Kind:** partial-coverage
+- **What is proven:** correctness at fixture scale, and that the search reports how many labels and
+  resources it read, so its cost is at least legible in its own output.
+- **What is not:** that this is affordable. `openbiz search` builds the whole `CoreModel` from the
+  store on every invocation and then walks every label of every resource — so the cost is the size
+  of the vocabulary, per query, with no index and no reuse. At AGROVOC's measured 10M triples that
+  is a full scan per keystroke for Phase 3's as-you-type search, which is the item that will make
+  this untenable rather than merely wasteful.
+- **What would close it:** a measurement first — the scan timed against a 100k-concept vocabulary —
+  and only then a decision about indexing, which is a Phase 13 concern and should not be
+  pre-empted here.
+- **Opened:** iteration 38
