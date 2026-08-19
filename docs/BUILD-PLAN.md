@@ -3,20 +3,21 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **60 of 225 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **61 of 226 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 30 of 32; the denominator moved again at
-iteration 55, which added a product-owner-authorised item on the audit trail's clock. Every count on
-this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was
-left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records
-how the denominator has moved as items were split.
+wait on authorisation, not on anything else. Phase 2 is 31 of 33; the denominator moved again at
+iteration 56, which split the discovery-on-`split` item from the recorded justification `adr/0003`
+§3 requires, because the second is a store-format decision and not a paragraph of the first. Every
+count on this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of
+what was left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also
+records how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **30 of 32**. Iteration 55 put every
-audit-trail timestamp behind one seam — UTC on write, an explicit offset required on read — and
-retyped the recorded IRI policy's stamp so the trail can be ordered in SPARQL rather than only read
-by eye (store format 5, `adr/0047`). Of the two items left, one — the candidate seam over HTTP and
-in the interface — is **blocked on authentication** (`BLOCKED.md`); the other is discovery on
-`openbiz split` plus the justification `adr/0003` §3 requires.
+**Current position:** Phase 2 (SKOS authoring model), **31 of 33**. Iteration 56 put discovery on
+the second creation path: `openbiz split` now asks what already exists under **every** part name,
+across the whole store, in one pass rather than one per name (`adr/0048`). Of the two items left,
+one — the candidate seam over HTTP and in the interface — is **blocked on authentication**
+(`BLOCKED.md`); the other is the recorded justification `adr/0003` §3 requires, which is a decision
+about the candidate record and therefore about the store format.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1273,15 +1274,51 @@ the interface is a core differentiator, and building it late means retrofitting 
       > for creating anyway beyond the note on the change that creates the concept. The report
       > states each limit in the same breath as the reach. Nothing measured at scale, and `mint`
       > now reads every vocabulary twice per run. In `docs/UNTESTED.md`.
-- [ ] Discovery on the other creation path — `openbiz split` — and a recorded justification
-      > `split` mints an IRI per `--into` and creates concepts without asking discovery anything,
-      > so §1.7 holds on one creation path and not the other. The parts of a split are exactly
-      > where a duplicate arrives under a new name.
-      > The justification `adr/0003` §3 requires is the second half: creating new when something
-      > existing would serve has to leave an auditable record naming what was found and why
-      > nothing fitted. Today the only place for it is the note on the candidate. Whether that is
-      > enough, or whether it needs a first-class object on the candidate — which would wait on
-      > the seam over HTTP, blocked on authentication — is the decision this item has to make.
+- [x] **Discovery on the other creation path — `openbiz split`** (`adr/0048`)
+      > **Split at iteration 56.** The item was two halves — the pass, and the recorded
+      > justification `adr/0003` §3 requires — and the second is a store-format decision with its
+      > own migration and fixture, which is an item and not a paragraph. This is the first half;
+      > the item below is the second.
+      > **What landed.** `openbiz split` runs a discovery pass over **every part name**, across
+      > every vocabulary in the store and every change waiting for a decision, and prints what it
+      > found above the parts. The check it had before was `already_called_that` — this graph,
+      > this exact preferred label — which is the check §1.7 exists to say is not enough: the
+      > concept a part duplicates is usually in the vocabulary the curator is not looking at, and
+      > a split is exactly where a duplicate arrives under a new name.
+      > **Several creations, one pass.** `DiscoveryProvider::search_each` is a new default method
+      > that loops, overridden by the local source to list the corpus once and answer every
+      > question from each model while it is in hand. Three parts cost one reading of the store
+      > rather than three, and the memory ceiling is unchanged. A source whose answers cannot be
+      > lined up with the labels is unavailable rather than aligned by hope, and a source that
+      > fails is unavailable to **every** label of the pass, so one part cannot report a complete
+      > search while its neighbour reports a partial one.
+      > **Answered per part, consulted once.** The question is asked under each part's own name,
+      > because "something here already exists" without saying which part is an answer nobody can
+      > act on; the record of what answered, how far it looked, and what was never asked is merged
+      > and printed once for the command.
+      > **The concept being split is not a concept to reuse.** A part named after one of the
+      > original's own labels matched it, and the reuse ladder over that match reads as "do not
+      > split this". It is now annotated as the concept being divided and the ladder is not
+      > offered over it. Found by running the command against a store, not by reasoning about it.
+      > **Scope, honestly:** nothing is refused, as on the mint path; the justification is still
+      > unrecorded and the report says so; matching is lexical; and `split` now reads the store
+      > once more than it did, unmeasured. In `docs/UNTESTED.md`.
+- [ ] The recorded justification `adr/0003` §3 requires, on the creation paths
+      > Creating new when something existing would serve has to leave an auditable record naming
+      > what was found and why nothing fitted. §3 is explicit that the justification *is* the
+      > mechanism — "not a warning dialog, those get clicked through, but an auditable record that
+      > makes proliferation visible to the people accountable for it".
+      > Today there is nowhere first-class for it. `openbiz mint` writes nothing at all, so it can
+      > only print the ladder; `openbiz split` stages a candidate whose provenance note says what
+      > the command did rather than why the concepts it found did not fit. Both reports say so
+      > rather than implying the ladder has teeth.
+      > **The decision this item has to make** is whether the record is a field on the candidate's
+      > provenance — a store format bump, a migration, a fixture, and validation on read like
+      > every other field of that record — or prose in the note. "Makes proliferation visible to
+      > the people accountable" means an auditor can ask *which concepts were created despite an
+      > existing match*, and a prose note cannot be asked that, which is the argument for the
+      > field. Against it: `mint` has no record to write to at all, so a field only covers half
+      > the creation paths, and the half it covers is the one that already has a reviewer.
 - [x] **The audit trail says which clock it is on, and its stamps are values** (`adr/0047`)
       > Added on product-owner instruction (`FEEDBACK-LOG.md`, 2026-08-20), which set the rule:
       > for anything a reader must order, an explicit offset or UTC and never a bare date.

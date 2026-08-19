@@ -28,9 +28,14 @@ const BACKUP: &str = concat!(
     "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
     "<https://example.org/thesaurus> <urn:openbiz:graphKind> \"vocabulary\" ",
     "<urn:openbiz:graph:system> .\n",
+    "<https://example.org/energy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<urn:openbiz:Graph> <urn:openbiz:graph:system> .\n",
+    "<https://example.org/energy> <urn:openbiz:graphKind> \"vocabulary\" ",
+    "<urn:openbiz:graph:system> .\n",
 );
 
 const THESAURUS: &str = "https://example.org/thesaurus";
+const ENERGY: &str = "https://example.org/energy";
 const BANKS: &str = "https://example.org/thesaurus/banks";
 const INSTITUTIONS: &str = "https://example.org/thesaurus/institutions";
 const SCHEME: &str = "https://example.org/thesaurus/scheme";
@@ -53,6 +58,15 @@ ex:banks a skos:Concept ; skos:prefLabel "Banks"@en ; skos:altLabel "Bank"@en ;
 ex:money a skos:Concept ; skos:prefLabel "Money"@en ; skos:inScheme ex:scheme .
 ex:tellers a skos:Concept ; skos:prefLabel "Tellers"@en ; skos:broader ex:banks ;
     skos:inScheme ex:scheme .
+"#;
+
+/// A second vocabulary in the same store, holding the concept a part is about to duplicate.
+///
+/// The point of the discovery pass: nothing about editing the thesaurus would ever show a curator
+/// this, and it is where the duplicate they are about to create already lives.
+const ELSEWHERE: &str = r#"
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+<https://example.org/energy/rivers> a skos:Concept ; skos:prefLabel "Banks (river)"@en .
 "#;
 
 fn run(data_dir: &Path, args: &[&str]) -> Output {
@@ -119,6 +133,63 @@ fn holds(statements: &[String], subject: &str, predicate: &str, object: &str) ->
     statements
         .iter()
         .any(|line| line.starts_with(&format!("<{subject}> <{predicate}> <{object}>")))
+}
+
+/// **`CLAUDE.md` §1.7 on the second creation path**, through the real binary.
+///
+/// A split names several new concepts at once, and until this item it asked nothing about any of
+/// them beyond the vocabulary it was editing. Here the concept a part would duplicate is in
+/// another vocabulary in the same store — the case a vocabulary-local check cannot make — and the
+/// report has to name it **above** the parts, because the right answer may be to reuse it.
+#[test]
+fn a_split_says_what_already_exists_before_it_names_the_parts() {
+    let dir = populated();
+    std::fs::write(dir.path().join("elsewhere.ttl"), ELSEWHERE).expect("write the import");
+    let imported = run(dir.path(), &["import", ENERGY, "elsewhere.ttl"]);
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    let approved = run(dir.path(), &["approve", "2"]);
+    assert!(approved.status.success(), "{}", stderr(&approved));
+
+    let proposed = run(
+        dir.path(),
+        &[
+            "split",
+            THESAURUS,
+            BANKS,
+            "--place",
+            "beside",
+            "--into",
+            "Banks (financial)",
+            "--into",
+            "Banks (river)",
+        ],
+    );
+    assert!(proposed.status.success(), "{}", stderr(&proposed));
+    let said = stdout(&proposed);
+
+    let found = said
+        .find("<https://example.org/energy/rivers>")
+        .expect("the duplicate in the other vocabulary");
+    let parts = said.find("the parts, named under").expect("the parts");
+    assert!(found < parts, "discovery precedes creation: {said}");
+    assert!(
+        said.contains("STOP — already a label on 1 other concept(s) discovery reached:"),
+        "{said}"
+    );
+    assert!(said.contains("reuse outranks creation"), "{said}");
+    // Never a bare "nothing found": the other part duplicates nothing, and the report still says
+    // how far the looking went and what was never asked.
+    assert!(
+        said.contains("nothing discovery reached is called this"),
+        "{said}"
+    );
+    assert!(
+        said.contains("no peer, no data catalog, and no public registry was consulted"),
+        "{said}"
+    );
+    // And it changed nothing: the split is still a proposal somebody can refuse.
+    let rejected = run(dir.path(), &["reject", "3"]);
+    assert!(rejected.status.success(), "{}", stderr(&rejected));
 }
 
 /// The whole item, in the order an operator walks it: propose, read, approve, and check the disk.

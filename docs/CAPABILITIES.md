@@ -244,6 +244,16 @@ normalisation. What `adr/0003` §3 calls the reuse ladder is printed when someth
 the report is honest that this build has nowhere to record a justification for creating a new
 concept anyway, except the note on the change that creates it.
 
+**`openbiz split` is the other creation path, and the same pass runs on it** — under *every* part
+name, because a split names several concepts at once and each one of them is a creation. The check
+it had before looked only in the vocabulary being edited, which is the check §1.7 exists to say is
+not enough: a term is divided because it meant two things, and one of the two very often already
+exists elsewhere under that name. The answers are given under each part's own name, the sources are
+named once for the command, and the whole thing costs **one** reading of the store however many
+parts are named. A part named after one of the original's own labels is shown and annotated as the
+concept being divided rather than offered as a concept to reuse
+([`adr/0048`](adr/0048-discovery-on-every-name-a-split-creates.md)).
+
 `mint` **reads and reserves nothing** — run it twice, get the same answer, and it says so. A number
 goes above the highest in use and never fills a gap; a slug already taken is *refused* rather than
 given a disambiguating suffix. Collisions are checked across every vocabulary in the store and every
@@ -293,7 +303,7 @@ The editorial operations all produce candidates:
 |---|---|
 | `openbiz move <graph> <concept> <to>` | Re-parents a concept **and everything below it** as *one* candidate that both removes and adds — approving half of a move would leave a branch hanging off nothing ([`adr/0037`](adr/0037-a-move-is-one-candidate-with-two-halves.md)). |
 | `openbiz merge <graph> <duplicate> <survivor>` | Repoints every reference in the vocabulary, **including statements SKOS has no reading of** (which is why it reads the raw graph, not the model), demotes a colliding preferred label rather than dropping it, and **refuses any change that would leave the graph failing an integrity condition that holds now** ([`adr/0038`](adr/0038-a-merge-is-checked-against-the-vocabulary-it-would-leave.md)). |
-| `openbiz split <graph> <concept> --into … --into …` | Creates the parts under the vocabulary's own minting policy, records with `prov:wasDerivedFrom` where each came from, and **removes nothing** — then reports every label, child, link and note still hanging off the original that only a person can apportion ([`adr/0039`](adr/0039-a-split-creates-the-parts-and-refuses-to-apportion.md)). |
+| `openbiz split <graph> <concept> --into … --into …` | Asks what already exists under every part name first, across the store ([`adr/0048`](adr/0048-discovery-on-every-name-a-split-creates.md)), then creates the parts under the vocabulary's own minting policy, records with `prov:wasDerivedFrom` where each came from, and **removes nothing** — then reports every label, child, link and note still hanging off the original that only a person can apportion ([`adr/0039`](adr/0039-a-split-creates-the-parts-and-refuses-to-apportion.md)). |
 | `openbiz deprecate <graph> <concept> [--replaced-by …]` | Retires a term **in place**: marks it `owl:deprecated`, records the successor with `dcterms:isReplacedBy`, and **deletes nothing at all**, so the IRI keeps resolving — the one thing a merge cannot offer. SKOS has no deprecation term, so both come from OWL 2 and Dublin Core rather than from anything invented here ([`adr/0040`](adr/0040-a-deprecation-retires-a-concept-and-strands-what-it-cannot-decide.md)). |
 | `openbiz reinstate <graph> <resource>` | Takes a retirement back, removing the marker and the recorded successor **together** — a current concept that records a successor is a contradiction — and keeping every `skos:changeNote`, because the retirement happened and a history tidied until it never appears is the opaque change log this product exists to replace ([`adr/0042`](adr/0042-a-reinstatement-removes-the-status-and-keeps-the-history.md)). |
 
@@ -344,8 +354,10 @@ incumbents for.
 - **No LLM assistance and no provider.** The default is, and will remain, none. Phase 10, 0 of 21.
   The *seam* it will plug into — candidates carrying provenance and reviewed before they land —
   exists today and is what everything above already writes through.
-- **No discovery.** `DiscoveryProvider` is the next Phase 2 item and is not written, so "discovery
-  before creation" is a commitment in the charter and not yet a behaviour in the product.
+- **No discovery source but the local store.** `DiscoveryProvider` exists and runs on both creation
+  paths, over every vocabulary in the store and every change waiting for a decision. No peer, data
+  catalog, or public registry has a connector — Phase 12 — and every report says so on every run
+  rather than letting "nothing found" read as "nothing exists".
 - **No SPARQL console** in the interface, though the endpoint is there.
 - **No online backup** — taking one means stopping the server.
 

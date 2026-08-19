@@ -38,6 +38,8 @@
 
 mod local;
 
+use std::collections::BTreeMap;
+
 use openbiz_skos::{LabelKind, LabelQuery, LexicalLabel, MatchQuality, Node};
 use thiserror::Error;
 
@@ -148,6 +150,28 @@ pub trait DiscoveryProvider {
     /// Returning [`Unavailable`] is a normal outcome, not an error path the caller must handle:
     /// [`Discovery::across`] records it and carries on.
     fn search(&self, query: &LabelQuery) -> Result<SourceAnswer, Unavailable>;
+
+    /// Ask this source about several labels at once, answering **one per query, in order**.
+    ///
+    /// A creation path does not always create one thing. `openbiz split` names two or more
+    /// concepts in one command, and every one of them is a creation `CLAUDE.md` §1.7 wants
+    /// discovery run in front of. Asking [`search`] once per label works and costs the whole
+    /// source once per label — for the local store that is every vocabulary re-read from disk for
+    /// each name, in front of somebody who is waiting.
+    ///
+    /// So a source that can answer many questions from one reading of itself overrides this. The
+    /// default is the honest loop, which is what a remote source with one request per query wants
+    /// anyway.
+    ///
+    /// The returned vector **must** be the same length as `queries`; an implementation that
+    /// cannot honour that should return [`Unavailable`] instead, because a caller cannot line up
+    /// answers with the labels that produced them and a match attached to the wrong name is worse
+    /// than no match at all.
+    ///
+    /// [`search`]: DiscoveryProvider::search
+    fn search_each(&self, queries: &[LabelQuery]) -> Result<Vec<SourceAnswer>, Unavailable> {
+        queries.iter().map(|query| self.search(query)).collect()
+    }
 }
 
 /// How many matches a discovery pass reports before it starts counting instead.
@@ -270,6 +294,71 @@ impl Discovered {
     pub fn bound(&self) -> DiscoveryBound {
         self.bound
     }
+
+    /// One consultation record covering several passes over the same sources.
+    ///
+    /// [`Discovery::across_each`] gives every label its own [`Discovered`], each carrying the same
+    /// sources with that label's own counts. A report about three parts of a split does not want
+    /// to say "discovery consulted 1 source" three times; it wants to say it once, for the whole
+    /// command, without losing what any single pass learned. So each source appears once, first
+    /// asked first, with its counts summed.
+    ///
+    /// **A source unavailable to any pass is unavailable here**, whatever the others said. The
+    /// alternative — a source that answered two labels out of three reported as having answered —
+    /// is the "nothing found" reading `adr/0003` §7 refuses, arrived at by averaging.
+    pub fn consulted_across(passes: &[Discovered]) -> Vec<Consulted> {
+        let mut order: Vec<String> = Vec::new();
+        let mut merged: BTreeMap<String, Outcome> = BTreeMap::new();
+
+        for pass in passes {
+            for entry in pass.consulted() {
+                let outcome = match merged.remove(&entry.source) {
+                    None => {
+                        order.push(entry.source.clone());
+                        entry.outcome.clone()
+                    }
+                    Some(existing) => merge(existing, entry.outcome.clone()),
+                };
+                merged.insert(entry.source.clone(), outcome);
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|source| {
+                merged
+                    .remove(&source)
+                    .map(|outcome| Consulted { source, outcome })
+            })
+            .collect()
+    }
+}
+
+/// Two outcomes for one source, over two labels, as one outcome for that source.
+fn merge(existing: Outcome, next: Outcome) -> Outcome {
+    match (existing, next) {
+        (
+            Outcome::Answered {
+                matched,
+                searched,
+                labels_read,
+            },
+            Outcome::Answered {
+                matched: more,
+                labels_read: read,
+                ..
+            },
+        ) => Outcome::Answered {
+            matched: matched + more,
+            // The first pass's, not the last: every pass over one source looked at the same
+            // thing, and the sentence describes the source rather than the query.
+            searched,
+            labels_read: labels_read + read,
+        },
+        // Unavailable wins, in either position and however many passes answered.
+        (Outcome::Unavailable { reason }, _) => Outcome::Unavailable { reason },
+        (_, Outcome::Unavailable { reason }) => Outcome::Unavailable { reason },
+    }
 }
 
 /// The pass itself: ask every source, rank what comes back, and account for the rest.
@@ -305,33 +394,94 @@ impl Discovery {
     /// down still gets everything the local store knows, and is told what was missing from the
     /// answer rather than being stopped.
     pub fn across(&self, sources: &[&dyn DiscoveryProvider], query: &LabelQuery) -> Discovered {
-        let mut matches = Vec::new();
-        let mut matched = 0;
-        let mut consulted = Vec::new();
+        let mut passes = self.across_each(sources, std::slice::from_ref(query));
+        match passes.pop() {
+            Some(found) => found,
+            // One query in, one pass out, by construction. Written out rather than unwrapped
+            // because `CLAUDE.md` §6 forbids the unwrap, and an empty pass is a truthful answer:
+            // nothing found, nothing consulted.
+            None => self.finish(Vec::new(), 0, Vec::new()),
+        }
+    }
+
+    /// Ask every source about several labels at once, and rank each label's answers separately.
+    ///
+    /// One [`Discovered`] per query, in the order the queries were given. Each source is asked
+    /// **once** — through [`DiscoveryProvider::search_each`] — so a source that can read itself
+    /// once and answer every question does, which is the difference between a split of three parts
+    /// costing one pass over the store and costing three.
+    ///
+    /// A source that fails, or that answers a number of questions it was not asked, is recorded as
+    /// [`Outcome::Unavailable`] against **every** query and the pass continues. Silently dropping
+    /// it from one label's consultation record and not another's would let one part of a split
+    /// report a complete search while its neighbour reported a partial one, from the same pass.
+    pub fn across_each(
+        &self,
+        sources: &[&dyn DiscoveryProvider],
+        queries: &[LabelQuery],
+    ) -> Vec<Discovered> {
+        let mut matches: Vec<Vec<Match>> = queries.iter().map(|_| Vec::new()).collect();
+        let mut matched = vec![0usize; queries.len()];
+        let mut consulted: Vec<Vec<Consulted>> = queries.iter().map(|_| Vec::new()).collect();
 
         for source in sources {
-            match source.search(query) {
-                Ok(answer) => {
-                    matched += answer.matches.len();
-                    consulted.push(Consulted {
-                        source: source.name().to_owned(),
-                        outcome: Outcome::Answered {
-                            matched: answer.matches.len(),
-                            searched: answer.searched,
-                            labels_read: answer.labels_read,
-                        },
-                    });
-                    matches.extend(answer.matches);
+            let answers = match source.search_each(queries) {
+                Ok(answers) if answers.len() == queries.len() => Ok(answers),
+                // A source that answered a different number of questions than it was asked cannot
+                // be lined up with the labels, and guessing the alignment would show a curator a
+                // match under the wrong name. That is the one failure this whole crate exists to
+                // prevent, so the source is treated as one that could not answer.
+                Ok(answers) => Err(Unavailable::because(format!(
+                    "it was asked about {} label(s) and answered {}, so its answers cannot be \
+                     told apart",
+                    queries.len(),
+                    answers.len()
+                ))),
+                Err(unavailable) => Err(unavailable),
+            };
+            match answers {
+                Ok(answers) => {
+                    for (index, answer) in answers.into_iter().enumerate() {
+                        matched[index] += answer.matches.len();
+                        consulted[index].push(Consulted {
+                            source: source.name().to_owned(),
+                            outcome: Outcome::Answered {
+                                matched: answer.matches.len(),
+                                searched: answer.searched,
+                                labels_read: answer.labels_read,
+                            },
+                        });
+                        matches[index].extend(answer.matches);
+                    }
                 }
-                Err(unavailable) => consulted.push(Consulted {
-                    source: source.name().to_owned(),
-                    outcome: Outcome::Unavailable {
-                        reason: unavailable.reason,
-                    },
-                }),
+                Err(unavailable) => {
+                    for record in consulted.iter_mut() {
+                        record.push(Consulted {
+                            source: source.name().to_owned(),
+                            outcome: Outcome::Unavailable {
+                                reason: unavailable.reason.clone(),
+                            },
+                        });
+                    }
+                }
             }
         }
 
+        matches
+            .into_iter()
+            .zip(matched)
+            .zip(consulted)
+            .map(|((matches, matched), consulted)| self.finish(matches, matched, consulted))
+            .collect()
+    }
+
+    /// Rank one query's matches, bound them, and keep the count of what the bound withheld.
+    fn finish(
+        &self,
+        mut matches: Vec<Match>,
+        matched: usize,
+        consulted: Vec<Consulted>,
+    ) -> Discovered {
         matches.sort_by(|left, right| left.key().cmp(&right.key()));
         matches.truncate(self.bound.max_matches);
 
@@ -349,7 +499,8 @@ mod tests {
     use openbiz_skos::{LabelKind, LabelQuery, LexicalLabel, MatchQuality, Node};
 
     use super::{
-        Discovery, DiscoveryBound, DiscoveryProvider, Match, Outcome, SourceAnswer, Unavailable,
+        Discovered, Discovery, DiscoveryBound, DiscoveryProvider, Match, Outcome, SourceAnswer,
+        Unavailable,
     };
 
     /// A source that answers with whatever it was built with.
@@ -404,6 +555,247 @@ mod tests {
 
     fn query() -> LabelQuery {
         LabelQuery::new("energy").expect("a query")
+    }
+
+    /// A source that answers each query with the matches whose label text is that query.
+    ///
+    /// Counts how many times it was read, which is the property `search_each` exists for.
+    struct PerLabel {
+        matches: Vec<Match>,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl DiscoveryProvider for PerLabel {
+        fn name(&self) -> &str {
+            "a source that reads itself"
+        }
+
+        fn search(&self, query: &LabelQuery) -> Result<SourceAnswer, Unavailable> {
+            self.reads.set(self.reads.get() + 1);
+            let matches: Vec<Match> = self
+                .matches
+                .iter()
+                .filter(|found| found.label.text == query.text())
+                .cloned()
+                .collect();
+            Ok(SourceAnswer {
+                labels_read: self.matches.len(),
+                matches,
+                searched: "a fixture".to_owned(),
+            })
+        }
+    }
+
+    /// Every query gets its own ranked answer, and they do not bleed into one another.
+    #[test]
+    fn a_pass_over_several_labels_answers_each_one_separately() {
+        let source = PerLabel {
+            matches: vec![
+                found("http://example.org/wind", "wind", MatchQuality::Exact, true),
+                found(
+                    "http://example.org/tidal",
+                    "tidal",
+                    MatchQuality::Exact,
+                    false,
+                ),
+            ],
+            reads: std::cell::Cell::new(0),
+        };
+        let queries = [
+            LabelQuery::new("wind").expect("a query"),
+            LabelQuery::new("tidal").expect("a query"),
+            LabelQuery::new("solar").expect("a query"),
+        ];
+
+        let passes = Discovery::new().across_each(&[&source], &queries);
+
+        assert_eq!(passes.len(), 3);
+        assert_eq!(
+            passes[0]
+                .matches()
+                .iter()
+                .map(|found| found.resource.to_string())
+                .collect::<Vec<_>>(),
+            ["<http://example.org/wind>"]
+        );
+        assert_eq!(
+            passes[1]
+                .matches()
+                .iter()
+                .map(|found| found.resource.to_string())
+                .collect::<Vec<_>>(),
+            ["<http://example.org/tidal>"]
+        );
+        assert!(passes[2].is_empty(), "nothing is called solar");
+        // Every pass says what was consulted, including the one that found nothing — a bare
+        // "nothing found" for the third label is exactly the reading that creates a duplicate.
+        for pass in &passes {
+            assert_eq!(pass.consulted().len(), 1);
+        }
+    }
+
+    /// The default `search_each` is the honest loop: a source that does not override it is asked
+    /// once per label and still lines its answers up.
+    #[test]
+    fn a_source_that_does_not_override_is_asked_once_per_label() {
+        let source = PerLabel {
+            matches: vec![found(
+                "http://example.org/wind",
+                "wind",
+                MatchQuality::Exact,
+                true,
+            )],
+            reads: std::cell::Cell::new(0),
+        };
+        let queries = [
+            LabelQuery::new("wind").expect("a query"),
+            LabelQuery::new("solar").expect("a query"),
+        ];
+
+        let passes = Discovery::new().across_each(&[&source], &queries);
+
+        assert_eq!(source.reads.get(), 2);
+        assert_eq!(passes[0].matched(), 1);
+        assert_eq!(passes[1].matched(), 0);
+    }
+
+    /// A source that answers a different number of questions than it was asked is **unavailable**,
+    /// against every query. Lining its answers up would attach a match to the wrong label.
+    #[test]
+    fn a_source_whose_answers_cannot_be_lined_up_is_unavailable_to_every_query() {
+        struct Miscounting;
+        impl DiscoveryProvider for Miscounting {
+            fn name(&self) -> &str {
+                "a miscounting source"
+            }
+            fn search(&self, _query: &LabelQuery) -> Result<SourceAnswer, Unavailable> {
+                unreachable!("search_each is overridden")
+            }
+            fn search_each(
+                &self,
+                _queries: &[LabelQuery],
+            ) -> Result<Vec<SourceAnswer>, Unavailable> {
+                Ok(vec![SourceAnswer {
+                    matches: vec![found(
+                        "http://example.org/wind",
+                        "wind",
+                        MatchQuality::Exact,
+                        true,
+                    )],
+                    searched: "a fixture".to_owned(),
+                    labels_read: 1,
+                }])
+            }
+        }
+
+        let queries = [
+            LabelQuery::new("wind").expect("a query"),
+            LabelQuery::new("solar").expect("a query"),
+        ];
+
+        let passes = Discovery::new().across_each(&[&Miscounting], &queries);
+
+        assert_eq!(passes.len(), 2);
+        for pass in &passes {
+            assert!(
+                pass.is_empty(),
+                "no match may be kept from an answer nothing can align"
+            );
+            let unavailable: Vec<_> = pass.unavailable().collect();
+            assert_eq!(unavailable.len(), 1);
+            assert!(
+                unavailable[0]
+                    .1
+                    .contains("asked about 2 label(s) and answered 1"),
+                "the reason has to say what went wrong: {}",
+                unavailable[0].1
+            );
+            assert!(
+                !unavailable[0].1.contains("  "),
+                "a line continuation ate a space: {}",
+                unavailable[0].1
+            );
+        }
+    }
+
+    /// A source that fails is unavailable to **every** label of the pass, not just the first.
+    #[test]
+    fn a_failing_source_is_unavailable_to_every_label() {
+        let queries = [
+            LabelQuery::new("wind").expect("a query"),
+            LabelQuery::new("solar").expect("a query"),
+        ];
+
+        let passes = Discovery::new().across_each(
+            &[&failing("a catalog", "the catalog is unreachable")],
+            &queries,
+        );
+
+        for pass in &passes {
+            assert_eq!(
+                pass.unavailable().collect::<Vec<_>>(),
+                [("a catalog", "the catalog is unreachable")]
+            );
+        }
+    }
+
+    /// Several passes over one source read as one consultation, with the counts summed.
+    #[test]
+    fn one_consultation_record_covers_every_label_of_a_pass() {
+        let source = PerLabel {
+            matches: vec![
+                found("http://example.org/wind", "wind", MatchQuality::Exact, true),
+                found(
+                    "http://example.org/tidal",
+                    "tidal",
+                    MatchQuality::Exact,
+                    false,
+                ),
+            ],
+            reads: std::cell::Cell::new(0),
+        };
+        let queries = [
+            LabelQuery::new("wind").expect("a query"),
+            LabelQuery::new("tidal").expect("a query"),
+        ];
+
+        let passes = Discovery::new().across_each(&[&source], &queries);
+        let merged = Discovered::consulted_across(&passes);
+
+        assert_eq!(
+            merged.len(),
+            1,
+            "one source, asked about two labels, is one source"
+        );
+        match &merged[0].outcome {
+            Outcome::Answered {
+                matched,
+                searched,
+                labels_read,
+            } => {
+                assert_eq!(*matched, 2, "one match per label, summed");
+                assert_eq!(*labels_read, 4, "two labels read, twice");
+                assert_eq!(searched, "a fixture");
+            }
+            Outcome::Unavailable { reason } => panic!("the source answered: {reason}"),
+        }
+    }
+
+    /// A source unavailable to **one** label of a pass is unavailable in the merged record, even
+    /// though it answered the others. Averaging it away is how a partial search reads as complete.
+    #[test]
+    fn a_source_unavailable_to_one_label_is_unavailable_in_the_merged_record() {
+        let answered = Discovery::new().across(&[&answering("a catalog", vec![])], &query());
+        let refused =
+            Discovery::new().across(&[&failing("a catalog", "the catalog went away")], &query());
+
+        let merged = Discovered::consulted_across(&[answered, refused]);
+
+        assert_eq!(merged.len(), 1);
+        match &merged[0].outcome {
+            Outcome::Unavailable { reason } => assert_eq!(reason, "the catalog went away"),
+            Outcome::Answered { .. } => panic!("a source that failed once has not answered"),
+        }
     }
 
     /// **`adr/0003` §7 in one test.** A source that fails does not fail the pass: what the other

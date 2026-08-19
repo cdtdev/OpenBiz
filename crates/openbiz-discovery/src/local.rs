@@ -127,15 +127,17 @@ impl<'a> LocalVocabularies<'a> {
     }
 }
 
-impl DiscoveryProvider for LocalVocabularies<'_> {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn search(&self, query: &LabelQuery) -> Result<SourceAnswer, Unavailable> {
+impl LocalVocabularies<'_> {
+    /// Read the corpus **once** and answer every query from each part while it is in hand.
+    ///
+    /// The reading is the expensive half — a part is fetched from the store, parsed into a model,
+    /// searched, and dropped — and it does not depend on the query. So a split naming three parts
+    /// pays for one pass over the store rather than three, and the memory ceiling is unchanged:
+    /// still one model at a time, whatever the number of labels.
+    fn answer(&self, queries: &[LabelQuery]) -> Result<Vec<SourceAnswer>, Unavailable> {
         let parts = self.corpus.parts()?;
-        let mut matches = Vec::new();
-        let mut labels_read = 0;
+        let mut matches: Vec<Vec<Match>> = queries.iter().map(|_| Vec::new()).collect();
+        let mut labels_read = vec![0usize; queries.len()];
         let mut vocabularies = 0;
         let mut pending = 0;
 
@@ -145,35 +147,62 @@ impl DiscoveryProvider for LocalVocabularies<'_> {
             // "nothing found" reading `adr/0003` §7 refuses — and the whole source degrading is
             // reported, so the reader knows the answer is partial.
             let model = self.corpus.model(part)?;
-            let found = model.search(query);
-            labels_read += found.labels_read();
             match part.kind {
                 PartKind::Home | PartKind::Vocabulary => vocabularies += 1,
                 PartKind::Pending => pending += 1,
             }
 
-            for hit in found.hits() {
-                matches.push(Match {
-                    source: self.name.clone(),
-                    within: part.within.clone(),
-                    home: part.is_home(),
-                    display: model
-                        .resource(&hit.resource)
-                        .and_then(Resource::display_label)
-                        .map(|label| label.text.clone()),
-                    resource: hit.resource.clone(),
-                    label: hit.label.clone(),
-                    kind: hit.best_kind(),
-                    quality: hit.quality,
-                });
+            for (index, query) in queries.iter().enumerate() {
+                let found = model.search(query);
+                labels_read[index] += found.labels_read();
+
+                for hit in found.hits() {
+                    matches[index].push(Match {
+                        source: self.name.clone(),
+                        within: part.within.clone(),
+                        home: part.is_home(),
+                        display: model
+                            .resource(&hit.resource)
+                            .and_then(Resource::display_label)
+                            .map(|label| label.text.clone()),
+                        resource: hit.resource.clone(),
+                        label: hit.label.clone(),
+                        kind: hit.best_kind(),
+                        quality: hit.quality,
+                    });
+                }
             }
         }
 
-        Ok(SourceAnswer {
-            matches,
-            searched: searched(vocabularies, pending),
-            labels_read,
+        let searched = searched(vocabularies, pending);
+        Ok(matches
+            .into_iter()
+            .zip(labels_read)
+            .map(|(matches, labels_read)| SourceAnswer {
+                matches,
+                searched: searched.clone(),
+                labels_read,
+            })
+            .collect())
+    }
+}
+
+impl DiscoveryProvider for LocalVocabularies<'_> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn search(&self, query: &LabelQuery) -> Result<SourceAnswer, Unavailable> {
+        let mut answers = self.answer(std::slice::from_ref(query))?;
+        // One query in, one answer out, by construction. Spelled out rather than unwrapped
+        // (`CLAUDE.md` §6): a source that answered nothing at all is a source that did not answer.
+        answers.pop().ok_or_else(|| {
+            Unavailable::because("the local store returned no answer to the one label it was asked")
         })
+    }
+
+    fn search_each(&self, queries: &[LabelQuery]) -> Result<Vec<SourceAnswer>, Unavailable> {
+        self.answer(queries)
     }
 }
 
@@ -460,5 +489,43 @@ mod tests {
             *corpus.read.borrow(),
             vec!["this vocabulary", "the vocabulary urn:other"]
         );
+    }
+
+    /// **The reason `search_each` exists.** Three labels asked at once cost one reading of the
+    /// store, not three — `openbiz split` names several concepts in one command and every one of
+    /// them is a creation discovery has to run in front of.
+    #[test]
+    fn several_labels_cost_one_reading_of_the_corpus() {
+        let corpus = Fixture::new()
+            .with(
+                CorpusPart::home("urn:home", "this vocabulary"),
+                vec![("urn:wind", LabelKind::Preferred, "Wind power")],
+            )
+            .with(
+                CorpusPart::elsewhere("urn:other", "the vocabulary urn:other"),
+                vec![("urn:tidal", LabelKind::Preferred, "Tidal power")],
+            );
+        let source = LocalVocabularies::named("this store", &corpus);
+        let queries = [query("Wind power"), query("Tidal power"), query("Solar")];
+
+        let answers = source.search_each(&queries).expect("an answer per label");
+
+        assert_eq!(
+            *corpus.read.borrow(),
+            vec!["this vocabulary", "the vocabulary urn:other"],
+            "three labels must not read the store three times"
+        );
+        assert_eq!(answers.len(), 3);
+        assert_eq!(answers[0].matches.len(), 1, "Wind power is at home");
+        assert!(answers[0].matches[0].home);
+        assert_eq!(answers[1].matches.len(), 1, "Tidal power is elsewhere");
+        assert!(!answers[1].matches[0].home);
+        assert!(answers[2].matches.is_empty(), "nothing is called Solar");
+        // Every answer accounts for the whole corpus: a label that found nothing still says how
+        // far the looking went, which is what stops "nothing found" reading as "nothing exists".
+        for answer in &answers {
+            assert_eq!(answer.labels_read, 2);
+            assert_eq!(answer.searched, "2 vocabularies");
+        }
     }
 }
