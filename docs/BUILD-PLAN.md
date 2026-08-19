@@ -3,20 +3,23 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **63 of 227 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **64 of 229 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
 wait on authorisation, not on anything else. Phase 2 is **33 of 34**, and the one item left is
 blocked on authentication rather than on work: the candidate seam over HTTP and in the interface.
+Phase 3 has opened at **1 of 14** — the denominator moved by two because its design-system item was
+split into three at iteration 59.
 Every count on this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory
 of what was left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which
 also records how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **33 of 34**. Iteration 58 put the record on
-the second creation path: `openbiz split … --because "…"` files one justification per part, each
-naming what that part's own name found, and every record names the candidate it arose from — so a
-split that is rejected is reported as a creation that did not happen rather than counted as
-proliferation (`adr/0050`). The one item left, the candidate seam over HTTP and in the interface,
-is **blocked on authentication** (`BLOCKED.md`), so Phase 3 — the interface — is what comes next.
+**Current position:** Phase 3 (the interface), **1 of 14**. Iteration 59 laid the design system's
+token layer: a two-layer colour, type and space vocabulary in `ui/src/design/tokens.css`, light and
+dark, with WCAG 2.2 AA contrast **computed over the shipped bytes** for every pairing the naming
+convention implies, and three system rules — no literal colour outside the palette, no unused
+swatch, no unused role — that a mutation pass confirmed all bite (`adr/0051`). The whole existing
+shell is drawn through it. Next is part 2, an explicit theme choice over the operating system's.
+Phase 2's last item stays **blocked on authentication** (`BLOCKED.md`).
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1375,7 +1378,35 @@ the interface is a core differentiator, and building it late means retrofitting 
 > Measured against: could a subject-matter expert with no RDF training make a correct first edit
 > unaided?
 
-- [ ] Design system: type scale, spacing, colour with verified contrast, motion, dark and light
+- [x] **Design system, part 1 — the token layer, and colour verified rather than claimed**
+      > Split in place at iteration 59: the item as written is five things, and "verified contrast"
+      > is the one that needs a mechanism rather than a value. `ui/src/design/tokens.css` is a
+      > two-layer token file — a raw sRGB palette, and semantic roles that may only name a palette
+      > entry — with a light theme and a dark one under `prefers-color-scheme`. Alongside it is a
+      > reader and a WCAG 2.2 contrast implementation, and a suite that computes over the bytes
+      > that ship: every foreground meets 4.5:1 against the background **its own name names**, and
+      > every border and focus ring meets 3:1, in both themes. The pairings are derived from the
+      > naming convention, so a surface added without a legible foreground fails rather than
+      > passing unnoticed. Three further rules keep it a system rather than a suggestion: no
+      > literal colour outside the palette layer, no palette swatch no role names, and no colour
+      > role no rule uses.
+      > **Production caller:** `main.tsx` imports `app.css`, which imports the tokens; the whole
+      > shell — page, panel, status callouts, list, form control, focus ring — is drawn through
+      > them, and the built CSS is embedded in the binary. See `adr/0051`.
+      > **Scope, honestly:** the arithmetic is proven and the *rendering* is not. jsdom evaluates
+      > no media query and no cascade, so nothing has seen the dark theme; and the pairing check
+      > reads token names, not which background a rule actually draws a foreground on. Both are in
+      > `UNTESTED.md` and the Playwright item below is what closes the first.
+- [ ] **Design system, part 2 — choosing a theme:** `prefers-color-scheme` is the default and an
+      explicit choice overrides it, persisted, with no flash of the wrong theme on load
+      > Split out at iteration 59. Part 1 honours the operating system and offers no way to
+      > disagree with it, which is the common case and not the whole of it.
+- [ ] **Design system, part 3 — motion:** duration and easing tokens, and `prefers-reduced-motion`
+      honoured everywhere
+      > Split out at iteration 59 and deliberately **last**. Nothing in the interface moves yet, so
+      > motion tokens today would be values with no rule using them — `CLAUDE.md` §4 counts that as
+      > undone, not as groundwork. This lands with the first thing that animates, which is the
+      > application shell above.
 - [ ] Application shell: navigation, command palette, keyboard-first interaction throughout
 - [ ] Concept tree: virtualised for 100k+ nodes, drag-to-reparent, polyhierarchy made legible
 - [ ] Concept detail: inline editing, optimistic updates, conflict detection on concurrent edit

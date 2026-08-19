@@ -84,18 +84,20 @@ export function Vocabularies() {
 
   if (registry.state === "loading") {
     return (
-      <section aria-labelledby="vocabularies-heading">
-        <h2 id="vocabularies-heading">Vocabularies</h2>
-        <p>Loading vocabularies…</p>
+      <section className="panel" aria-labelledby="vocabularies-heading">
+        <h2 className="panel__title" id="vocabularies-heading">Vocabularies</h2>
+        <p className="empty">Loading vocabularies…</p>
       </section>
     );
   }
 
   if (registry.state === "error") {
     return (
-      <section aria-labelledby="vocabularies-heading">
-        <h2 id="vocabularies-heading">Vocabularies</h2>
-        <p role="alert">Cannot list vocabularies: {registry.message}</p>
+      <section className="panel" aria-labelledby="vocabularies-heading">
+        <h2 className="panel__title" id="vocabularies-heading">Vocabularies</h2>
+        <p className="status status--error" role="alert">
+          Cannot list vocabularies: {registry.message}
+        </p>
       </section>
     );
   }
@@ -104,19 +106,22 @@ export function Vocabularies() {
   const internal = registry.data.graphs.length - vocabularies.length;
 
   return (
-    <section aria-labelledby="vocabularies-heading">
-      <h2 id="vocabularies-heading">Vocabularies</h2>
+    <section className="panel" aria-labelledby="vocabularies-heading">
+      <h2 className="panel__title" id="vocabularies-heading">Vocabularies</h2>
       {vocabularies.length === 0 ? (
-        <p>
+        <p className="empty">
           No vocabularies yet. Before creating one, OpenBiz will look for an existing vocabulary
           that already serves — reuse outranks creation.
         </p>
       ) : (
         <>
           {selected ? (
-            <p>
-              <label htmlFor="export-format">Download format</label>{" "}
+            <p className="field">
+              <label className="field__label" htmlFor="export-format">
+                Download format
+              </label>{" "}
               <select
+                className="field__control"
                 id="export-format"
                 value={selected.token}
                 onChange={(event) => setChosen(event.target.value)}
@@ -130,23 +135,26 @@ export function Vocabularies() {
             </p>
           ) : (
             formats.state === "error" && (
-              <p role="alert">Cannot offer downloads: {formats.message}</p>
+              <p className="status status--error" role="alert">
+                Cannot offer downloads: {formats.message}
+              </p>
             )
           )}
           {selected && !selected.recordsGraphNames && (
-            <p>
+            <p className="status status--warning">
               {selected.label} cannot record which graph a statement belongs to, so the file will
               not say which vocabulary it came from. Download as {lossless(available)} to keep that.
             </p>
           )}
-          <ul>
+          <ul className="list">
             {vocabularies.map((graph) => (
-              <li key={graph.iri}>
-                {graph.iri}
+              <li className="list__item" key={graph.iri}>
+                <span className="list__name">{graph.iri}</span>
                 {selected && (
                   <>
                     {" "}
                     <a
+                      className="list__action"
                       href={exportUrl(graph.iri, selected.token)}
                       aria-label={`Download ${graph.iri} as ${selected.label}`}
                     >
@@ -160,7 +168,7 @@ export function Vocabularies() {
         </>
       )}
       {internal > 0 && (
-        <p>
+        <p className="panel__note">
           {internal} further {internal === 1 ? "graph is" : "graphs are"} held for OpenBiz&rsquo;s
           own use and {internal === 1 ? "is" : "are"} not shown here.
         </p>

@@ -1,0 +1,209 @@
+/*
+ * The application's own styles. Every value here names a token; not one literal colour, size, or
+ * space appears below, and `tokens.test.ts` fails the build if one does.
+ *
+ * That rule is the whole point of the layer. A stylesheet allowed to write `#666` once will write
+ * it eleven times, and the eleventh will be in the one component nobody re-checks when the dark
+ * theme lands.
+ */
+
+@import "./design/tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* Anchored to the user's browser setting rather than pinned to 16px: a reader who has enlarged
+     their default text has told us something, and the type scale is relative so it all follows. */
+  font-size: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-on-canvas);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * One focus ring, defined once, for everything focusable.
+ *
+ * `:focus-visible` rather than `:focus` so a mouse click does not leave a ring behind, while every
+ * keyboard route keeps one — `CLAUDE.md` §4 requires anything user-facing to be keyboard-navigable,
+ * and a keyboard user who cannot see where they are has a keyboard-navigable page in name only.
+ */
+:focus-visible {
+  outline: var(--focus-width) solid var(--focus-on-canvas);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-sm);
+}
+
+.page {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-5) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.page__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.02em;
+}
+
+.page__lede {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: var(--leading-snug);
+  color: var(--color-muted-on-canvas);
+}
+
+a {
+  color: var(--color-accent-on-canvas);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+/*
+ * A status line. The tint carries the mood; the border and the wording carry the meaning, because
+ * colour alone must never be the only thing distinguishing one state from another (SC 1.4.1).
+ */
+.status {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.status--pending {
+  background: var(--color-surface);
+  border-color: var(--border-on-surface);
+  color: var(--color-muted-on-surface);
+}
+
+.status--ok {
+  background: var(--color-success);
+  border-color: var(--border-on-success);
+  color: var(--color-on-success);
+}
+
+.status--error {
+  background: var(--color-danger);
+  border-color: var(--border-on-danger);
+  color: var(--color-on-danger);
+}
+
+.status--warning {
+  background: var(--color-warning);
+  border-color: var(--border-on-warning);
+  color: var(--color-on-warning);
+}
+
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--border-on-canvas);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  color: var(--color-on-surface);
+}
+
+.panel :focus-visible {
+  outline-color: var(--focus-on-surface);
+}
+
+.panel__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.panel__note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted-on-surface);
+}
+
+.field {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.field__label {
+  font-weight: var(--weight-medium);
+  color: var(--color-on-surface);
+}
+
+.field__control {
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-on-surface);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+/* A list of things, not a list of bullets — the IRI is the content and a marker competes with it. */
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/*
+ * A hairline between rows rather than a zebra stripe. Striping would put a second background under
+ * text whose colour was chosen against the panel, and that pairing is one the naming convention
+ * cannot check — an unverifiable contrast is not worth a decorative alternation.
+ */
+.list__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-on-surface);
+}
+
+.list__item:last-child {
+  border-bottom: none;
+}
+
+.list__name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.list__action {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  color: var(--color-accent-on-surface);
+  white-space: nowrap;
+}
+
+.empty {
+  margin: 0;
+  color: var(--color-muted-on-surface);
+  font-size: var(--text-sm);
+}

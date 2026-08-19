@@ -1,0 +1,202 @@
+/*
+ * OpenBiz design tokens — the whole vocabulary the interface is allowed to speak.
+ *
+ * `CLAUDE.md` calls a dated, dense, joyless UI one of the incumbents' structural weaknesses and
+ * makes design a feature rather than a coat of paint. A coat of paint is what you get when every
+ * component picks its own grey; a system is what you get when there is exactly one place greys
+ * come from. This file is that place, and `tokens.test.ts` is what keeps it true.
+ *
+ * TWO LAYERS, and the split is load-bearing:
+ *
+ *   1. `--palette-*` — raw sRGB hex. The only literal colours in the codebase. Meaningless on
+ *      their own: `--palette-neutral-600` says nothing about where it may be used.
+ *   2. everything else — semantic roles, written only as `var(--palette-…)`. A rule names a role,
+ *      never a swatch, so the dark theme is a re-pointing of layer 2 and no component knows.
+ *
+ * The colour roles follow one naming rule, and the test derives its checks from that rule rather
+ * than from a list kept alongside it:
+ *
+ *     --color-<base>                    a background
+ *     --color-[<qualifier>-]on-<base>   text drawn on it        — WCAG 2.2 SC 1.4.3, >= 4.5:1
+ *     --border-on-<base>                a boundary drawn on it  — SC 1.4.11, >= 3:1
+ *     --focus-on-<base>                 a focus ring on it      — SC 1.4.11, >= 3:1
+ *
+ * So a background added without a legible foreground, or a foreground naming a background nobody
+ * defined, is a failing test rather than a design review someone has to remember to hold.
+ *
+ * WHAT IS DELIBERATELY ABSENT, and why the file is shorter than a design system usually is.
+ * `CLAUDE.md` §4 counts a thing nothing invokes as undone rather than as groundwork, so:
+ *
+ *   * every colour role below is used by a rule in `app.css`, and the test fails if one is not;
+ *   * every palette entry below is named by a role, and the test fails if one is not — which is
+ *     why the neutral ramp has gaps at 200, 300, 700 and 800. The numbering keeps its meaning so
+ *     those fill in unrenumbered when a component needs them;
+ *   * there is no `info` role, no filled-accent surface, and no motion token, because nothing is
+ *     yet informational, pressable, or animated. Each arrives with the first thing that needs it;
+ *     see the Phase 3 items in `BUILD-PLAN.md`.
+ *
+ * The type and spacing scales are the one exception, and deliberately so: a scale is the closed
+ * set of values a rule may choose from, and a scale with steps removed for being unpopular is no
+ * longer a scale. Its invariants — ascending, whole-pixel, on the 4px grid — are what is tested.
+ *
+ * Hex is the only colour notation here. `oklch()` would be a nicer authoring space, but the
+ * contrast check computes sRGB relative luminance from these exact bytes, and a notation it had to
+ * approximate would turn a verified number into a plausible one.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Layer 1: palette. Raw values, no meaning. ------------------------------------------- */
+
+  /* Neutrals carry a slight blue cast so they sit under the accent without going muddy. */
+  --palette-neutral-0: #ffffff;
+  --palette-neutral-50: #f6f7f9;
+  --palette-neutral-100: #eceef2;
+  --palette-neutral-400: #7e8698;
+  --palette-neutral-500: #6b7385;
+  --palette-neutral-600: #545c6c;
+  --palette-neutral-900: #171b23;
+  --palette-neutral-950: #0d1017;
+
+  --palette-accent-300: #a3b0fb;
+  --palette-accent-400: #7d8cf0;
+  --palette-accent-600: #4050c4;
+  --palette-accent-700: #2f3b93;
+
+  --palette-danger-100: #fdeaea;
+  --palette-danger-300: #f0a3a3;
+  --palette-danger-400: #c94747;
+  --palette-danger-700: #8e1f1f;
+  --palette-danger-950: #2a0f10;
+
+  --palette-warning-100: #fbf0da;
+  --palette-warning-300: #dcb469;
+  --palette-warning-400: #9e720f;
+  --palette-warning-700: #6b4d0c;
+  --palette-warning-950: #231903;
+
+  --palette-success-100: #e4f4ea;
+  --palette-success-300: #7fc79b;
+  --palette-success-400: #2f8a52;
+  --palette-success-700: #175f36;
+  --palette-success-950: #0a2114;
+
+  /* ---- Layer 2: roles. Only `var()` past this line. ---------------------------------------- */
+
+  /* The page itself, and the panels that sit on it. */
+  --color-canvas: var(--palette-neutral-50);
+  --color-on-canvas: var(--palette-neutral-900);
+  --color-muted-on-canvas: var(--palette-neutral-600);
+  --color-accent-on-canvas: var(--palette-accent-700);
+  --border-on-canvas: var(--palette-neutral-400);
+  --focus-on-canvas: var(--palette-accent-600);
+
+  --color-surface: var(--palette-neutral-0);
+  --color-on-surface: var(--palette-neutral-900);
+  --color-muted-on-surface: var(--palette-neutral-600);
+  --color-accent-on-surface: var(--palette-accent-700);
+  --border-on-surface: var(--palette-neutral-400);
+  --focus-on-surface: var(--palette-accent-600);
+
+  /* Status callouts: a tint, a legible foreground, and a boundary — so the tint is never the only
+     thing carrying the meaning. Colour alone must not distinguish one state from another
+     (WCAG 2.2 SC 1.4.1), which is why each of these also has words. */
+  --color-danger: var(--palette-danger-100);
+  --color-on-danger: var(--palette-danger-700);
+  --border-on-danger: var(--palette-danger-400);
+
+  --color-warning: var(--palette-warning-100);
+  --color-on-warning: var(--palette-warning-700);
+  --border-on-warning: var(--palette-warning-400);
+
+  --color-success: var(--palette-success-100);
+  --color-on-success: var(--palette-success-700);
+  --border-on-success: var(--palette-success-400);
+
+  /* ---- Type. Every step is a whole pixel at a 16px root, and the test says so. -------------- */
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif;
+  /* IRIs, prefixes and Turtle fragments are read character by character; they get a mono face. */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 1.875rem;
+  --text-3xl: 2.25rem;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.55;
+
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* Prose wider than this is measurably harder to return to at the start of the next line. */
+  --measure: 68ch;
+
+  /* ---- Space. A 4px grid; every step is a multiple of it. ---------------------------------- */
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* Thick enough to be seen at a glance without becoming the loudest thing on the page. */
+  --focus-width: 2px;
+  --focus-offset: 2px;
+}
+
+/*
+ * Dark. Only what differs — a token added above and forgotten here still resolves, to its light
+ * value, and the contrast check catches it there. A full second copy would turn that same slip
+ * into a *missing* token, which is easier to walk past.
+ *
+ * Not a mechanical inversion. Pure black canvas with pure white text is the most contrasty and one
+ * of the least readable combinations there is; the canvas is a very dark blue-grey and the body
+ * text stops short of white.
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --color-canvas: var(--palette-neutral-950);
+    --color-on-canvas: var(--palette-neutral-100);
+    --color-muted-on-canvas: var(--palette-neutral-400);
+    --color-accent-on-canvas: var(--palette-accent-300);
+    --border-on-canvas: var(--palette-neutral-500);
+    --focus-on-canvas: var(--palette-accent-400);
+
+    --color-surface: var(--palette-neutral-900);
+    --color-on-surface: var(--palette-neutral-100);
+    --color-muted-on-surface: var(--palette-neutral-400);
+    --color-accent-on-surface: var(--palette-accent-300);
+    --border-on-surface: var(--palette-neutral-500);
+    --focus-on-surface: var(--palette-accent-400);
+
+    --color-danger: var(--palette-danger-950);
+    --color-on-danger: var(--palette-danger-300);
+    --border-on-danger: var(--palette-danger-400);
+
+    --color-warning: var(--palette-warning-950);
+    --color-on-warning: var(--palette-warning-300);
+    --border-on-warning: var(--palette-warning-400);
+
+    --color-success: var(--palette-success-950);
+    --color-on-success: var(--palette-success-300);
+    --border-on-success: var(--palette-success-400);
+  }
+}

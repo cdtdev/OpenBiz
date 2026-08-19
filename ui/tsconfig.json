@@ -5,7 +5,11 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    // `node` for the design-token check, which reads `tokens.css` off disk: the contrast the
+    // suite verifies must be the contrast in the file that ships, and Vitest stubs CSS imports
+    // to the empty string, so `?raw` would hand it nothing and every colour assertion would
+    // pass over an empty token set.
+    "types": ["vite/client", "node"],
 
     "strict": true,
     "noUnusedLocals": true,
