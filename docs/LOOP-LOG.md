@@ -3345,3 +3345,85 @@ look competent disables the one signal that catches a stuck loop.
   for that because a flag was easy to write and easy to justify by analogy with `--from` on a move.
   That analogy may not hold: `--from` disambiguates something the *graph* is ambiguous about, and
   this disambiguates something only the human knows.
+
+## Iteration 45 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `32fb703`, tree clean, and the CI run for
+  that commit `success` — read from `gh run list` rather than from iteration 44's report of it. Both
+  human inboxes empty (`promote-queue.json` is `[]`, `feedback.md` zero bytes). Nothing to drain, so
+  nothing truncated.
+- **Took the next unblocked item.** The candidate seam over HTTP is above it in Phase 2, recorded in
+  `BLOCKED.md` on authentication, and not re-attempted. The next is **deprecate with replacement**,
+  the last of the four bulk operations — and the change the other three kept pointing at: a merge's
+  report says "deprecating a concept in place is a different change", a split's says "retiring the
+  original is a deprecation". Neither was possible until now. The plan's note said it overlaps the
+  deprecation-lifecycle item below and should be taken with it or folded in; I took the write half
+  and **narrowed the lifecycle item in place** to the read half, rather than checking off a line I
+  had only half done.
+- **What shipped.** `openbiz deprecate <graph> <concept> [--replaced-by <iri>] [--note <text>]
+  [--language <tag>]` computes the change and stages it as one additions-only candidate; `openbiz
+  approve` applies it. See `adr/0040`.
+- **The decision the item turns on is that SKOS has no term for this.** Not a gap in this build — the
+  2009 Recommendation has no status vocabulary at all — and `CLAUDE.md` §2 forbids inventing a
+  substitute. So the marker is OWL 2's `owl:deprecated "true"^^xsd:boolean` (§5.5: an annotation
+  property with **no logical consequences**, which is exactly right — a retired concept still means
+  what it meant and every inference drawn from it is still sound), the replacement is
+  `dcterms:isReplacedBy`, and the reason is a `skos:changeNote`. Only one direction of the
+  replacement is written: DCMI describes `dcterms:replaces` as the converse in prose but declares no
+  `owl:inverseOf`, so the converse would be a claim the standard does not license, asserted about a
+  *live* concept this change has no business editing.
+- **It removes nothing, and that is the operation rather than a limitation.** The end-to-end test
+  asserts it the only way it can be asserted — reads the graph off disk with `openbiz backup` before
+  and after, and requires every line the vocabulary held to still be there — because "nothing was
+  removed" is a statement about a whole graph and not about the code that computed the change. The
+  same property is what makes a **second call** work: retired when the term went out of use, given a
+  replacement months later when one is agreed, with the marker not written twice. And it is why a
+  *different* replacement is refused: changing one means retracting a published statement.
+- **A replacement is a signpost and not a rewrite, and the report says so in the same breath.** That
+  is the thing an operator is most likely to assume otherwise. Nothing is repointed; every reference
+  still resolves to the retired concept. So the report counts and names what the retirement stranded
+  — children still below it, the schemes it heads, the collections that still list it (through
+  `skos:member` *and* an ordered collection's `skos:memberList`, because checking one would miss
+  exactly the vocabularies that took the trouble to order theirs), and every statement pointing at
+  it from the raw graph — **before** the diff, the order `adr/0039` settled on for the same reason.
+- **A test failed and was right to, again.** `Stranded` counted mapping *statements*, and SKOS §10.2
+  (S42) makes `skos:exactMatch` a sub-property of `skos:closeMatch`, so a concept mapped once was
+  reported as mapped twice. It now counts distinct **resources**, which is what a reviewer decides
+  about. `openbiz split` has the identical defect and still has it: `UNTESTED.md`, not fixed here,
+  because fixing an already-checked item while passing through is what the one-item rule refuses —
+  the same call iteration 44 made about `openbiz move`.
+- **One shared change outside the item, stated rather than slipped in.** `Statement`'s human-readable
+  form learned `prov`, `owl` and `dcterms`, because this command's diff otherwise printed
+  `skos:changeNote` beside a forty-character IRI for the statement next to it. It changes `openbiz
+  split`'s printed diff too, in the same direction.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **985 Rust tests, up from 941**: 26 in `openbiz-skos` for the computation and
+  every refusal, 10 in the server for the report and the store, 3 in argument parsing, and 5 against
+  the real binary on disk in separate processes. No new dependency. UI untouched: Phase 2 is the
+  model and the command line, which is the basis every item in this phase was closed on.
+- **Recorded:** `adr/0040`. `UNTESTED.md` — **five entries opened, none closed**: nothing *reads*
+  `owl:deprecated`, so a retired concept still appears in every browse tree and search result, which
+  is the lifecycle item and the thing most likely to surprise an operator who has just run this; the
+  date and author live in the candidate and do not survive a vocabulary export, which is the second
+  feature now keeping governance facts where a standards-compliant reader of the export cannot see
+  them; the split mapping-count defect; `StatusBound::DEFAULT` as the sixth unmeasured constant; and
+  an eighth unmeasured cost. Two proposals — repointing references at a replacement without deleting
+  the retired IRI, which is the primitive three items have now arrived at from different directions,
+  and one measurement task to replace the eight identical "cost unmeasured" entries with numbers.
+  Iteration 37's LCGFT fixture is unpromoted for the ninth iteration.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T09:58Z at branch creation.
+- **Still uncertain:** whether shipping the write half of deprecation without the read half is a
+  coherent product or a trap. The command tells an operator their term is retired; `openbiz search`
+  then offers it as a match with no indication, and `openbiz tree` still hangs the browse tree off
+  it. I split the item that way because `adr/0040`'s central decision — a deprecation retracts
+  nothing at write time — is what *forces* the read paths to carry the status, and folding both into
+  one iteration would have meant deciding show-versus-mark-versus-hide for five commands in the same
+  breath as designing the write. But the honest description of what landed is a governance feature
+  whose effect is invisible everywhere the user actually looks, and I am not sure "it is in
+  `UNTESTED.md` and it is the next plan item" is an adequate answer to that. The alternative I did
+  not take was to ship nothing until both halves existed, which the one-item rule reads as
+  half-doing an item across two iterations, and I may have applied that rule to a case where the two
+  halves are not separable in the way the rule assumes. What would settle it is a second opinion on
+  whether a curator would rather have a retirement nothing displays than no retirement at all; I
+  cannot get one, and I picked the reading that lands a working, honest, reversible-by-addition
+  operation over the one that lands nothing.

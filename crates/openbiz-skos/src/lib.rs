@@ -6,6 +6,7 @@
 //! requirements. See `docs/COMPETITIVE.md`.
 
 mod ancestry;
+mod deprecate;
 mod equivalence;
 mod hierarchy;
 mod integrity;
@@ -32,6 +33,10 @@ mod xl;
 mod scale;
 
 pub use ancestry::Ancestry;
+pub use deprecate::{
+    Deprecation, DeprecationError, DeprecationScan, DeprecationScanBuilder, StatusBound, Stranded,
+    DCTERMS_IS_REPLACED_BY, OWL_DEPRECATED, XSD_BOOLEAN,
+};
 pub use equivalence::{EquivalenceBound, ExactMatchCluster};
 pub use hierarchy::WalkBound;
 pub use integrity::{
@@ -100,4 +105,6 @@ pub mod ns {
     pub const DCTERMS: &str = "http://purl.org/dc/terms/";
     /// The PROV-O namespace, used for the audit trail.
     pub const PROV: &str = "http://www.w3.org/ns/prov#";
+    /// The OWL 2 namespace. Used for `owl:deprecated`, which SKOS has no equivalent of.
+    pub const OWL: &str = "http://www.w3.org/2002/07/owl#";
 }
