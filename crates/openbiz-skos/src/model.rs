@@ -64,8 +64,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::ancestry::AncestryBound;
 use crate::equivalence::EquivalenceBound;
+use crate::hierarchy::WalkBound;
 use crate::integrity::{
     self, Caveat, ConditionOutcome, DeclaredRefinements, RefinementScan, RefinementScanBound,
     CONDITIONS,
@@ -2022,7 +2022,7 @@ pub struct CoreModelBuilder {
     /// `skos:broadMatch` would give a `skos:broader` with no converse and no transitive variant.
     lifted_relations: BTreeMap<SemanticRelation, BTreeMap<(Node, Node), String>>,
     notes: BTreeMap<Node, BTreeMap<Term, BTreeMap<NoteKind, NoteSource>>>,
-    ancestry_bound: AncestryBound,
+    ancestry_bound: WalkBound,
     equivalence_bound: EquivalenceBound,
     /// What the graph's own `rdfs:subPropertyOf` declarations entail. Empty unless a caller ran
     /// the first pass and handed the result to [`CoreModelBuilder::with_refinements`].
@@ -2056,10 +2056,10 @@ enum NoteSource {
 impl CoreModelBuilder {
     /// How far S27's check may walk up the hierarchy before it gives up and says so.
     ///
-    /// [`AncestryBound::DEFAULT`] unless a caller sets it. Configurable because the default is a
+    /// [`WalkBound::DEFAULT`] unless a caller sets it. Configurable because the default is a
     /// backstop against a pathological graph rather than a product limit, and because a test
     /// should be able to hit it without generating a hundred thousand concepts to do it.
-    pub fn with_ancestry_bound(mut self, bound: AncestryBound) -> Self {
+    pub fn with_ancestry_bound(mut self, bound: WalkBound) -> Self {
         self.ancestry_bound = bound;
         self
     }
@@ -2460,7 +2460,7 @@ impl CoreModelBuilder {
     ///
     /// A pair violating it in both directions (a cycle plus an associative link) is reported
     /// twice, because it is two violating pairs and not one seen twice.
-    fn check_semantic_relation_disjointness(model: &mut CoreModel, bound: AncestryBound) {
+    fn check_semantic_relation_disjointness(model: &mut CoreModel, bound: WalkBound) {
         let mut found: Vec<Finding> = Vec::new();
         {
             // The concepts the check owes an answer for, counted before it starts, so a sweep that
@@ -2478,8 +2478,7 @@ impl CoreModelBuilder {
             let mut checked = 0usize;
 
             for node in &owed {
-                let above =
-                    model.ancestry(node, AncestryBound::new(bound.max_ancestors, remaining));
+                let above = model.ancestry(node, WalkBound::new(bound.max_nodes, remaining));
                 // `ancestry` never follows more links than the bound it was handed, so this
                 // cannot go below zero. Written as a saturating subtraction rather than resting a
                 // panic in a library on that invariant holding for ever.
@@ -2519,7 +2518,7 @@ impl CoreModelBuilder {
                     });
                     break;
                 }
-                // Budget left, so it was `max_ancestors`: this one concept sits under more
+                // Budget left, so it was `max_nodes`: this one concept sits under more
                 // hierarchy than a single walk may cover, and the rest of the sweep continues.
                 found.push(Finding::AncestryBoundReached {
                     concept: (*node).clone(),
@@ -6494,9 +6493,7 @@ mod tests {
             !from_a.contains_key(&c),
             "storing the closure is what adr/0024 ruled out; the walk is what answers it"
         );
-        assert!(model
-            .ancestry(&a, crate::AncestryBound::DEFAULT)
-            .contains(&c));
+        assert!(model.ancestry(&a, crate::WalkBound::DEFAULT).contains(&c));
     }
 
     /// A blank node is a perfectly good concept, and the closure must not lose one.
@@ -6604,7 +6601,7 @@ mod tests {
     /// This is not hypothetical. `scale.rs` measured a legal 10 001-concept chain with one
     /// `skos:related` on each concept at **30.6 seconds**, against 62 ms for the same vocabulary
     /// with no associative links: the pass was 490 times the whole rest of the build, and
-    /// [`AncestryBound::DEFAULT`]'s million-link ceiling never fired once, because no *single*
+    /// [`WalkBound::DEFAULT`]'s million-link ceiling never fired once, because no *single*
     /// walk came near it. The report said the check had finished. See `docs/adr/0027`.
     ///
     /// So the budget is shared across the sweep, and this is the assertion that keeps it shared:
@@ -6616,7 +6613,7 @@ mod tests {
         const BUDGET: usize = 2_000;
 
         let mut builder =
-            CoreModel::builder().with_ancestry_bound(crate::AncestryBound::new(usize::MAX, BUDGET));
+            CoreModel::builder().with_ancestry_bound(crate::WalkBound::new(usize::MAX, BUDGET));
         for index in 1..CONCEPTS {
             builder.push(s(
                 &ex(&index.to_string()),
@@ -6673,7 +6670,7 @@ mod tests {
     #[test]
     fn an_exhausted_sweep_names_the_concepts_it_never_checked() {
         let mut builder =
-            CoreModel::builder().with_ancestry_bound(crate::AncestryBound::new(usize::MAX, 4));
+            CoreModel::builder().with_ancestry_bound(crate::WalkBound::new(usize::MAX, 4));
         for index in 1..40 {
             builder.push(s(
                 &ex(&index.to_string()),
@@ -6714,7 +6711,7 @@ mod tests {
     #[test]
     fn an_abandoned_walk_is_reported_rather_than_read_as_a_pass() {
         let (a, b, c) = (ex("A"), ex("B"), ex("C"));
-        let mut builder = CoreModel::builder().with_ancestry_bound(crate::AncestryBound::new(1, 8));
+        let mut builder = CoreModel::builder().with_ancestry_bound(crate::WalkBound::new(1, 8));
         for statement in [
             s(&a, &skos("broader"), &b),
             s(&b, &skos("broader"), &c),

@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 14 of 24 items done — 24 and not 23 because the mapping-properties item was split in two at iteration 32. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **15 of 22 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -238,6 +238,19 @@ extension point this build reads past, leaves a named condition genuinely unansw
 says which and why. A test asserts the roll-call is complete with respect to consistency — every
 inconsistent finding is attributed to a row — so a graph is consistent exactly when no row is
 violated. See `adr/0031`.
+
+**And the tree now reads downwards, which is the direction an author actually works in.**
+`openbiz tree <graph> <concept>` prints what is one `skos:narrower` link below, what shares a
+broader concept with it, and everything below it under `skos:narrowerTransitive` as an indented
+tree in which the indentation *is* the derivation S24 licensed. Three things in it are decisions
+rather than code: **a child is not a descendant one step down** — S22's entailment runs one way, so
+a stated `skos:narrowerTransitive` link makes a concept a descendant with no place in the stated
+tree, and the report names S22 when a vocabulary shows the difference; **"sibling" is our word**,
+labelled as ours, not transitive, never reflexive, and not a relation between two top concepts; and
+**a tree gives each concept one parent**, so the routes it could not show are counted and named
+after it rather than left to a reader to not notice. The bound is now `WalkBound`, because the same
+walk runs both ways — and going down its default is a ceiling an ordinary large vocabulary
+*reaches* rather than a backstop it never approaches. See `adr/0032`.
 
 ---
 
@@ -1026,7 +1039,40 @@ violated. See `adr/0031`.
       > extended thesaurus reads as five-of-sixteen unchecked; and the scan's cost is unmeasured,
       > because `scale.rs` generates no `rdfs:subPropertyOf` — the fourth dimension of the model
       > the generator does not produce.
-- [ ] Concept tree query API: children, ancestors, siblings, paths-to-root, with cycle detection
+- [x] Concept tree query API, part 1 — downwards and sideways: children, descendants, siblings
+      > **Split in place at iteration 35.** The item read "children, ancestors, siblings,
+      > paths-to-root, with cycle detection". Ancestors was already done (`adr/0025`), and what was
+      > left is two problems and not one: reaching *nodes* below and beside a concept, which is the
+      > existing walk run over the inverse property, and enumerating *routes* to a root, whose count
+      > is not linear in the hierarchy and which a cycle makes infinite. Part 2 is below.
+      > **The walk is shared and the bound is renamed.** `hierarchy.rs` holds one breadth-first
+      > traversal; `Ancestry` and `Descent` are readings of it that know which property they walked,
+      > which is what lets each cite the statement behind its conclusions. `AncestryBound` is now
+      > `WalkBound` and `max_ancestors` is `max_nodes`, because the same bound now governs a walk
+      > with no ancestors in it — and its numbers mean different things in the two directions: a
+      > backstop against a pathological graph going up, a ceiling an ordinary large vocabulary
+      > **reaches** going down.
+      > **A child is not a descendant one step down.** S22 makes `skos:narrower` a sub-property of
+      > `skos:narrowerTransitive` and entailment runs one way, so a stated transitive link makes a
+      > concept a descendant and leaves it with no place in the stated tree. `children` reads
+      > `skos:narrower`, `descent` walks `skos:narrowerTransitive`, and the report names S22 when a
+      > vocabulary shows the difference rather than letting two counts disagree in silence.
+      > **"Sibling" is our word and is labelled as ours** — not transitive, never reflexive, and not
+      > a relation between two top concepts. It emits no derivation, because no statement licenses
+      > it; what it returns is the broader concept shared, which reduces to two links the model
+      > already explains.
+      > **Production caller:** `openbiz tree <graph> <concept>`. See `adr/0032`.
+      > **Not done, and in `docs/UNTESTED.md`:** the downward walk's cost at any scale — the scale
+      > harness builds a chain, which is the one shape in which a subtree is small; and the default
+      > bound going down, which is a number nobody here has reached.
+- [ ] Concept tree query API, part 2 — every path to a root, and the cycle a path runs through
+      > What part 1 deliberately left. A breadcrumb needs *all* the routes from a concept to a top
+      > concept, not the shortest one; the count is exponential in a polyhierarchy where the count
+      > of ancestors is linear, so it needs a bound of its own with a different failure mode. And a
+      > cycle makes the number of paths infinite rather than merely large, which is why naming the
+      > cycles belongs here: part 1 shows only the cycle that runs through the concept asked about.
+      > "Root" also needs deciding rather than assuming — a concept with no broader concept is not
+      > the same set as a scheme's `skos:hasTopConcept`, and §8 relates neither to the other.
 - [ ] Full-text search across labels with language filtering and prefix/infix matching
 - [ ] Concept IRI minting: configurable patterns, collision detection, opaque-vs-readable policy
 - [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement

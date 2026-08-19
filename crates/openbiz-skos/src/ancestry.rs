@@ -1,9 +1,12 @@
-//! S24's transitive closure, answered by walking rather than by storing.
+//! S24's transitive closure upwards, answered by walking rather than by storing.
 //!
 //! §8 of the SKOS Reference (W3C Recommendation, 18 August 2009) makes
 //! `skos:broaderTransitive` and `skos:narrowerTransitive` `owl:TransitiveProperty` (S24), so a
 //! chain of `skos:broader` links entails a link from each concept to every concept above it.
 //! §8.6.6's Example 35 is the specification's own statement of that entailment.
+//!
+//! The walk itself lives in [`hierarchy`](crate::hierarchy) and is shared with the downward one
+//! in [`tree`](crate::tree); what is here is the upward reading of it.
 //!
 //! # Why this is a walk and not a table
 //!
@@ -22,7 +25,7 @@
 //!
 //! # The bound, and why an abandoned walk must not look like a finished one
 //!
-//! A walk is bounded ([`AncestryBound`]). Without one, asking §8.4's question of every concept in
+//! A walk is bounded ([`WalkBound`]). Without one, asking §8.4's question of every concept in
 //! a million-link vocabulary is a million traversals of the whole hierarchy, and the honest
 //! failure mode of an unbounded walk is a server that stops answering rather than one that says
 //! it does not know.
@@ -32,63 +35,9 @@
 //! the second answer off the first is exactly how a validator reports "consistent" for a graph it
 //! never finished checking. Every caller in this crate branches on it.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-use crate::model::{CoreModel, Derivation, Node, SkosRule};
+use crate::hierarchy::{Walk, WalkBound};
+use crate::model::{CoreModel, Derivation, Node};
 use crate::relations::SemanticRelation;
-
-/// How much of a hierarchy one walk may cover before it gives up and says so.
-///
-/// Two numbers rather than one, because they fail differently. `max_ancestors` bounds a *deep*
-/// hierarchy — the 100 000-link chain above. `max_links` bounds a *wide* one: a concept with a
-/// million `skos:broader` values has one ancestor per link and reaching them costs a million
-/// steps, so a walk bounded only by ancestors would still take a million of them before stopping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AncestryBound {
-    /// The most distinct ancestors a walk may reach.
-    pub max_ancestors: usize,
-    /// The most links **one check** may follow, reached or not.
-    ///
-    /// One check is one walk when a caller asks about one concept — `openbiz ancestors` — and it
-    /// is the *whole sweep* when a caller walks once per concept, which is what §8.4's
-    /// disjointness pass does. A sweep hands each walk what is left of this budget rather than a
-    /// fresh copy of it, and that is not a refinement: **a per-walk budget times one walk per
-    /// concept is not a bound.** Iteration 30 measured a legal 10 001-concept chain with one
-    /// `skos:related` on each concept building in **30.6 seconds** against 62 ms for the same
-    /// vocabulary without them, with this ceiling at a million and no single walk coming within
-    /// two orders of magnitude of it. See `docs/adr/0027`.
-    pub max_links: usize,
-}
-
-impl AncestryBound {
-    /// The bound every caller in this build uses unless it says otherwise.
-    ///
-    /// 100 000 ancestors and 1 000 000 links. Chosen to be far above any hierarchy a thesaurus
-    /// has and far below the point where the walk is the reason a request is slow: ISO 25964
-    /// thesauri are conventionally a handful of levels deep, and `docs/adr/0024` measured a
-    /// million *links* as already past what this build holds comfortably in memory. It is a
-    /// backstop against a pathological graph, not a product limit — a vocabulary that hits it has
-    /// a problem the report should name, which is why hitting it is a [`Finding`](crate::Finding)
-    /// rather than a silent truncation.
-    pub const DEFAULT: AncestryBound = AncestryBound {
-        max_ancestors: 100_000,
-        max_links: 1_000_000,
-    };
-
-    /// A bound of your own. Used by the tests to hit it without generating 100 000 concepts.
-    pub fn new(max_ancestors: usize, max_links: usize) -> Self {
-        AncestryBound {
-            max_ancestors,
-            max_links,
-        }
-    }
-}
-
-impl Default for AncestryBound {
-    fn default() -> Self {
-        AncestryBound::DEFAULT
-    }
-}
 
 /// Everything above one concept in the hierarchy, and the path that reached each of them.
 ///
@@ -102,21 +51,12 @@ impl Default for AncestryBound {
 /// consistent by the specification, and in both the origin does come back as its own ancestor —
 /// legitimately, with a path that names the cycle. Nothing here treats that as a defect.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ancestry {
-    origin: Node,
-    /// Each ancestor, and the concept the walk stepped from to reach it — one step closer to the
-    /// origin. A predecessor map rather than a stored path per ancestor: the paths of *n*
-    /// ancestors share their prefixes, so keeping one node each is the difference between memory
-    /// proportional to the hierarchy and memory proportional to the hierarchy times its depth.
-    reached: BTreeMap<Node, Node>,
-    links_walked: usize,
-    complete: bool,
-}
+pub struct Ancestry(Walk);
 
 impl Ancestry {
     /// The concept the walk started from.
     pub fn origin(&self) -> &Node {
-        &self.origin
+        self.0.origin()
     }
 
     /// Whether the walk ran out of ancestors rather than out of budget.
@@ -124,22 +64,22 @@ impl Ancestry {
     /// `false` means the answer is a lower bound and nothing may be concluded from an *absence*
     /// in it. Never ignore this: see the module note.
     pub fn is_complete(&self) -> bool {
-        self.complete
+        self.0.is_complete()
     }
 
     /// How many ancestors were reached.
     pub fn len(&self) -> usize {
-        self.reached.len()
+        self.0.len()
     }
 
     /// Whether nothing above the origin was reached.
     pub fn is_empty(&self) -> bool {
-        self.reached.is_empty()
+        self.0.is_empty()
     }
 
     /// How many links the walk followed. Reported so a bound that was hit says which one.
     pub fn links_walked(&self) -> usize {
-        self.links_walked
+        self.0.links_walked()
     }
 
     /// Whether `node` is above the origin.
@@ -147,12 +87,12 @@ impl Ancestry {
     /// A `false` from an incomplete walk means "not found within the bound", not "not an
     /// ancestor".
     pub fn contains(&self, node: &Node) -> bool {
-        self.reached.contains_key(node)
+        self.0.contains(node)
     }
 
     /// Every ancestor reached, in a stable order.
     pub fn ancestors(&self) -> impl Iterator<Item = &Node> {
-        self.reached.keys()
+        self.0.reached()
     }
 
     /// The path the walk took from the origin to `node`, origin first and `node` last.
@@ -161,24 +101,7 @@ impl Ancestry {
     /// the route through their hierarchy. A concept reachable by two routes (§8.6.9's Examples 38
     /// and 39, both consistent) gets one of them, and the model does not claim it is the only one.
     pub fn path_to(&self, node: &Node) -> Option<Vec<Node>> {
-        if !self.reached.contains_key(node) {
-            return None;
-        }
-        let mut path = vec![node.clone()];
-        let mut current = node;
-        // Bounded by the number of reached nodes: the predecessor map is a breadth-first tree
-        // rooted at the origin, so walking it back terminates. The counter is belt and braces —
-        // a loop here would hang a report rather than print a wrong one, and that is worse.
-        for _ in 0..=self.reached.len() {
-            let previous = self.reached.get(current)?;
-            path.push(previous.clone());
-            if *previous == self.origin {
-                path.reverse();
-                return Some(path);
-            }
-            current = previous;
-        }
-        None
+        self.0.path_to(node)
     }
 
     /// Why `node` is above the origin, as the derivation `CLAUDE.md` §3 requires.
@@ -188,90 +111,30 @@ impl Ancestry {
     /// [`CoreModel::derivations`], and repeating them here would credit S24 with a conclusion it
     /// did not add. What this returns is precisely what the transitivity licensed.
     pub fn derivation_to(&self, node: &Node) -> Option<Derivation> {
-        let path = self.path_to(node)?;
-        if path.len() < 3 {
-            return None;
-        }
-        let premise = path
-            .windows(2)
-            .map(|step| format!("{} skos:broaderTransitive {}", step[0], step[1]))
-            .collect::<Vec<_>>()
-            .join(", ");
-        Some(Derivation {
-            conclusion: format!("{} skos:broaderTransitive {node}", self.origin),
-            premise,
-            rule: SkosRule::S24.into(),
-        })
+        self.0
+            .derivation_to(node, SemanticRelation::BroaderTransitive)
     }
 }
 
 impl CoreModel {
     /// Walk `skos:broaderTransitive` upwards from `concept` and report what is above it.
     ///
-    /// This is S24 and it is the only place in the build that applies it. Nothing is written back
-    /// into the model: [`Resource::relations`](crate::Resource::relations) keeps meaning "links
-    /// under this property" and never "ancestors", permanently and by design
-    /// (`docs/adr/0024`, `docs/adr/0025`).
+    /// Nothing is written back into the model; the walk and its bound are
+    /// [`hierarchy`](crate::hierarchy)'s, and the mirror of this — everything *below* a concept —
+    /// is [`CoreModel::descent`].
     ///
     /// Terminates on a cyclic hierarchy. §8.6.8 is explicit that a cycle is consistent with the
     /// SKOS data model, so a walk that hung on one would refuse to read a legal vocabulary; the
     /// cycle comes back as the origin being its own ancestor, with a path that names it.
-    ///
-    /// The mirror walk — descendants, down `skos:narrowerTransitive` — is deliberately **not**
-    /// here. It is the same function with the inverse property and it has no caller, which
-    /// `CLAUDE.md` §4 calls not-done rather than ahead. It arrives with the concept-tree item
-    /// that needs it.
-    pub fn ancestry(&self, concept: &Node, bound: AncestryBound) -> Ancestry {
-        let mut ancestry = Ancestry {
-            origin: concept.clone(),
-            reached: BTreeMap::new(),
-            links_walked: 0,
-            complete: true,
-        };
-
-        let mut expanded: BTreeSet<Node> = BTreeSet::new();
-        let mut queue: VecDeque<Node> = VecDeque::new();
-        queue.push_back(concept.clone());
-
-        while let Some(current) = queue.pop_front() {
-            // The origin can be reached again through a cycle. It is recorded as an ancestor when
-            // that happens — §8.6.8 says the graph is consistent and the fact is true — but its
-            // links are followed once, or the walk would go round for ever.
-            if !expanded.insert(current.clone()) {
-                continue;
-            }
-            let Some(links) = self
-                .resource(&current)
-                .and_then(|resource| resource.relations(SemanticRelation::BroaderTransitive))
-            else {
-                continue;
-            };
-            for above in links.keys() {
-                if ancestry.links_walked >= bound.max_links {
-                    ancestry.complete = false;
-                    return ancestry;
-                }
-                ancestry.links_walked += 1;
-                if ancestry.reached.contains_key(above) {
-                    continue;
-                }
-                if ancestry.reached.len() >= bound.max_ancestors {
-                    ancestry.complete = false;
-                    return ancestry;
-                }
-                ancestry.reached.insert(above.clone(), current.clone());
-                queue.push_back(above.clone());
-            }
-        }
-
-        ancestry
+    pub fn ancestry(&self, concept: &Node, bound: WalkBound) -> Ancestry {
+        Ancestry(self.walk(concept, SemanticRelation::BroaderTransitive, bound))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Statement;
+    use crate::model::{SkosRule, Statement};
     use crate::ns;
 
     fn ex(name: &str) -> Node {
@@ -294,7 +157,7 @@ mod tests {
         let model =
             CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
 
-        let above = model.ancestry(&a, AncestryBound::DEFAULT);
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
         assert!(above.is_complete());
         assert_eq!(above.len(), 2);
         assert!(above.contains(&b) && above.contains(&c));
@@ -322,8 +185,8 @@ mod tests {
         let model =
             CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
 
-        assert!(model.ancestry(&c, AncestryBound::DEFAULT).is_empty());
-        assert_eq!(model.ancestry(&b, AncestryBound::DEFAULT).len(), 1);
+        assert!(model.ancestry(&c, WalkBound::DEFAULT).is_empty());
+        assert_eq!(model.ancestry(&b, WalkBound::DEFAULT).len(), 1);
     }
 
     /// §8.6.8, Example 37 — a cycle is **consistent** with the SKOS data model. The walk must
@@ -334,7 +197,7 @@ mod tests {
         let model =
             CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &a)]);
 
-        let above = model.ancestry(&a, AncestryBound::DEFAULT);
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
         assert!(above.is_complete(), "a cycle is not a bound being hit");
         assert!(above.contains(&a), "the cycle makes A its own ancestor");
         assert!(above.contains(&b));
@@ -359,7 +222,7 @@ mod tests {
         let a = ex("A");
         let model = CoreModel::from_statements([s(&a, &skos("broader"), &a)]);
 
-        let above = model.ancestry(&a, AncestryBound::DEFAULT);
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
         assert!(above.contains(&a));
         assert_eq!(above.path_to(&a), Some(vec![a.clone(), a.clone()]));
         assert_eq!(above.derivation_to(&a), None);
@@ -376,7 +239,7 @@ mod tests {
             s(&b, &skos("broader"), &c),
         ]);
 
-        let above = model.ancestry(&a, AncestryBound::DEFAULT);
+        let above = model.ancestry(&a, WalkBound::DEFAULT);
         assert_eq!(above.len(), 2);
         assert_eq!(above.path_to(&c), Some(vec![a.clone(), c.clone()]));
         assert!(model.findings().is_empty(), "{:?}", model.findings());
@@ -390,24 +253,24 @@ mod tests {
         let model =
             CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
 
-        let bounded = model.ancestry(&a, AncestryBound::new(1, usize::MAX));
+        let bounded = model.ancestry(&a, WalkBound::new(1, usize::MAX));
         assert!(!bounded.is_complete());
         assert_eq!(bounded.len(), 1);
         assert!(!bounded.contains(&c), "the walk never got there");
 
-        let by_links = model.ancestry(&a, AncestryBound::new(usize::MAX, 1));
+        let by_links = model.ancestry(&a, WalkBound::new(usize::MAX, 1));
         assert!(!by_links.is_complete());
         assert_eq!(by_links.links_walked(), 1);
 
         // And the same walk with room finishes, so the difference is the bound and not the graph.
-        assert!(model.ancestry(&a, AncestryBound::new(2, 2)).is_complete());
+        assert!(model.ancestry(&a, WalkBound::new(2, 2)).is_complete());
     }
 
     /// A concept nothing in the graph mentions has no ancestors, and asking is not an error.
     #[test]
     fn a_concept_the_graph_never_mentions_has_no_ancestors() {
         let model = CoreModel::from_statements([]);
-        let above = model.ancestry(&ex("A"), AncestryBound::DEFAULT);
+        let above = model.ancestry(&ex("A"), WalkBound::DEFAULT);
         assert!(above.is_complete() && above.is_empty());
         assert_eq!(above.path_to(&ex("B")), None);
         assert_eq!(above.derivation_to(&ex("B")), None);
@@ -423,13 +286,13 @@ mod tests {
             s(&c, &skos("narrower"), &b),
             s(&b, &skos("narrower"), &a),
         ]);
-        assert_eq!(downwards.ancestry(&a, AncestryBound::DEFAULT).len(), 2);
+        assert_eq!(downwards.ancestry(&a, WalkBound::DEFAULT).len(), 2);
 
         let transitively = CoreModel::from_statements([
             s(&a, &skos("broaderTransitive"), &b),
             s(&b, &skos("broaderTransitive"), &c),
         ]);
-        let above = transitively.ancestry(&a, AncestryBound::DEFAULT);
+        let above = transitively.ancestry(&a, WalkBound::DEFAULT);
         assert!(above.contains(&c), "S24 closes stated transitive links too");
     }
 
@@ -441,7 +304,7 @@ mod tests {
             CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
 
         assert_eq!(
-            model.ancestry(&a, AncestryBound::DEFAULT).path_to(&c),
+            model.ancestry(&a, WalkBound::DEFAULT).path_to(&c),
             Some(vec![a, b, c])
         );
     }
@@ -454,6 +317,6 @@ mod tests {
         let model =
             CoreModel::from_statements([s(&a, &skos("related"), &b), s(&b, &skos("related"), &c)]);
 
-        assert!(model.ancestry(&a, AncestryBound::DEFAULT).is_empty());
+        assert!(model.ancestry(&a, WalkBound::DEFAULT).is_empty());
     }
 }

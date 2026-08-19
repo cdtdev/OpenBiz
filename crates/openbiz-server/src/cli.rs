@@ -95,6 +95,13 @@ pub enum Command {
         /// The IRI of the concept to walk up from.
         concept: String,
     },
+    /// Report what is below one concept and beside it, and why. Reads and nothing else.
+    Tree {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+        /// The IRI of the concept to walk down from.
+        concept: String,
+    },
     /// Report what a vocabulary documents one resource with, and why. Reads and nothing else.
     Notes {
         /// The IRI of the vocabulary graph to read.
@@ -146,6 +153,8 @@ Usage:
   openbiz integrity <graph>  report which SKOS integrity conditions <graph> satisfies
   openbiz ancestors <graph> <concept>
                              report what is above <concept> in the hierarchy, and why
+  openbiz tree <graph> <concept>
+                             report what is below <concept> and beside it, and why
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -169,6 +178,12 @@ Ancestors only reads. It walks `skos:broaderTransitive` up from one concept and 
 concept above it with the path that reached it, which for a link nobody stated is the derivation
 S24 licensed. The closure is never stored — a legal SKOS hierarchy can be arbitrarily deep, and a
 cycle in it is legal too — so this walks it on demand and says so if it stops at its bound.
+
+Tree only reads. It is ancestors turned round: the concepts one skos:narrower link below, the
+ones sharing a broader concept — our term, not one SKOS states — and everything below under
+skos:narrowerTransitive, printed as an indented tree in which the indentation is the path S24
+licensed. A concept the graph places below another only transitively is a descendant and not a
+child, and the report says so rather than letting two counts disagree.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -301,6 +316,17 @@ impl Command {
                     concept: Self::text(
                         "ancestors",
                         "the IRI of a concept to walk up from",
+                        &mut args,
+                    )?,
+                },
+            ),
+            "tree" => (
+                "tree",
+                Self::Tree {
+                    graph: Self::text("tree", "the IRI of a vocabulary to read", &mut args)?,
+                    concept: Self::text(
+                        "tree",
+                        "the IRI of a concept to walk down from",
                         &mut args,
                     )?,
                 },
@@ -1109,6 +1135,7 @@ mod tests {
             "inspect",
             "integrity",
             "ancestors",
+            "tree",
             "notes",
             "mappings",
             "candidates",

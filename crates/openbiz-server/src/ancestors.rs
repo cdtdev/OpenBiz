@@ -21,7 +21,7 @@
 //! Phase 3's item, and shipping an endpoint now with no interface behind it would be a caller
 //! with nothing behind it.
 
-use openbiz_skos::{Ancestry, AncestryBound, CoreModel, Node, Resource};
+use openbiz_skos::{Ancestry, CoreModel, Node, Resource, WalkBound};
 use openbiz_store::Store;
 
 use crate::cli::CommandError;
@@ -52,7 +52,7 @@ pub fn ancestors(store: &Store, graph: &str, concept: &str) -> Result<String, Co
         &node,
         resource,
         &model,
-        model.ancestry(&node, AncestryBound::DEFAULT),
+        model.ancestry(&node, WalkBound::DEFAULT),
     ))
 }
 
