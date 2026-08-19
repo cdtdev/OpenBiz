@@ -2820,3 +2820,55 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** the store-scale spike `adr/0013` and `adr/0024` already build, with a
   store carrying policies for 1k and 10k vocabularies, and the migration's wall-clock recorded.
 - **Opened:** iteration 55
+
+### `openbiz split` now reads the whole store a third time, and nothing has measured any of them
+- **Kind:** unmeasured-scale
+- **What is proven:** the discovery pass is **one** reading of the store however many parts a split
+  names — `LocalVocabularies::search_each` lists the corpus once, builds each model once, and runs
+  every part's query against it while it is in hand. A test pins that three labels read a two-part
+  corpus twice and not six times, and it fails if the override is removed.
+- **What is not:** what any of it costs. `openbiz split` already read every vocabulary and every
+  pending change for the IRI scan, and the vocabulary being split for the model; this adds a third
+  full pass, on a path where a person is waiting. `adr/0003` names discovery latency as its own risk
+  and says to search asynchronously; this is synchronous, on a store of unknown size, with no number
+  against it. It is the same entry `openbiz mint` opened at iteration 54, one path further along, and
+  it is the **ninth** in the unmeasured-scale family.
+- **What would close it:** the store-scale spike `adr/0013` and `adr/0024` already build, with a
+  split of three parts against a store of 100k concepts across 40 vocabularies, and the wall-clock of
+  each of the three passes recorded separately — because the answer may be to merge them rather than
+  to make one faster.
+- **Opened:** iteration 56
+
+### The degraded path in `openbiz split`'s discovery section has no production caller
+- **Kind:** partial-coverage
+- **What is proven:** when a source is unavailable, the section falls back to checking the
+  vocabulary being edited directly, and says that is one vocabulary and not the store. Two unit
+  tests drive it — one where the direct check finds a duplicate, one where it finds nothing — by
+  handing `discovered()` a pass built from a provider that refuses.
+- **What is not:** that anything reaches it in production. The only source this build has is the
+  local store, and by the time the section runs the command has already read that store
+  successfully twice; a corpus failure between those reads is possible and has never been observed.
+  The same is true of the branch for a part name discovery could not be asked about: the split
+  refuses a blank label a few lines later, so nothing prints it. Both are kept rather than deleted
+  because the alternatives are a second copy of the domain's blank-label rule and a list whose
+  entries stop lining up with the parts — but they are code without a caller and they are recorded
+  here as such.
+- **What would close it:** the first source that can genuinely fail — a peer, a catalog, a registry
+  (Phase 12) — at which point the degraded path becomes ordinary rather than defensive.
+- **Opened:** iteration 56
+
+### The reuse ladder is printed and still records nothing
+- **Kind:** partial-standard
+- **What is proven:** both creation paths print `adr/0003` §3's ladder when something is found, in
+  the same words, from one shared constant — and both say in as many words that nothing here records
+  a justification for creating anyway.
+- **What is not:** §3 itself. Its sentence is that the justification *is* the mechanism, "not a
+  warning dialog — those get clicked through — but an auditable record that makes proliferation
+  visible to the people accountable for it". A printed ladder is precisely the warning dialog. Today
+  a curator can read "STOP — already a label on 1 other concept", approve the split, and leave behind
+  a candidate whose note says what the command did and nothing about why the concept it found did not
+  fit. Nothing can be asked which concepts were created despite a match.
+- **What would close it:** the next plan item, which has to decide whether the record is a field on
+  the candidate's provenance — a store format bump, a migration, a fixture, and validation on read
+  like every other field of that record — or prose in the note.
+- **Opened:** iteration 56

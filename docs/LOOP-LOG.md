@@ -4183,3 +4183,67 @@ look competent disables the one signal that catches a stuck loop.
   data point each way in a single iteration. What I cannot tell from here is whether "no unusual
   tests" is a standard worth keeping or the reason this loop keeps rediscovering its own defects, and
   it is not a question a fixture can answer.
+
+## Iteration 56 — 2026-08-20 (NZST, UTC+12)
+- **Clean start, verified rather than assumed.** `main` at `7c67771`, tree clean, and the CI run for
+  that exact commit was `success` — read from `gh run list --branch main`. Both human inboxes empty:
+  `promote-queue.json` is `[]` and `feedback.md` is zero bytes, so nothing to drain. Iteration 37's
+  LCGFT fixture is unpromoted for the twentieth iteration.
+- **The item was two items, and I split it in place rather than half-doing both.** "Discovery on the
+  other creation path — `openbiz split` — and a recorded justification" is a discovery pass and a
+  store-format decision. The second needs a field on the candidate record, a format bump, a
+  migration, a fixture and validation on read; that is an item, not a paragraph of another one. So
+  Phase 2 is now 31 of 33 rather than 30 of 32, and the second half is written out with the decision
+  it has to make stated rather than left to be rediscovered.
+- **What `split` had was exactly the check §1.7 exists to say is not enough.** `already_called_that`:
+  this graph, this exact preferred label. A term is divided *because* it meant two things, and one of
+  the two very often already exists elsewhere under that name — so the parts of a split are precisely
+  where a duplicate arrives, and the command was looking in the one place it would not be.
+- **The obvious implementation would have been three readings of the store for three parts.**
+  `Discovery::across` takes one query, and a pass over the local source reads every vocabulary and
+  every pending change from disk. The reading is the expensive half and it does not depend on the
+  query, so the trait grew `search_each` — a default method that loops, which is right for a remote
+  source with one request per query, overridden by the local one to list the corpus once and answer
+  every question from each model while it is in hand. Three part names now cost one pass. Pinned by a
+  test that fails when the override is removed, checked by actually removing it.
+- **A source whose answers cannot be lined up is unavailable, not aligned by position and hope.** An
+  implementation returning a different number of answers than questions is treated as one that could
+  not answer, because a match shown under the wrong part name is the failure the whole crate exists
+  to prevent. Same rule for a source that fails: unavailable against *every* label of the pass, so
+  one part cannot report a complete search while its neighbour reports a partial one, from one pass.
+- **A real defect, found by running the binary rather than by reasoning.** Splitting "Banks" into a
+  part called "Bank" reported `<banks>` — the concept being split — as an existing concept, under a
+  STOP, with the reuse ladder over it. The ladder says "use one of these as it stands", which here
+  reads as "do not split this": the opposite of the right advice, printed at the top of the report in
+  the loudest available voice. The match is still shown, because a part taking a label the original
+  carries is worth noticing, but it is annotated as the concept being divided, it does not count
+  toward "something was found", and the ladder is not offered over it. Two iterations running, the
+  bug that mattered most was in the report and only visible by reading the report.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and never
+  through a pipe. **1171 Rust tests, 0 failed**, up from 1154: seventeen new — seven in
+  `openbiz-discovery`, nine in `openbiz-server`, one end to end. UI untouched, so no npm run. No new
+  dependency, no new crate, no build artefact.
+- **Mutation-checked, not just green.** Three reversions, each run: making the self-match check
+  always false fails the concept-being-split test; deleting the `search_each` override fails the
+  one-reading test; removing the pass entirely fails six.
+- **Recorded:** `adr/0048`. Three `UNTESTED.md` entries, and they are the honest half. `split` now
+  reads the whole store a **third** time on a path where a person is waiting, unmeasured — the ninth
+  entry in the unmeasured-scale family. The degraded path (a source unavailable, so the vocabulary is
+  checked directly) and the blank-name branch both have **no production caller**: the only source
+  this build has is a store the command has already read twice, and the split refuses a blank label a
+  few lines later. And the ladder is printed and still records nothing, which is §3's own sentence
+  turned against us — "not a warning dialog, those get clicked through" is exactly what a printed
+  ladder is. `CAPABILITIES.md` also lost a stale claim that discovery does not exist, two iterations
+  after it shipped. `BUILD-PLAN.md` updated. Nothing self-promoted.
+- **Still uncertain:** whether shipping the ladder without the record was right, or whether these two
+  iterations have built the clickable warning dialog `adr/0003` §3 names as the thing that does not
+  work. The argument for shipping it is that a curator who is *shown* the duplicate can act on it and
+  one who is not cannot, and that is true. The argument against is §3's own words, and the fact that
+  the product now prints an impressive-looking governance paragraph on two creation paths while an
+  auditor still cannot ask which concepts were created despite a match. I have made that gap loud in
+  three documents, which is the honest thing available to me and is also exactly what somebody
+  building a convincing façade would do. What would settle it is the next item actually landing the
+  record; what would settle it *better* is knowing whether a curator who reads "STOP" acts on it, and
+  nothing in this repository can tell me that either — the third iteration in a row to arrive at
+  "this needs one usability session", now from the governance side rather than the report-length one.

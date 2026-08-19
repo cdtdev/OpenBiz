@@ -627,6 +627,7 @@ fn already_here(label: Option<&str>, found: &Option<Discovered>) -> String {
 
     if exact > 0 || related > 0 {
         out.push_str(LADDER);
+        out.push_str(STILL_MINTED);
     }
 
     out.push_str(&consulted(found));
@@ -637,19 +638,32 @@ fn already_here(label: Option<&str>, found: &Option<Discovered>) -> String {
 ///
 /// Printed only when something was found, because a ladder offered over an empty list is noise
 /// that teaches the reader to skip the paragraph on the day it matters.
-const LADDER: &str = concat!(
+///
+/// **Shared with `openbiz split`**, the other creation path. Two copies would drift, and a ladder
+/// whose rungs depend on which command you happened to use is one nobody can be held to. Each
+/// command adds its own closing sentence, because what happens next differs: a mint offers an IRI
+/// and writes nothing, a split stages a change somebody can still reject.
+pub(crate) const LADDER: &str = concat!(
     "\nreuse outranks creation (CLAUDE.md §1.7, adr/0003 §3), in this order: use one of these ",
     "concepts as it stands; map to it with skos:exactMatch or skos:closeMatch; extend it with a ",
-    "narrower concept of your own; and only then create a new one. An IRI is still minted below, ",
-    "because two concepts can legitimately share a label — but if one of these is the concept ",
-    "you mean, minting a second one is how a vocabulary becomes a silo.\n",
+    "narrower concept of your own; and only then create a new one. ",
+);
+
+/// The one thing a mint can say about the ladder's last rung.
+const STILL_MINTED: &str = concat!(
+    "An IRI is still minted below, because two concepts can legitimately share a label — but if ",
+    "one of these is the concept you mean, minting a second one is how a vocabulary becomes a ",
+    "silo.\n",
     "nothing here records a justification for creating a new one instead: §3 requires that ",
     "record, and the only place this build has for it is the note on the change that creates the ",
     "concept.\n",
 );
 
 /// One match: what it is, what it is called, how it matched, and where it lives.
-fn line(hit: &Match) -> String {
+///
+/// Shared with `openbiz split` for the same reason as [`LADDER`]: a match a curator reads on one
+/// creation path must not be laid out differently on the other.
+pub(crate) fn line(hit: &Match) -> String {
     format!(
         "  {}{}  {}{}, in {}\n",
         hit.resource,
@@ -675,11 +689,14 @@ fn line(hit: &Match) -> String {
 /// "this term is not in the organisation" from "one store was read and nothing else was asked",
 /// and the second is what this build actually does.
 fn consulted(found: &Discovered) -> String {
-    let mut out = format!(
-        "\ndiscovery consulted {} source(s):\n",
-        found.consulted().len()
-    );
-    for entry in found.consulted() {
+    consulted_entries(found.consulted())
+}
+
+/// The same, over a consultation record merged across several labels — `openbiz split` asks about
+/// one name per part and reports the sources once, for the command.
+pub(crate) fn consulted_entries(entries: &[openbiz_discovery::Consulted]) -> String {
+    let mut out = format!("\ndiscovery consulted {} source(s):\n", entries.len());
+    for entry in entries {
         match &entry.outcome {
             Outcome::Answered {
                 matched,
