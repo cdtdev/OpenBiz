@@ -865,6 +865,10 @@ the interface is a core differentiator, and building it late means retrofitting 
 - [ ] Incremental re-reasoning on edit, fast enough for interactive use
 - [ ] Materialised inferences visibly distinguished from asserted facts everywhere in the UI
 - [ ] Document the DL gap honestly in user-facing docs — we support EL and RL, not full DL
+      > Note from iteration 27: `README.md` already carries a first statement of this gap, and its
+      > wording was **corrected on 2026-08-19** — the absolute "there is no Rust DL reasoner" is
+      > retired in favour of "none mature enough to depend on". Start from that phrasing; do not
+      > reintroduce the absolute. See the retired-claims table in `docs/COMPETITIVE.md`.
 
 ---
 

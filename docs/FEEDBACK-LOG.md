@@ -208,3 +208,70 @@ That was my omission, not your error. Act on it:
 assertions, no unearned checkmarks, no "I ran out of time so I claimed it." If the honest outcome of
 an iteration is one small landed item plus a recorded reason the rest did not fit, that is a
 successful iteration. Speed never buys a dishonest green.
+
+---
+
+## 2026-08-19 — from the product owner (drained at iteration 27)
+
+> ## 2026-08-19 — correction from the product owner: the README contradicts our own research
+>
+> `README.md` line 58 still states, under a heading that reads **"Stated plainly"**:
+>
+> > there is no OWL 2 **DL** reasoner in the Rust ecosystem
+>
+> Your own product-owner pass (iteration 25, `docs/COMPETITIVE.md`) retired that claim as too strong:
+> `rustdl` is Apache-2.0 and actively developed, and publishes `owl-dl-saturation`. You corrected the
+> research file and left the public claim standing.
+>
+> **Fix the README to match.** The *practical* conclusion has not changed and should not be softened —
+> EL + RL remains our target, because nothing in that space is near load-bearing. What must go is the
+> absolute existence claim. Say what is true: no Rust OWL 2 DL reasoner is mature enough for us to
+> depend on, name the gap against Protégé with HermiT, and keep the honesty that makes that paragraph
+> worth having.
+>
+> **The mechanism, which matters more than the line.** A correction recorded in a research document is
+> not applied until every place that repeats the claim is updated. `CLAUDE.md` §4 makes misreporting
+> worse than lacking, the repository is public, and `/openbiz-status`'s degradation watch treats
+> "README claims something `BUILD-PLAN` or the research does not support" as charter drift for exactly
+> this reason. **When a pass retires a claim, grep the repo for it and fix every instance in the same
+> iteration** — README, CLAUDE.md, ADRs, and docs.
+>
+> While you are there: `CLAUDE.md` §5 still offers `horned-owl` as an example of a dependency whose
+> licence might be *merely unlisted*. It is on the forbidden list, as your own research established.
+> That example is now actively misleading and should be replaced — the `horned-owl` decision itself
+> stays blocked and is not yours to take.
+
+**What the loop did (iteration 27, 2026-08-19).** Took this as the whole iteration rather than a
+Phase 2 item, because it is a false claim standing in public on a repository whose pitch is honesty.
+
+*The line.* `README.md`'s "Stated plainly" paragraph now reads that **no Rust OWL 2 DL reasoner is
+mature enough for us to depend on**, names `rustdl` (Apache-2.0, MaastrichtU-IDS) as the work that
+exists, keeps EL + RL as the target and the Protégé-with-HermiT gap unsoftened, and points at
+`docs/COMPETITIVE.md` for the survey. The practical conclusion was not weakened, as instructed.
+
+*Every other instance, per the mechanism.* Grepped for `no OWL 2 DL reasoner`, `no DL reasoner`,
+`DL reasoner`, `HermiT` and `horned-owl` across `.md`, `.rs`, `.ts`, `.tsx`. Five live places said
+it; all five are corrected — `README.md`; `CLAUDE.md` §3's candidate list; `crates/openbiz-owl/src/lib.rs`
+module docs and the `Profile::Dl` doc comment ("Not currently supported by any Rust reasoner", the
+strongest phrasing in the repo and the one furthest from the research); and `COMPETITIVE.md`'s own
+superseded conclusion, which is annotated in place rather than edited because that file leaves prior
+findings standing on purpose. `BUILD-PLAN.md`'s Phase 5 "document the DL gap" item now carries a
+note to start from the corrected wording. `LOOP-LOG.md` and this file are append-only history and
+were left alone.
+
+*`horned-owl` in §5.* The example is replaced: §5's "merely unlisted licence" branch now cites
+Oxigraph and its transitive tree, and `horned-owl` appears instead as the **worked example of the
+other branch** — the copyleft one that goes to `BLOCKED.md` and stops. §3's crate map no longer
+names it as the OWL 2 dependency, and §3's candidate list strikes it through with the reason. The
+decision itself was not taken; it remains blocked.
+
+*The mechanism, written down.* `COMPETITIVE.md` gained a second file rule — retiring a claim there
+does not retire it anywhere else, so grep the repo and fix every instance in the same iteration —
+and a **retired-claims table** recording each retired claim, what is true instead, and which files
+were corrected. Two rows so far: this claim and the `horned-owl` candidacy.
+
+*What was declined, and why.* The loop did **not** build a CI check to enforce the rule. That is a
+new repo-wide gate off the back of a one-paragraph correction, and the instruction was to follow the
+mechanism, not to build one. The design is in `docs/PROPOSED.md` for a human to promote, and
+`docs/UNTESTED.md` records the honest gap in the meantime: this sweep was manual, its completeness
+rests on the phrasings the loop thought to search for, and nothing prevents a recurrence.

@@ -1105,3 +1105,35 @@ has. `README.md` is the right home for it and a human wrote it._
 - **Cost & impact:** the third option is under an iteration. The first is one. The second is not
   the loop's to arrange.
 - **Suggested phase:** Phase 14, or sooner if a release is contemplated.
+
+### Enforce the retired-claims rule in CI instead of trusting the loop to grep
+
+- **Status:** proposed.
+- **Gap:** iteration 25 retired the claim "there is no OWL 2 DL reasoner in Rust" in
+  `docs/COMPETITIVE.md` and left it standing in `README.md`, `CLAUDE.md`, and
+  `crates/openbiz-owl/src/lib.rs`. A human found it two iterations later and corrected it by hand
+  (`docs/FEEDBACK-LOG.md`, 2026-08-19). Iteration 27 fixed every instance and wrote the rule down —
+  *retire a claim, grep the repo, fix it everywhere in the same iteration* — as a convention at the
+  top of `COMPETITIVE.md`, plus a table of what has been retired and where it was published.
+- **Why load-bearing:** the convention is a rule the loop has to remember, and the failure it
+  guards against is precisely the loop failing to remember. The repository is public and
+  `CLAUDE.md` §4 makes misreporting worse than lacking, so the cost of the next miss is a false
+  public claim, not an internal inconsistency. This is also the second time a research finding has
+  had to be applied by hand after being recorded correctly.
+- **What is being asked for:** a machine-readable retired-claims ledger (the table in
+  `COMPETITIVE.md`, or a small file beside it) giving each retired claim a phrase to search for,
+  and a CI check that fails if that phrase appears in a **live** document — `README.md`,
+  `CLAUDE.md`, `BUILD-PLAN.md`, `UNTESTED.md`, `BLOCKED.md`, `PROPOSED.md`, and all source doc
+  comments. Append-only history — `LOOP-LOG.md`, `FEEDBACK-LOG.md`, the dated ADRs, and
+  `COMPETITIVE.md`'s own superseded paragraphs — is exempt, and the exemptions must be listed
+  explicitly in the ledger rather than implied by the script, or the check quietly stops covering
+  new files.
+- **Why the loop is not deciding it:** it is a new CI gate and a new repo-wide artefact, neither of
+  which any plan item asks for, and the human's correction asked the loop to *follow* the mechanism
+  rather than to build one. Building an unrequested doc-linting framework off the back of a
+  one-paragraph correction is the scope creep `CLAUDE.md` §7 puts this file in the way of.
+- **Cost & impact:** small — roughly an afternoon for the check, the ledger format, and its own
+  failing-then-passing test. The design risk is a check so noisy it gets exemptions added to
+  silence it, which would be worse than no check; the mitigation is that a phrase only enters the
+  ledger when a pass actually retires a claim, so the list stays short.
+- **Suggested phase:** Phase 14, or alongside the next product-owner pass.

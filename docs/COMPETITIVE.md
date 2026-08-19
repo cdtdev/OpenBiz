@@ -7,6 +7,23 @@ gets a dated correction beneath it, so we can see when we were wrong and why.
 competitor is a liability, not research. Vendor marketing pages describe intent; practitioner
 reviews describe reality. Weight them accordingly, and say which one a claim came from.
 
+**Second rule, added 2026-08-19 after a product-owner correction (`docs/FEEDBACK-LOG.md`):
+retiring a claim here does not retire it anywhere else.** This file is research; the README,
+`CLAUDE.md`, the plan, and source doc comments are where the claim is *published*. A correction
+recorded only here leaves the repository asserting, in public, something its own research no longer
+supports — which `CLAUDE.md` §4 counts as misreporting, and which `/openbiz-status` reads as charter
+drift. So: **when a pass retires a claim, grep the whole repo for it and fix every instance in the
+same iteration**, and add a row to the table below saying where it was fixed. Append-only records —
+`LOOP-LOG.md`, `FEEDBACK-LOG.md`, the dated ADRs, and this file's own superseded paragraphs — are
+history and are annotated in place rather than edited.
+
+### Retired claims and where they were published
+
+| Claim, as it used to read | Retired | What is true instead | Fixed in |
+|---|---|---|---|
+| "There is no OWL 2 **DL** reasoner in Rust" (absolute existence claim) | 2026-08-18, iteration 25 | No Rust OWL 2 DL reasoner is *mature enough for us to depend on*. `rustdl` (Apache-2.0, MaastrichtU-IDS) exists and is active. **The practical conclusion is unchanged: EL + RL remains our target.** | 2026-08-19, iteration 27 — `README.md` §Standards, `CLAUDE.md` §3 candidate list, `crates/openbiz-owl/src/lib.rs` module docs and `Profile::Dl`. This file's own §"Rust ecosystem assessment" conclusion annotated in place. |
+| "`horned-owl` is our OWL 2 model/IO candidate" | 2026-08-18, iteration 25 | `horned-owl` is **LGPL-3.0**, forbidden in the core by `CLAUDE.md` §5. The replacement is an open commercial decision, recorded in `BLOCKED.md`, not a spike the loop may take. | 2026-08-19, iteration 27 — `CLAUDE.md` §3 crate map, §3 candidate list, and the §5 example that used it to illustrate a *merely unlisted* licence. |
+
 ---
 
 ## The market, as of 2026-08
@@ -111,6 +128,10 @@ should be honest about the size of that bill.
 - **SHACL**: `oxirs-shacl` claims a production release with core constraints, property paths, and
   logical constraints; `shacl_validation` and `shacl-rust` are alternatives. **None yet verified by
   us — a spike must compare them against the W3C SHACL test suite before one becomes load-bearing.**
+
+> **Superseded on 2026-08-18 — read the correction below before quoting this paragraph.** The
+> absolute existence claim is too strong; `rustdl` exists and is Apache-2.0. The practical
+> conclusion (EL + RL) is unchanged. See "Corrections to the assessment above".
 
 **Honest conclusion:** there is **no OWL 2 DL reasoner in Rust**. Our realistic reasoning target is
 **EL + RL**, which covers the large majority of enterprise ontologies (SNOMED CT and the Gene

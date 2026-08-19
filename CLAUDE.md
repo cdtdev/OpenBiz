@@ -96,7 +96,8 @@ crates/
   openbiz-server/          binary entrypoint; Axum, routing, config, embedded UI assets
   openbiz-store/           Oxigraph wrapper: named-graph model, transactions, backup/restore
   openbiz-skos/            SKOS + SKOS-XL domain model, concept tree, integrity conditions
-  openbiz-owl/             OWL 2 via horned-owl; Reasoner trait; EL + RL engines
+  openbiz-owl/             OWL 2 model and IO; Reasoner trait; EL + RL engines
+                           (the model/IO dependency is undecided — see BLOCKED.md)
   openbiz-validate/        SHACL: Validator trait, rule packs (ISO 25964, Z39.19)
   openbiz-lifecycle/       methodology packs, project state, gate evaluation, Solution Advisor
   openbiz-llm/             LlmProvider trait, providers, agents, proposal model
@@ -122,8 +123,12 @@ where the vendor landscape moves fastest and lock-in is most expensive.
 Current candidates, none yet load-bearing:
 - `oxigraph` — store and SPARQL. **Known risk:** query evaluation is explicitly not yet optimised
   upstream. Benchmark before depending on it for large-vocabulary paths.
-- `horned-owl` — OWL 2 data model and IO (RDF/XML, functional syntax).
-- `whelk-rs` — OWL **EL** reasoner. No DL reasoner exists in Rust; EL + RL is our realistic target.
+- ~~`horned-owl` — OWL 2 data model and IO (RDF/XML, functional syntax).~~ **Ruled out: LGPL-3.0**,
+  which §5 forbids in the core. The replacement is an open commercial decision, not a spike — see
+  `docs/BLOCKED.md`.
+- `whelk-rs` — OWL **EL** reasoner. No Rust OWL 2 **DL** reasoner is mature enough to depend on
+  (`rustdl` exists and is Apache-2.0, but is far below the adoption we would need); EL + RL is our
+  realistic target. Also **not published to crates.io**, which `deny.toml` refuses today.
 - `oxirs-shacl` / `shacl_validation` — SHACL. **Unproven for our purposes — spike before adopting.**
 
 Adopting any of these as load-bearing requires a spike task and an ADR recording what was measured.
@@ -187,14 +192,17 @@ audit) may later be a separately-licensed layer, so the core must stay cleanly r
   Jena are all permissive.
 - Every new dependency gets a licence check. `cargo deny` enforces this in CI. If you add an
   *optional* dep and CI fails on licence, **remove the dep** — do not weaken the policy.
-- **If a dependency we genuinely cannot avoid (Oxigraph, horned-owl, and their transitive tree)
-  carries a licence that is merely *unlisted* rather than forbidden**, that is a decision, not a
-  wall. Judge it: if it is permissive in substance (`Unicode-DFS-2016`, `BSD-*`, `OpenSSL`,
+- **If a dependency we genuinely cannot avoid (Oxigraph and its transitive tree is the standing
+  case) carries a licence that is merely *unlisted* rather than forbidden**, that is a decision, not
+  a wall. Judge it: if it is permissive in substance (`Unicode-DFS-2016`, `BSD-*`, `OpenSSL`,
   `BSL-1.0`, `Zlib` and similar), add it to `deny.toml` **in the same commit as an ADR recording
   what it is and why it is compatible with open core**. If it is copyleft — GPL, LGPL, AGPL, SSPL,
   or source-available — the answer is still no: record it in `BLOCKED.md` and stop, because that
   one is a commercial decision a human has to make.
   Never add a licence to the allow list without the ADR. A silent widening is how this policy dies.
+  **The worked example of the second branch is `horned-owl`**, which this file named as the OWL 2
+  candidate until iteration 25 found it is LGPL-3.0. It is in `BLOCKED.md`, unresolved, and it is
+  there rather than in `deny.toml` because that is what the rule above requires.
 
 ---
 

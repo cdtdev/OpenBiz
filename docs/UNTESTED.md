@@ -1514,3 +1514,23 @@ Do not delete it — the record of what took how long to close is the signal.
   after the server drained" or "the store did not close cleanly" — and that is a product defect
   under load, not a test one.
 - **Opened:** iteration 22
+
+## The retired-claims sweep was done by hand, and nothing stops the next one being missed
+
+- **What was done:** iteration 27 grepped the repository for the retired absolute claim "there is
+  no OWL 2 DL reasoner in Rust" and for `horned-owl`, and corrected `README.md`, `CLAUDE.md` (crate
+  map, candidate list, and the §5 licence example), `crates/openbiz-owl/src/lib.rs` (module docs and
+  `Profile::Dl`), and the superseded paragraph in `docs/COMPETITIVE.md`. The rule that produced the
+  sweep is written down at the top of `COMPETITIVE.md`, with a table of what has been retired.
+- **What is unproven:** that the sweep was **complete**. It searched for the phrasings the loop
+  happened to think of — `no OWL 2 DL reasoner`, `no DL reasoner`, `DL reasoner`, `HermiT`,
+  `horned-owl` — across `.md`, `.rs`, `.ts` and `.tsx`. A paraphrase that shares no distinctive
+  substring with any of those would have been missed silently, and a grep that finds nothing looks
+  exactly like a repository that says nothing wrong.
+- **What is worse:** the rule itself has **no enforcement**. It is a convention in a research file,
+  guarding against the loop forgetting a convention. The proposal to make it a CI check with a
+  machine-readable ledger is in `docs/PROPOSED.md`, unpromoted, so today the guarantee is only as
+  good as the next iteration's memory — which is the thing that already failed once.
+- **What would close it:** that CI check, or a periodic human read of `README.md` against
+  `COMPETITIVE.md`'s corrections. Only the first is cheap enough to happen reliably.
+- **Opened:** iteration 27

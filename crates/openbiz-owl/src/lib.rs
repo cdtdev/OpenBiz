@@ -2,11 +2,13 @@
 //!
 //! # Scope, stated honestly
 //!
-//! There is **no OWL 2 DL reasoner in the Rust ecosystem**. Our realistic targets are the **EL**
-//! and **RL** profiles, which cover the large majority of enterprise ontologies (SNOMED CT and the
-//! Gene Ontology are both EL) but leave a genuine gap against Protégé with HermiT for expressive
-//! DL ontologies. That gap is documented in the README rather than glossed over, and
-//! [`Profile::Dl`] exists so we can *reject* work we cannot do rather than silently under-reason.
+//! **No Rust OWL 2 DL reasoner is mature enough for us to depend on.** Work exists — `rustdl`
+//! (Apache-2.0) is actively developed — but it is far below the adoption and age at which we would
+//! make a reasoner load-bearing, so our realistic targets are the **EL** and **RL** profiles. Those
+//! cover the large majority of enterprise ontologies (SNOMED CT and the Gene Ontology are both EL)
+//! but leave a genuine gap against Protégé with HermiT for expressive DL ontologies. That gap is
+//! documented in the README rather than glossed over, and [`Profile::Dl`] exists so we can *reject*
+//! work we cannot do rather than silently under-reason. The survey is in `docs/COMPETITIVE.md`.
 //!
 //! Per `CLAUDE.md` §3, concrete reasoners sit behind [`Reasoner`] and are never called directly
 //! from application code.
@@ -22,7 +24,7 @@ pub enum Profile {
     El,
     /// OWL 2 RL — rule-based, suits forward-chaining materialisation.
     Rl,
-    /// Full OWL 2 DL. **Not currently supported by any Rust reasoner.**
+    /// Full OWL 2 DL. **No Rust reasoner we would depend on supports it** — see the module docs.
     Dl,
 }
 
