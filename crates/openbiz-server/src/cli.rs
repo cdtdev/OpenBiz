@@ -90,6 +90,13 @@ pub enum Command {
         /// The IRI of the concept to walk up from.
         concept: String,
     },
+    /// Report what a vocabulary documents one resource with, and why. Reads and nothing else.
+    Notes {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+        /// The IRI of the resource to report the documentation of.
+        resource: String,
+    },
     /// List every proposed change the store holds.
     Candidates,
     /// Show one proposed change, with the statements it would add.
@@ -126,6 +133,8 @@ Usage:
   openbiz inspect <graph>    report what <graph> holds in SKOS terms, and why
   openbiz ancestors <graph> <concept>
                              report what is above <concept> in the hierarchy, and why
+  openbiz notes <graph> <resource>
+                             print what <graph> documents <resource> with, and why
   openbiz candidates         list the proposed changes waiting for a decision
   openbiz candidate <id>     show one proposed change and the statements it would add
   openbiz approve <id>       apply a proposed change to its vocabulary
@@ -151,6 +160,12 @@ including the ones no statement typed — SKOS itself says a resource with conce
 concept scheme — and it names the specification statement behind every fact it inferred. It
 separates a violated SKOS integrity condition, which makes a graph not a SKOS vocabulary, from
 something merely ill-formed, which is our judgement and says so.
+
+Notes only reads. It prints every SKOS documentation property carrying anything for one resource —
+the definition, the scope note, the examples and the rest — and beside each note that SKOS itself
+entailed, the statement it came from and the rule. §7 states no integrity condition, so a resource
+with no documentation is legal SKOS and this says so rather than reporting a defect. It takes any
+resource, not only a concept: §7's own example documents an `owl:Class`.
 
 Retract refuses statements the vocabulary does not already hold, and approving a retraction is
 refused if the vocabulary has changed underneath it — a removal that quietly takes away less than
@@ -263,6 +278,17 @@ impl Command {
                     concept: Self::text(
                         "ancestors",
                         "the IRI of a concept to walk up from",
+                        &mut args,
+                    )?,
+                },
+            ),
+            "notes" => (
+                "notes",
+                Self::Notes {
+                    graph: Self::text("notes", "the IRI of a vocabulary to read", &mut args)?,
+                    resource: Self::text(
+                        "notes",
+                        "the IRI of a resource to report the documentation of",
                         &mut args,
                     )?,
                 },
@@ -410,6 +436,20 @@ pub enum CommandError {
     NoSuchConcept {
         /// The concept IRI that was asked about.
         concept: String,
+        /// The vocabulary that was read.
+        graph: String,
+    },
+    /// The vocabulary says nothing in SKOS terms about the resource that was asked about.
+    ///
+    /// Distinct from [`CommandError::NoSuchConcept`] because the question is different: `openbiz
+    /// notes` takes any resource, not a concept, since §7's own Example 24 documents an
+    /// `owl:Class`. Refused rather than answered with "it carries no documentation", which is
+    /// what a real but undocumented concept says — and which is a legal, consistent state that a
+    /// mistyped IRI must not be confused with.
+    #[error("{graph} says nothing about {resource} in SKOS terms, so there is nothing to report")]
+    NoSuchResource {
+        /// The resource IRI that was asked about.
+        resource: String,
         /// The vocabulary that was read.
         graph: String,
     },
@@ -906,6 +946,37 @@ mod tests {
         );
     }
 
+    /// Two arguments, both required, and the second is a *resource* rather than a concept —
+    /// §7's own Example 24 documents an `owl:Class`, so the parameter must not promise a concept
+    /// it does not require.
+    #[test]
+    fn notes_takes_a_vocabulary_and_a_resource() {
+        assert_eq!(
+            parse(&[
+                "notes",
+                "https://example.org/regions",
+                "https://example.org/regions/apac"
+            ]),
+            Ok(Command::Notes {
+                graph: "https://example.org/regions".to_owned(),
+                resource: "https://example.org/regions/apac".to_owned(),
+            })
+        );
+        let error =
+            parse(&["notes", "https://example.org/regions"]).expect_err("a resource is required");
+        assert!(
+            error.to_string().contains("resource"),
+            "the message must say what was missing: {error}"
+        );
+        assert_eq!(
+            parse(&["notes", "a", "b", "c"]),
+            Err(ArgsError::TooManyArguments {
+                command: "notes",
+                extra: 1
+            })
+        );
+    }
+
     #[test]
     fn inspect_takes_one_vocabulary_and_refuses_a_second_argument() {
         assert_eq!(
@@ -953,6 +1024,10 @@ mod tests {
         );
     }
 
+    /// The list is hand-maintained, and it had **drifted**: `inspect` and `ancestors` were
+    /// missing from it, so the test's own name was untrue for two iterations. Found while adding
+    /// `notes`, and corrected here rather than only extended — a completeness test that is
+    /// quietly incomplete is worse than none, because it reports coverage it does not have.
     #[test]
     fn the_usage_names_every_command_it_can_parse() {
         for command in [
@@ -960,6 +1035,9 @@ mod tests {
             "restore",
             "import",
             "retract",
+            "inspect",
+            "ancestors",
+            "notes",
             "candidates",
             "candidate",
             "approve",

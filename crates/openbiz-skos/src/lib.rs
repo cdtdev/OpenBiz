@@ -8,6 +8,7 @@
 mod ancestry;
 mod labels;
 mod model;
+mod notes;
 mod relations;
 mod xl;
 
@@ -28,6 +29,10 @@ pub use model::{
     Node, Resource, Severity, SkosClass, SkosRule, Statement, Term, RDF_FIRST, RDF_NIL, RDF_REST,
     RDF_TYPE, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER, SKOS_MEMBER_LIST,
     SKOS_TOP_CONCEPT_OF,
+};
+pub use notes::{
+    DocumentationCoverage, NoteKind, NoteOrigin, SKOS_CHANGE_NOTE, SKOS_DEFINITION,
+    SKOS_EDITORIAL_NOTE, SKOS_EXAMPLE, SKOS_HISTORY_NOTE, SKOS_NOTE, SKOS_SCOPE_NOTE,
 };
 pub use relations::{
     RelationOrigin, SemanticRelation, SKOS_BROADER, SKOS_BROADER_TRANSITIVE, SKOS_NARROWER,

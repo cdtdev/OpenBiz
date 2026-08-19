@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 9 of 19 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 10 of 20 items done. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -68,6 +68,13 @@ until iteration 28. A cycle stays consistent, terminates, and is named rather th
 about. See `adr/0025`.
 **And a check that gave up no longer reads as a check that passed:** `Severity` gained `Unchecked`
 and `openbiz inspect` closes with one of three sentences instead of two.
+**And the vocabulary can now say what it means**: §7's seven documentation properties are read,
+S17 lifts each of the six specific ones onto `skos:note`, and `openbiz notes <graph> <resource>`
+prints a concept's definition, scope note and examples with the statement behind every note SKOS
+entailed — the one thing a Turtle export of the same vocabulary cannot show. **§7 states no
+integrity condition and we invent none**: a concept with no definition is consistent SKOS, the
+report says so beside the count, and the check every incumbent runs there is named as the Z39.19 /
+ISO 25964 rule pack it actually is. See `adr/0026`.
 
 **And we now know what that costs, which changed the design of the next item before it was
 written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
@@ -815,7 +822,54 @@ the interface is a core differentiator, and building it late means retrofitting 
       > measures what the walk costs at size — `adr/0024` measured storing and this stores nothing
       > — which is `UNTESTED.md`'s replacement entry and the reason the default bound is a
       > judgement rather than a budget.
-- [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`
+- [x] Documentation properties, part 1 — the seven properties and S17: `note`, `definition`,
+      `scopeNote`, `example`, `historyNote`, `changeNote`, `editorialNote`
+      > **Split in place at iteration 29.** The item as written named five properties; SKOS §7 has
+      > **seven**, and it has an extension point besides. This part is the seven and the one
+      > inference §7 licenses. Part 2 below is the extension point, split out because it needs a
+      > second pass over a stream the builder reads once — an architectural change, not a
+      > continuation.
+      > **The load-bearing fact about §7 is a negative one: it states no integrity condition.**
+      > §5.4 has an "Integrity Conditions" heading and §7 has no such subsection at all, so nothing
+      > here can make a graph inconsistent and nothing here raises a `Finding` of any severity.
+      > That is a deliberate refusal, not an omission: **a concept with no `skos:definition` is
+      > consistent SKOS**, every incumbent flags it, and the check they are running is ANSI/NISO
+      > Z39.19 or ISO 25964 — a rule pack in `openbiz-validate`, where it can be named and switched
+      > off, not a SKOS finding citing a statement the specification never made. `openbiz inspect`
+      > says so in the report, in the same breath as the count, so a zero is not read as our
+      > verdict. A test asserts the absence, so nobody can add one later without deleting it.
+      > **S16 constrains the value not at all**, so a note is a bare `Term`: Examples 22 (a literal)
+      > and 23 (an IRI) are both marked consistent, and the two node-shaped usage patterns §7.1
+      > names are indistinguishable from the statement alone, so we do not guess between them.
+      > **And the object of a note is not typed** — §7 has no range, unlike S19/S20 on
+      > `skos:semanticRelation` — so Example 23's `<MyNote>` joins no vocabulary.
+      > **S17 is materialised, not walked**, which is the opposite of `adr/0025`'s decision for S24
+      > and for a stated reason: the lift is one step deep, cannot chain, and adds at most one
+      > entry per stated note. It runs upwards only, so a bare `skos:note` never acquires a more
+      > specific kind, and an asserted note is never overwritten by an entailed one.
+      > **Production callers: two.** `openbiz notes <graph> <resource>` prints everything a
+      > vocabulary documents one resource with, and beside each note SKOS entailed, the statement
+      > it came from and the quoted rule — which is the one thing a Turtle export cannot show.
+      > It takes a *resource*, not a concept, because §7's own Example 24 documents an `owl:Class`.
+      > `openbiz inspect` gains a documentation coverage table, counts rather than content for the
+      > reason the languages section is counts. Both proven against the binary on disk.
+      > **Acceptance:** §7's Examples 22, 23 and 24, all three, plus a test asserting §7's silence.
+      > See `adr/0026`.
+- [ ] Documentation properties, part 2 — the extension point: a vocabulary's own
+      `rdfs:subPropertyOf` refinements of the seven
+      > Split out at iteration 29. §7.1 says the seven "provide a set of extension points for
+      > defining more specific types of note", and an enterprise thesaurus routinely declares
+      > `ex:usageNote rdfs:subPropertyOf skos:scopeNote`. Under RDFS that entails a
+      > `skos:scopeNote`, and S17 then entails a `skos:note`; today it entails nothing here,
+      > because we read no `rdfs:subPropertyOf` at all.
+      > **Why it is a separate item and not a continuation:** the builder is a one-pass stream, and
+      > a declaration can arrive after the statement that uses it. Reading refinements means either
+      > buffering or a second pass, and the chain is graph-controlled so it needs a cycle guard and
+      > a bound — the machinery `ancestry.rs` has and `attach_notes` deliberately does not.
+      > **It is the same gap as `skosxl:labelRelation`'s refinement** (`UNTESTED.md`, iteration 26),
+      > and the two should be closed by one mechanism. The `skosxl` case additionally cannot close
+      > a refinement even when it reads one (B.4.4.1); this one can, because a sub-property of an
+      > annotation property is just a sub-property.
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number
 - [ ] Concept tree query API: children, ancestors, siblings, paths-to-root, with cycle detection

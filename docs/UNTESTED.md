@@ -1556,3 +1556,43 @@ Do not delete it — the record of what took how long to close is the signal.
 - **What would close it:** that CI check, or a periodic human read of `README.md` against
   `COMPETITIVE.md`'s corrections. Only the first is cheap enough to happen reliably.
 - **Opened:** iteration 27
+
+### What a note costs in the model is unmeasured, and notes are the bulk text of a vocabulary
+- **Kind:** partial-coverage
+- **What is proven:** the model reads and keeps every SKOS documentation property, and S17 adds at
+  most one entry per stated note. Correctness is tested against §7's Examples 22, 23 and 24 and
+  against both statement orders.
+- **What is not:** the **cost**. `adr/0024` measured the semantic relation model and produced a
+  hard number — about 3.9 KiB of resident memory per stated `skos:broader`, 4.4 GiB at a million
+  links. There is no equivalent number for a note, and a note is the *longest* text a vocabulary
+  holds: a 100 000-concept thesaurus with a paragraph of definition on each is tens of megabytes of
+  text before any `BTreeMap` overhead, and `openbiz inspect` holds all of it at once. The lifted
+  S17 entries roughly double the per-value map entries without duplicating the string.
+- **Why it matters more than it looks:** `CoreModelBuilder`'s doc comment already had to be
+  corrected once, at iteration 26, because it claimed the model was proportional to structure and
+  the relations had made that untrue. This is the second thing that makes it untrue, and it is
+  recorded before the claim is made rather than after it is caught.
+- **What would close it:** a `scale` harness case that generates a vocabulary with notes of a
+  realistic length at 10k / 100k / 1M concepts and reports resident bytes per note, the way
+  `scale::tests` already does for relations. The harness exists; the case does not.
+- **Opened:** iteration 29
+
+### A vocabulary's own note refinements are invisible, because we still read no `rdfs:subPropertyOf`
+- **Kind:** partial-standard
+- **What is proven:** the seven properties SKOS names are read, and S17 lifts the six onto
+  `skos:note`.
+- **What is not:** §7.1 says the seven "provide a set of extension points for defining more
+  specific types of note". A vocabulary declaring `ex:usageNote rdfs:subPropertyOf skos:scopeNote`
+  and then using `ex:usageNote` gets **nothing** — no scope note, no note, and no row in the
+  coverage table. The statements are counted among the non-SKOS ones and dropped. An enterprise
+  thesaurus that has been extended this way will read as less documented than it is, and the report
+  gives no hint that it is looking past something.
+- **This is the same gap as the `skosxl:labelRelation` refinement entry above**, and one mechanism
+  should close both: reading `rdfs:subPropertyOf` out of the graph needs either buffering or a
+  second pass, because a declaration can arrive after the statement that uses it, and the chain is
+  graph-controlled so it needs a cycle guard and a bound. The `skosxl` case is *harder*, because
+  B.4.4.1 says a refinement of a symmetric property must not be closed even once you can see it;
+  this one is not, because a sub-property of an annotation property is just a sub-property.
+- **What would close it:** Phase 2's "Documentation properties, part 2" item, which is in the plan
+  unchecked and was split out for exactly this reason.
+- **Opened:** iteration 29

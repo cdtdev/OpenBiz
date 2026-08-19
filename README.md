@@ -232,6 +232,41 @@ The walk is bounded, and a walk that hit its bound says so rather than reporting
 to reach as the answer — a check that gave up is not a check that passed. See
 [`docs/adr/0025`](docs/adr/0025-transitive-ancestry-by-walking.md).
 
+### Reading what a concept means
+
+```sh
+openbiz notes https://example.org/regions https://example.org/regions/apac
+```
+
+§7 of the SKOS Reference gives seven documentation properties — `definition`, `scopeNote`,
+`example`, `historyNote`, `changeNote`, `editorialNote`, and the general `note` — and **S17** makes
+the first six sub-properties of the last. So writing a definition entails a note, and this is the
+one place that shows it: a Turtle export of the same vocabulary shows the `skos:definition` the
+author wrote and never shows the `skos:note` it entails.
+
+```
+skos:note
+  "The Asia-Pacific region."@en
+    inferred, not stated under skos:note
+    because skos:definition "The Asia-Pacific region."@en
+    and S17: skos:changeNote, skos:definition, … are each sub-properties of skos:note.
+```
+
+It takes a **resource**, not a concept, because §7's own Example 24 documents an `owl:Class`.
+
+`inspect` counts the same thing per property, and prints one sentence beside the counts that most
+tools get wrong:
+
+> §7 states no integrity condition, so an undocumented concept is consistent SKOS; requiring a
+> definition is a Z39.19 / ISO 25964 rule pack
+
+**A concept with no definition is not a defect in SKOS.** §5.4 has an "Integrity Conditions"
+heading and §7 has none at all. Asking every concept to carry a definition is a real and reasonable
+governance rule — it is just ANSI/NISO Z39.19's rule or ISO 25964's, not the SKOS Reference's, and
+it belongs in a rule pack you can name and switch off rather than in a finding that cites a
+statement nobody made. Those packs are Phase 4. Until then we report the number and say who is
+asking. See [`docs/adr/0026`](docs/adr/0026-documentation-properties.md).
+
 ## Development
 
 Requires a recent stable Rust toolchain and Node.js.

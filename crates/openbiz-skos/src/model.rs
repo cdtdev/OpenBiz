@@ -66,6 +66,7 @@ use std::fmt;
 
 use crate::ancestry::AncestryBound;
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
+use crate::notes::{DocumentationCoverage, NoteKind, NoteOrigin};
 use crate::ns;
 use crate::relations::{RelationOrigin, SemanticRelation, SKOS_SEMANTIC_RELATION};
 use crate::xl::{LabelOrigin, SKOSXL_LABEL_RELATION, SKOSXL_LITERAL_FORM};
@@ -200,6 +201,8 @@ pub enum SkosRule {
     S12,
     S13,
     S14,
+    S16,
+    S17,
     S18,
     S19,
     S20,
@@ -248,6 +251,8 @@ impl SkosRule {
             SkosRule::S12 => "S12",
             SkosRule::S13 => "S13",
             SkosRule::S14 => "S14",
+            SkosRule::S16 => "S16",
+            SkosRule::S17 => "S17",
             SkosRule::S18 => "S18",
             SkosRule::S19 => "S19",
             SkosRule::S20 => "S20",
@@ -307,6 +312,15 @@ impl SkosRule {
             }
             SkosRule::S14 => {
                 "A resource has no more than one value of skos:prefLabel per language tag."
+            }
+            SkosRule::S16 => {
+                "skos:note, skos:changeNote, skos:definition, skos:editorialNote, skos:example, \
+                 skos:historyNote and skos:scopeNote are each instances of \
+                 owl:AnnotationProperty."
+            }
+            SkosRule::S17 => {
+                "skos:changeNote, skos:definition, skos:editorialNote, skos:example, \
+                 skos:historyNote and skos:scopeNote are each sub-properties of skos:note."
             }
             SkosRule::S18 => {
                 "skos:semanticRelation, skos:broader, skos:narrower, skos:related, \
@@ -1093,6 +1107,7 @@ pub struct Resource {
     xl_labels: BTreeMap<Node, BTreeSet<LabelKind>>,
     label_relations: BTreeMap<Node, RelationOrigin>,
     semantic_relations: BTreeMap<SemanticRelation, BTreeMap<Node, RelationOrigin>>,
+    notes: BTreeMap<Term, BTreeMap<NoteKind, NoteOrigin>>,
 }
 
 impl Resource {
@@ -1210,6 +1225,34 @@ impl Resource {
     /// why the accessor is named for the property and not for "ancestors". The closure is
     /// [`CoreModel::ancestry`], which walks these links on read; `docs/adr/0025` records why it
     /// is a walk and not a table.
+    /// Every note it carries, which properties carry each one, and where each came from.
+    ///
+    /// Keyed by the note's **value**, which is a bare [`Term`] because §7 constrains it not at
+    /// all: S16 makes the seven properties `owl:AnnotationProperty`, with no domain and no range,
+    /// and §7's Examples 22 and 23 are a literal and an IRI marked equally consistent. The same
+    /// value under two properties is one key with two kinds, exactly as a label is — and unlike a
+    /// label it is **not a finding**, because §7 states no integrity condition at all.
+    ///
+    /// **Closed under S17**, one step upwards: a stated `skos:definition` puts the same value
+    /// under [`NoteKind::Note`] carrying [`NoteOrigin::Entailed`]. Nothing runs downwards, so a
+    /// bare `skos:note` never acquires a more specific kind.
+    pub fn notes(&self) -> &BTreeMap<Term, BTreeMap<NoteKind, NoteOrigin>> {
+        &self.notes
+    }
+
+    /// Its notes of one kind, in a stable order, whether stated or lifted by S17.
+    pub fn notes_of(&self, kind: NoteKind) -> impl Iterator<Item = &Term> {
+        self.notes
+            .iter()
+            .filter(move |(_, kinds)| kinds.contains_key(&kind))
+            .map(|(value, _)| value)
+    }
+
+    /// Where one of its notes came from, if it carries that value under that property.
+    pub fn note_origin(&self, value: &Term, kind: NoteKind) -> Option<NoteOrigin> {
+        self.notes.get(value)?.get(&kind).copied()
+    }
+
     pub fn relations(&self, relation: SemanticRelation) -> Option<&BTreeMap<Node, RelationOrigin>> {
         self.semantic_relations.get(&relation)
     }
@@ -1360,6 +1403,51 @@ impl CoreModel {
         by_language.into_values().collect()
     }
 
+    /// How much of the vocabulary's **concepts** carry documentation of each kind.
+    ///
+    /// One row per [`NoteKind`], in [`NoteKind::ALL`] order, and rows with nothing in them are
+    /// kept — a zero against `skos:definition` is the answer to the question that was asked, and
+    /// dropping the row would make "no definitions anywhere" look like "we did not check".
+    ///
+    /// **Counted over `skos:Concept` instances only.** A note on a concept scheme or on an
+    /// `owl:Class` — §7's own Example 24 puts a `skos:definition` on one — is read, kept on the
+    /// resource, and printed by anything that asks for that resource; it is just not part of *how
+    /// documented is this thesaurus*, which is a question about its concepts.
+    ///
+    /// Counts and not values, for the reason [`CoreModel::label_coverage`] gives: the notes are
+    /// bounded by the size of the vocabulary and every other answer in a report is bounded by its
+    /// structure, so printing them would drown the report on any real thesaurus.
+    pub fn documentation_coverage(&self) -> Vec<DocumentationCoverage> {
+        NoteKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let mut coverage = DocumentationCoverage {
+                    kind,
+                    concepts: 0,
+                    notes: 0,
+                    inferred: 0,
+                };
+                for (_, resource) in self.instances_of(SkosClass::Concept) {
+                    let origins: Vec<NoteOrigin> = resource
+                        .notes
+                        .values()
+                        .filter_map(|kinds| kinds.get(&kind).copied())
+                        .collect();
+                    if origins.is_empty() {
+                        continue;
+                    }
+                    coverage.concepts += 1;
+                    coverage.notes += origins.len();
+                    coverage.inferred += origins
+                        .iter()
+                        .filter(|origin| matches!(origin, NoteOrigin::Entailed(_)))
+                        .count();
+                }
+                coverage
+            })
+            .collect()
+    }
+
     /// Whether any finding says the graph violates a SKOS integrity condition.
     ///
     /// **Read it beside [`CoreModel::checks_are_complete`].** `true` means no violation was
@@ -1388,8 +1476,14 @@ impl CoreModel {
 /// Reads statements one at a time and resolves the model when it has them all.
 ///
 /// Incremental because a graph does not fit in memory twice. The store hands statements over as it
-/// scans, and a vocabulary's notes and its non-SKOS statements, which are most of its statements,
-/// are counted and dropped.
+/// scans, and a vocabulary's non-SKOS statements, which are most of its statements, are counted
+/// and dropped.
+///
+/// **This sentence used to say "notes and its non-SKOS statements", and iteration 29 made that
+/// false**: §7's documentation properties are read and kept. It is corrected here rather than left
+/// reading well, for the same reason `adr/0020` corrected it when the labels landed — a doc
+/// comment describing what the builder discards is the one place a reader checks before deciding
+/// what the model can be asked, and a stale one is worse than none.
 ///
 /// # What it keeps is not small
 ///
@@ -1421,6 +1515,7 @@ pub struct CoreModelBuilder {
     label_relations: BTreeSet<(Node, Node)>,
     semantic_relations: BTreeMap<SemanticRelation, BTreeSet<(Node, Node)>>,
     semantic_relation_ends: BTreeSet<(Node, Node)>,
+    notes: BTreeMap<Node, BTreeMap<Term, BTreeSet<NoteKind>>>,
     ancestry_bound: AncestryBound,
     findings: Vec<Finding>,
     statements_read: usize,
@@ -1546,6 +1641,25 @@ impl CoreModelBuilder {
                     self.label(subject, &predicate, kind, object);
                 }
             }
+            _ if NoteKind::from_iri(&predicate).is_some() => {
+                // Unreachable `None` — the guard has already matched the IRI. Written as a `let`
+                // for the reason the label arm below gives.
+                //
+                // No `object_property` and no `label` here, and that is the whole of §7 in one
+                // line: S16 makes these annotation properties, which constrain the value neither
+                // to a node nor to a literal, so **both are kept and neither is a finding**.
+                // Example 22 is a literal and Example 23 is an IRI, and the specification marks
+                // both consistent. The object of a note is also not registered as a resource:
+                // §7 has no range, so `<MyNote>` gets no class and joins no vocabulary.
+                if let Some(kind) = NoteKind::from_iri(&predicate) {
+                    self.notes
+                        .entry(subject)
+                        .or_default()
+                        .entry(object)
+                        .or_default()
+                        .insert(kind);
+                }
+            }
             // The list vocabulary is RDF's, not SKOS's, so a literal `rdf:first` is legal RDF and
             // is not a SKOS finding. It becomes a `ListDefect` if it turns up in a list we walk,
             // and stays silent otherwise — plenty of graphs carry lists that are nothing to do
@@ -1637,6 +1751,11 @@ impl CoreModelBuilder {
         self.close_semantic_relations(&mut model);
         self.apply_relation_class_rules(&mut model);
         self.attach_labels(&mut model);
+        // §7. Independent of everything above and below it: notes entail nothing about classes,
+        // constrain nothing, and are constrained by nothing, so the pass has no ordering
+        // requirement against any other. It sits beside the labels because that is where a
+        // reader looks for "what the vocabulary says in words".
+        self.attach_notes(&mut model);
         // The SKOS-XL passes run in the order the specification's dependencies do: the classes
         // first (S50, S54, S60, S61), then the symmetric closure of the links those classes came
         // from (S62), then the forms the classes constrain (S51, S52), then the chains that need a
@@ -2090,6 +2209,62 @@ impl CoreModelBuilder {
                     (label, origins)
                 })
                 .collect();
+        }
+    }
+
+    /// Attach every note read, and apply **S17** — the six specific properties are sub-properties
+    /// of `skos:note`.
+    ///
+    /// The lift is materialised rather than walked, which is the opposite of the decision
+    /// `docs/adr/0025` took for S24, and the difference is arithmetic rather than taste: S17 adds
+    /// at most one entry per stated note and can never chain, while S24's closure is quadratic in
+    /// the depth of the hierarchy. There is no bound here and none is needed.
+    ///
+    /// **An assertion is never overwritten by an entailment.** A resource stating both
+    /// `skos:definition "X"` and `skos:note "X"` keeps the asserted `skos:note` and records no
+    /// derivation, because claiming to have deduced something the graph said outright would put a
+    /// line in the "why" report that answers a question nobody asked. Same rule as an asserted
+    /// class (S29) and an asserted label dumbed down from SKOS-XL (S55).
+    ///
+    /// No finding is raised from this pass, ever. §7 states no integrity condition — see the
+    /// [`notes`](crate::NoteKind) module for why a concept with no definition is a rule-pack
+    /// question and not a SKOS one.
+    fn attach_notes(&mut self, model: &mut CoreModel) {
+        for (node, notes) in std::mem::take(&mut self.notes) {
+            for (value, kinds) in notes {
+                let held = model
+                    .resources
+                    .entry(node.clone())
+                    .or_default()
+                    .notes
+                    .entry(value.clone())
+                    .or_default();
+                for kind in &kinds {
+                    held.insert(*kind, NoteOrigin::Asserted);
+                }
+
+                // S17, after every assertion on this value is in place — so the six are lifted
+                // against the final picture and a `skos:note` stated later in the graph than the
+                // `skos:definition` it duplicates still wins.
+                let mut lifted: Vec<(NoteKind, NoteKind, SkosRule)> = Vec::new();
+                for kind in &kinds {
+                    let Some((parent, rule)) = kind.super_property() else {
+                        continue;
+                    };
+                    if let std::collections::btree_map::Entry::Vacant(slot) = held.entry(parent) {
+                        slot.insert(NoteOrigin::Entailed(rule));
+                        lifted.push((*kind, parent, rule));
+                    }
+                }
+
+                for (kind, parent, rule) in lifted {
+                    model.derivations.push(Derivation {
+                        conclusion: format!("{node} {parent} {value}"),
+                        premise: format!("{node} {kind} {value}"),
+                        rule,
+                    });
+                }
+            }
         }
     }
 
@@ -3132,10 +3307,14 @@ mod tests {
 
     // --- The model as a whole -------------------------------------------------------------
 
-    /// The model reads what it has rules for and counts the rest. `skos:notation` and
-    /// `skos:scopeNote` are §6 and §7, which are their own build-plan items, so they leave nothing
-    /// behind but a number — and a resource mentioned only by one of them is not in the model at
-    /// all, which is what stops the model growing with the graph rather than with its structure.
+    /// The model reads what it has rules for and counts the rest. `skos:notation` is §6, which is
+    /// not built, so it leaves nothing behind but a number — and a resource mentioned only by a
+    /// predicate we have no rule for is not in the model at all, which is what stops the model
+    /// growing with the graph rather than with its structure.
+    ///
+    /// **`skos:scopeNote` used to be in this list and is not any more.** §7 landed, so a note is
+    /// now read and kept; the assertion below is the one that changed, and it is left visible
+    /// rather than quietly deleted because the boundary this test draws is the point of it.
     #[test]
     fn statements_outside_the_core_model_are_counted_and_dropped() {
         let model = CoreModel::from_statements([
@@ -3153,6 +3332,18 @@ mod tests {
         assert_eq!(model.statements_read(), 5);
         assert_eq!(model.count_of(SkosClass::Concept), 1);
         assert!(model.resource(&ex("Board")).is_none());
+
+        let a = match model.resource(&ex("A")) {
+            Some(resource) => resource,
+            None => unreachable!("<A> is a concept"),
+        };
+        // The notation is gone: nothing reads §6 yet.
+        assert!(!a
+            .notes()
+            .keys()
+            .any(|value| value.to_string().contains("CHEM")));
+        // The scope note is not: §7 does.
+        assert_eq!(a.notes_of(NoteKind::ScopeNote).count(), 1);
     }
 
     /// The counterpart, and the behaviour this item changed: a `skos:broader` **is** in the core
@@ -5338,5 +5529,388 @@ mod tests {
             CoreModel::from_statements([s(&a, &skos("related"), &b), s(&b, &skos("related"), &c)]);
         assert!(associative_only.findings().is_empty());
         assert!(associative_only.checks_are_complete());
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Documentation properties — SKOS Reference §7. Examples 22, 23 and 24 are the whole of the
+    // specification's own evidence for this section, and all three are marked *consistent*.
+    //
+    // The load-bearing fact about §7 is a negative one: it has **no integrity conditions**. §5.4
+    // has a heading called "Integrity Conditions" and §7 has no such subsection at all, so every
+    // test below that asserts something is *not* a finding is asserting the specification's own
+    // silence, not our leniency.
+    // ---------------------------------------------------------------------------------------
+
+    /// `<subject> skos:<kind> <object>`.
+    fn noted(subject: &Node, kind: NoteKind, object: Term) -> Statement {
+        Statement::new(subject.clone(), kind.iri(), object)
+    }
+
+    /// **Example 22** — "the graph below gives an example of the 'documentation as an RDF
+    /// literal' pattern", marked consistent.
+    ///
+    /// ```turtle
+    /// <MyResource> skos:note "this is a note"@en .
+    /// ```
+    #[test]
+    fn example_22_a_note_as_a_literal_is_consistent() {
+        let resource = ex("MyResource");
+        let model = CoreModel::from_statements([noted(
+            &resource,
+            NoteKind::Note,
+            tagged("this is a note", "en"),
+        )]);
+
+        assert!(model.is_consistent() && model.checks_are_complete());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+
+        let held = match model.resource(&resource) {
+            Some(held) => held,
+            None => unreachable!("the subject of a note is in the model"),
+        };
+        assert_eq!(
+            held.notes_of(NoteKind::Note).collect::<Vec<_>>(),
+            vec![&tagged("this is a note", "en")]
+        );
+        // Asserted, and nothing was inferred: `skos:note` has no super-property, so S17 has
+        // nothing to lift it onto.
+        assert_eq!(
+            held.note_origin(&tagged("this is a note", "en"), NoteKind::Note),
+            Some(NoteOrigin::Asserted)
+        );
+        assert!(model.derivations().is_empty());
+    }
+
+    /// **Example 23** — "the graph below gives an example of the 'documentation as a document
+    /// reference' pattern", marked consistent.
+    ///
+    /// ```turtle
+    /// <MyResource> skos:note <MyNote> .
+    /// ```
+    ///
+    /// This is the one that catches a tool being stricter than the standard. A note whose value
+    /// is an IRI is not a `Finding::LiteralOnObjectProperty` in reverse and it is not ill-formed:
+    /// S16 makes `skos:note` an `owl:AnnotationProperty`, which has neither a domain nor a range,
+    /// and the specification prints this graph as consistent.
+    #[test]
+    fn example_23_a_note_as_a_document_reference_is_consistent() {
+        let (resource, note) = (ex("MyResource"), ex("MyNote"));
+        let model = CoreModel::from_statements([noted(
+            &resource,
+            NoteKind::Note,
+            Term::Node(note.clone()),
+        )]);
+
+        assert!(model.is_consistent() && model.checks_are_complete());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+
+        let held = match model.resource(&resource) {
+            Some(held) => held,
+            None => unreachable!("the subject of a note is in the model"),
+        };
+        assert_eq!(
+            held.notes_of(NoteKind::Note).collect::<Vec<_>>(),
+            vec![&Term::Node(note.clone())]
+        );
+
+        // And the *object* acquired nothing. §7 has no range, so `<MyNote>` is not a concept, not
+        // a resource of ours, and not a member of the customer's vocabulary. Contrast a
+        // `skos:broader`, whose object S20 types.
+        assert!(model.resource(&note).is_none());
+    }
+
+    /// **Example 24** — "in the example graph below, `skos:definition` has been used to provide a
+    /// plain text definition for a resource of type `owl:Class`", marked consistent.
+    ///
+    /// ```turtle
+    /// <Protein> rdf:type owl:Class ;
+    ///   skos:definition """A physical entity consisting of a sequence of amino-acids; ..."""@en .
+    /// ```
+    ///
+    /// The point of the example is that the subject is **not** a `skos:Concept`, and it is why
+    /// `documentation_coverage` counts concepts while the model keeps notes on anything.
+    #[test]
+    fn example_24_a_definition_on_a_non_concept_is_consistent_and_is_kept() {
+        let protein = ex("Protein");
+        let definition = tagged(
+            "A physical entity consisting of a sequence of amino-acids; a protein monomer; a \
+             single polypeptide chain. An example is the EGFR protein.",
+            "en",
+        );
+        let model = CoreModel::from_statements([
+            Statement::new(
+                protein.clone(),
+                RDF_TYPE,
+                Node::iri("http://www.w3.org/2002/07/owl#Class"),
+            ),
+            noted(&protein, NoteKind::Definition, definition.clone()),
+        ]);
+
+        assert!(model.is_consistent() && model.checks_are_complete());
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+
+        let held = match model.resource(&protein) {
+            Some(held) => held,
+            None => unreachable!("the subject of a note is in the model"),
+        };
+        assert!(!held.is_a(SkosClass::Concept));
+        assert_eq!(
+            held.notes_of(NoteKind::Definition).collect::<Vec<_>>(),
+            vec![&definition]
+        );
+        // Kept on the resource, and absent from the coverage table, which counts concepts.
+        assert!(model
+            .documentation_coverage()
+            .iter()
+            .all(|row| row.concepts == 0 && row.notes == 0));
+    }
+
+    /// S17 — the six are sub-properties of `skos:note` — applied, and its derivation printed.
+    ///
+    /// This is the one inference §7 licenses, and `CLAUDE.md` §3 requires it to explain itself:
+    /// the conclusion, the statement it came from, and the numbered rule.
+    #[test]
+    fn s17_lifts_each_specific_note_onto_skos_note_with_its_derivation() {
+        let concept = ex("Chemistry");
+        let value = tagged("The study of matter.", "en");
+        let mut statements = vec![typed(&concept, SkosClass::Concept)];
+        for kind in NoteKind::ALL {
+            if kind != NoteKind::Note {
+                statements.push(noted(&concept, kind, value.clone()));
+            }
+        }
+        let model = CoreModel::from_statements(statements);
+
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        for kind in NoteKind::ALL {
+            let expected = if kind == NoteKind::Note {
+                NoteOrigin::Entailed(SkosRule::S17)
+            } else {
+                NoteOrigin::Asserted
+            };
+            assert_eq!(held.note_origin(&value, kind), Some(expected), "{kind}");
+        }
+
+        // One derivation, not six: the six specific notes carry the *same* value, so they license
+        // one `skos:note` between them and the second lift finds the slot filled.
+        let derivations: Vec<String> = model
+            .derivations()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(derivations.len(), 1, "{derivations:?}");
+        assert!(
+            derivations[0].contains("skos:note") && derivations[0].contains("S17"),
+            "{derivations:?}"
+        );
+        assert!(
+            derivations[0].contains("sub-properties of skos:note"),
+            "the derivation must quote the statement, not just cite it: {derivations:?}"
+        );
+    }
+
+    /// The entailment runs upwards only. A bare `skos:note` stays a bare `skos:note`.
+    ///
+    /// Nothing follows from `<A> skos:note "x"` about which of the six it might have been, and
+    /// guessing would be the same error as inferring a `skos:broader` from a
+    /// `skos:semanticRelation`. So a report can say "400 notes, 120 of them definitions" and can
+    /// never turn the other 280 into definitions.
+    #[test]
+    fn a_general_note_is_never_turned_into_a_specific_one() {
+        let concept = ex("Chemistry");
+        let value = tagged("The study of matter.", "en");
+        let model = CoreModel::from_statements([
+            typed(&concept, SkosClass::Concept),
+            noted(&concept, NoteKind::Note, value.clone()),
+        ]);
+
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert_eq!(
+            held.note_origin(&value, NoteKind::Note),
+            Some(NoteOrigin::Asserted)
+        );
+        for kind in NoteKind::ALL {
+            if kind != NoteKind::Note {
+                assert_eq!(held.note_origin(&value, kind), None, "{kind}");
+            }
+        }
+        assert!(model.derivations().is_empty());
+    }
+
+    /// An asserted note is never overwritten by an entailed one, and no derivation is recorded
+    /// for something the graph said outright.
+    ///
+    /// Same rule as an asserted class and an asserted label dumbed down from SKOS-XL. It is
+    /// tested in both statement orders because the pass has to be independent of the order the
+    /// graph happened to be written in, and a map iteration would otherwise decide it.
+    #[test]
+    fn an_asserted_note_beats_the_one_s17_would_have_inferred() {
+        let concept = ex("Chemistry");
+        let value = tagged("The study of matter.", "en");
+        let definition = noted(&concept, NoteKind::Definition, value.clone());
+        let note = noted(&concept, NoteKind::Note, value.clone());
+
+        for statements in [
+            vec![definition.clone(), note.clone()],
+            vec![note, definition],
+        ] {
+            let model = CoreModel::from_statements(statements);
+            let held = match model.resource(&concept) {
+                Some(held) => held,
+                None => unreachable!("the subject of a note is in the model"),
+            };
+            assert_eq!(
+                held.note_origin(&value, NoteKind::Note),
+                Some(NoteOrigin::Asserted)
+            );
+            assert!(model.derivations().is_empty(), "{:?}", model.derivations());
+        }
+    }
+
+    /// §7 states no integrity condition, so things that would be violations under §5 are not
+    /// findings here — and this test exists to stop somebody adding one.
+    ///
+    /// Three shapes that a tool built on habit rather than on the specification would flag:
+    /// two definitions in the same language (S14's rule is about `skos:prefLabel` and has no
+    /// counterpart in §7); the same value under two different note properties (S13's disjointness
+    /// is about the three *labelling* properties); and a concept with no documentation at all.
+    /// The third is a real governance question and it belongs to a Z39.19 or ISO 25964 rule pack
+    /// in `openbiz-validate`, where it can be named and switched off — not to a SKOS finding
+    /// citing a statement the specification never made.
+    #[test]
+    fn section_7_states_no_integrity_condition_and_this_build_invents_none() {
+        let (documented, bare) = (ex("Chemistry"), ex("Physics"));
+        let model = CoreModel::from_statements([
+            typed(&documented, SkosClass::Concept),
+            typed(&bare, SkosClass::Concept),
+            noted(
+                &documented,
+                NoteKind::Definition,
+                tagged("The study of matter.", "en"),
+            ),
+            noted(
+                &documented,
+                NoteKind::Definition,
+                tagged("What chemists do.", "en"),
+            ),
+            noted(
+                &documented,
+                NoteKind::ScopeNote,
+                tagged("What chemists do.", "en"),
+            ),
+        ]);
+
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        assert!(model.is_consistent() && model.checks_are_complete());
+
+        // Two definitions in one language, both kept.
+        let held = match model.resource(&documented) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert_eq!(held.notes_of(NoteKind::Definition).count(), 2);
+        // One value under two properties: one key, two kinds, no clash.
+        let shared = match held.notes().get(&tagged("What chemists do.", "en")) {
+            Some(kinds) => kinds,
+            None => unreachable!("the shared value is held"),
+        };
+        assert_eq!(shared.len(), 3, "definition, scopeNote, and S17's note");
+
+        // And the undocumented concept is a count, not a complaint.
+        assert!(match model.resource(&bare) {
+            Some(held) => held.notes().is_empty(),
+            None => unreachable!("<Physics> is a concept"),
+        });
+    }
+
+    /// The coverage table is what `openbiz inspect` prints, and it counts concepts, notes, and
+    /// how many of the notes we supplied.
+    ///
+    /// Every kind gets a row even when the count is zero: "no definitions anywhere" is an answer,
+    /// and a missing row would be indistinguishable from a report that does not look.
+    #[test]
+    fn documentation_coverage_counts_concepts_notes_and_what_s17_supplied() {
+        let (a, b) = (ex("Chemistry"), ex("Physics"));
+        let model = CoreModel::from_statements([
+            typed(&a, SkosClass::Concept),
+            typed(&b, SkosClass::Concept),
+            noted(&a, NoteKind::Definition, tagged("Matter.", "en")),
+            noted(&a, NoteKind::ScopeNote, tagged("Not alchemy.", "en")),
+            noted(&b, NoteKind::Definition, tagged("Forces.", "en")),
+            noted(&b, NoteKind::Note, tagged("Under review.", "en")),
+        ]);
+
+        let coverage = model.documentation_coverage();
+        assert_eq!(coverage.len(), NoteKind::ALL.len());
+        let row = |kind: NoteKind| match coverage.iter().find(|row| row.kind == kind) {
+            Some(row) => row.clone(),
+            None => unreachable!("every kind has a row"),
+        };
+
+        assert_eq!(
+            (
+                row(NoteKind::Definition).concepts,
+                row(NoteKind::Definition).notes
+            ),
+            (2, 2)
+        );
+        assert_eq!(
+            (
+                row(NoteKind::ScopeNote).concepts,
+                row(NoteKind::ScopeNote).notes
+            ),
+            (1, 1)
+        );
+        assert_eq!(
+            (
+                row(NoteKind::Example).concepts,
+                row(NoteKind::Example).notes
+            ),
+            (0, 0)
+        );
+
+        // `skos:note`: three values across two concepts — two lifted by S17 from the definitions
+        // and the scope note on <Chemistry>, one stated outright on <Physics> alongside a lifted
+        // one. Four notes, three of them ours.
+        let note = row(NoteKind::Note);
+        assert_eq!((note.concepts, note.notes, note.inferred), (2, 4, 3));
+        // Nothing but `skos:note` can be inferred, because nothing else has a super-property.
+        for kind in NoteKind::ALL {
+            if kind != NoteKind::Note {
+                assert_eq!(row(kind).inferred, 0, "{kind}");
+            }
+        }
+    }
+
+    /// A note is read the same whichever kind of term it carries, and a resource may hold both
+    /// patterns for the same property — which a thesaurus mid-migration routinely does.
+    #[test]
+    fn one_property_may_carry_a_literal_and_a_reference_at_once() {
+        let concept = ex("Chemistry");
+        let model = CoreModel::from_statements([
+            typed(&concept, SkosClass::Concept),
+            noted(&concept, NoteKind::Definition, tagged("Matter.", "en")),
+            noted(
+                &concept,
+                NoteKind::Definition,
+                Term::Node(ex("IupacDefinition")),
+            ),
+        ]);
+
+        let held = match model.resource(&concept) {
+            Some(held) => held,
+            None => unreachable!("<Chemistry> is a concept"),
+        };
+        assert_eq!(held.notes_of(NoteKind::Definition).count(), 2);
+        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        // Both were lifted onto `skos:note`, because S17 is about the property and says nothing
+        // about the value.
+        assert_eq!(held.notes_of(NoteKind::Note).count(), 2);
     }
 }

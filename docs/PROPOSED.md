@@ -1192,3 +1192,42 @@ has. `README.md` is the right home for it and a human wrote it._
 - **Cost & impact:** one iteration on its own; close to free if done as part of the all-conditions
   item, which is the better sequencing.
 - **Suggested phase:** Phase 2, as part of "All SKOS integrity conditions from the specification".
+
+### Put SKOS §6 (`skos:notation`) in the plan — it has no item anywhere
+- **Status:** proposed.
+- **Gap:** SKOS Reference §6 defines `skos:notation` and statement **S15** ("skos:notation is an
+  instance of owl:DatatypeProperty"). Phase 2's backlog has items for lexical labels (§5),
+  documentation properties (§7), semantic relations (§8), collections (§9) and mapping properties
+  (§10). **There is no item for §6 at all** — not unchecked, not deferred, not blocked. It was
+  noticed while reading §7, because the two sections are adjacent and the model's own test names
+  `skos:notation` as the example of a statement it drops.
+- **Why load-bearing:** a notation is the *classification code* — `621.3`, `E11.9`, `ISIC C10` —
+  and in the regulated industries `CLAUDE.md` names as the buyer, it is frequently the primary key
+  the rest of the enterprise joins on. A thesaurus imported from a library or statistical
+  classification is mostly notations. Today they are read from the file, stored in the graph, and
+  exported again correctly — the store is faithful — but the SKOS model does not see them, so
+  `openbiz inspect` reports nothing about them and nothing can search or sort by one. It is also
+  the one place SKOS uses a *typed* literal deliberately (§6.5.1 recommends a datatype per
+  notation scheme), which interacts with `adr/0014`'s finding that a literal past Oxigraph's
+  precision boundary round-trips perfectly while ceasing to be a value.
+- **Cost & impact:** small — one property, one statement, no integrity condition, no closure. A
+  day's item at the size Phase 2's others have run. It should probably sit immediately after the
+  documentation properties, since both are per-concept scalars the concept editor will want.
+- **Suggested phase:** Phase 2.
+
+### Say which of §7's properties a concept is *missing*, as a rule pack rather than a finding
+- **Status:** proposed.
+- **Gap:** `openbiz inspect` now counts documentation coverage and says explicitly that SKOS
+  requires none, naming ANSI/NISO Z39.19 and ISO 25964 as the documents that would ask. That is
+  honest, and it is also an admission that we cannot yet answer the question a governance team
+  actually has: *which* concepts lack a definition, and does that matter for this vocabulary.
+- **Why load-bearing:** it is the single most common check a taxonomy team runs, every incumbent
+  ships it, and `docs/COMPETITIVE.md` records that our differentiator is not having the check but
+  being able to say **which document asks for it and why** — which needs the check to exist, cited,
+  and refusable. The right home is `openbiz-validate`'s rule-pack substrate, expressed in SHACL as
+  `CLAUDE.md` §2 requires, not a hard-coded `Finding` in `openbiz-skos`. Building it in the SKOS
+  crate would be quick and would be the exact mistake this iteration refused to make.
+- **Cost & impact:** blocked on Phase 4's SHACL substrate existing, so this is a *placement*
+  decision more than a work item: it should be one of the first rules the Z39.19 pack carries, and
+  it should be listed on that pack's build-plan item so it is not rediscovered later.
+- **Suggested phase:** Phase 4.

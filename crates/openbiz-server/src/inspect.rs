@@ -226,6 +226,30 @@ fn report(graph: &str, model: &CoreModel) -> String {
         }
     }
 
+    // Documentation — SKOS Reference §7. Printed for any vocabulary that has concepts, including
+    // one that documents none of them, because "0 definitions" is the answer to the question a
+    // governance team asks first and a missing section would read as "we did not look".
+    //
+    // **Coverage and not content.** The notes are the longest text a thesaurus holds and there is
+    // roughly one definition per concept, so printing them would drown every other answer here —
+    // the same reason the labels appear as coverage. `openbiz notes <graph> <resource>` prints
+    // the notes themselves, one resource at a time.
+    if concepts > 0 {
+        out.push_str("\ndocumentation:\n");
+        for row in model.documentation_coverage() {
+            out.push_str(&format!("  {row}\n"));
+        }
+        // Neither a finding nor a complaint, and the line says so outright. §7 has no "Integrity
+        // Conditions" subsection at all — §5.4 does — so a concept with no definition is
+        // consistent SKOS. Whether it *ought* to have one is ANSI/NISO Z39.19 and ISO 25964,
+        // which are rule packs in `openbiz-validate` and are not built yet. Saying which document
+        // would ask the question is what stops an operator reading the zero as our verdict.
+        out.push_str(
+            "  §7 states no integrity condition, so an undocumented concept is consistent SKOS; \
+             requiring a definition is a Z39.19 / ISO 25964 rule pack\n",
+        );
+    }
+
     let schemes: Vec<_> = model.instances_of(SkosClass::ConceptScheme).collect();
     if !schemes.is_empty() {
         out.push_str("\nconcept schemes:\n");
