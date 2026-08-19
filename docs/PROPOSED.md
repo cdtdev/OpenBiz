@@ -1630,3 +1630,32 @@ has. `README.md` is the right home for it and a human wrote it._
   a historical dataset needs.
 - **Suggested phase:** Phase 2 for (a) if it is judged part of the lifecycle; otherwise Phase 12,
   where cross-vocabulary awareness lives.
+
+### Take back a retirement over a subtree, so an abandoned migration is one decision
+- **Status:** proposed.
+- **Gap:** `openbiz reinstate` (`adr/0042`) takes back the retirement of **one** resource. The case
+  the deprecation lifecycle exists for is a migration — import a legacy scheme, retire a large part
+  of it in favour of the new one — and a migration that is abandoned, or that retired one branch
+  too many, has to be reversed one concept at a time, each producing its own candidate for a
+  reviewer to approve separately. `openbiz move` had exactly this shape and answered it by acting on
+  a subtree; nothing in the deprecation lifecycle does.
+- **Why load-bearing:** it is the same sparse-case assumption iteration 46 flagged as its own
+  "still uncertain" about *show and mark*, arriving from the other end. Every part of this
+  lifecycle has been designed against a thesaurus with a handful of obsolete terms, and every part
+  of it becomes awkward in the migration case that a governance function actually runs. A reviewer
+  handed two hundred one-line candidates will approve them without reading them, which turns the
+  candidate seam — the thing `CLAUDE.md` §3 makes the substrate of the whole product — into a
+  formality.
+- **Options:** (a) `--subtree`, mirroring `openbiz move`: take back the retirement of a concept and
+  everything below it, in one candidate. Simple, and wrong in one common case — a retired concept
+  can have children retired for their own unrelated reasons. (b) Scope it by the retirement instead
+  of by the tree: take back every retirement that named *this* concept as its replacement, which is
+  precisely "undo that migration" and reads the graph rather than guessing. (c) Take back every
+  retirement in a candidate that was applied, by candidate id, which is the most honest of the
+  three — it reverses a decision that was actually made — and needs the store to record which
+  statements an applied candidate wrote, which it already does.
+- **Cost & impact:** (a) is small and reuses the walk `openbiz move` has. (c) is the most valuable
+  and is really a general "revert a candidate" capability that every write path in this build would
+  want, which is an argument for proposing it as that rather than as a flag on this command.
+- **Suggested phase:** Phase 2 for (a) or (b); (c) belongs with the candidate seam and should not be
+  smuggled in as a deprecation feature.

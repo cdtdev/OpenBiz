@@ -2456,6 +2456,12 @@ module's own tests and end to end against the real binary reading a store off di
   vocabulary cannot see; that recurrence is itself the finding.
 - **What would close it:** a decision about whether provenance belongs in the vocabulary or in an
   export sidecar, taken once for both.
+- **Widened at iteration 47.** `openbiz reinstate` has the same shape and makes it worse in one
+  specific way: after a retirement is taken back, the *only* thing left in the exported vocabulary
+  saying the retirement ever happened is a free-text `skos:changeNote` — which `adr/0042`
+  deliberately keeps, and which carries no date, no author, and no machine-readable indication
+  that it is about a retirement at all. The fact survives the export; every governance attribute
+  of it does not.
 - **Opened:** iteration 45
 
 ### `openbiz split` counts mapping statements where it means mapped resources, and reports one link as two
@@ -2484,6 +2490,12 @@ module's own tests and end to end against the real binary reading a store off di
   exists to stop one exhausting memory rather than to describe a real vocabulary.
 - **Note:** `WalkBound`, `PathBound`, `SearchBound`, `SlugBound`, `ReferenceBound`, and now this.
   Six constants, one measured (`PathBound`, iteration 40). The recurrence is the finding.
+- **Widened at iteration 47.** `ReinstatementScan` reuses the same constant as a cap on **every**
+  status statement it holds about one resource — markers, unreadable markers and replacements —
+  and not only the replacements the field is named for. So one unmeasured number now guards two
+  scans with different contents, and the second one holds statements rather than counting them,
+  which is the more expensive of the two. Recorded here rather than as a seventh entry, because
+  duplicating the entry would hide that it is the *same* number doing more work.
 - **Opened:** iteration 45
 
 ### Nothing about `openbiz deprecate` is measured on a large vocabulary
@@ -2570,3 +2582,55 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** a scheme-level read path, which Phase 3's concept tree needs anyway.
 - **Opened:** iteration 46
 
+
+### Nothing about `openbiz reinstate` is measured on a large vocabulary
+- **Kind:** partial-coverage
+- **What is proven:** correctness on fixtures of a handful of concepts, in-process and against the
+  real binary on disk — including the whole-graph claim that a reinstatement restores the
+  vocabulary letter for letter except the change notes, checked by comparing three `openbiz backup`
+  outputs rather than by asking the code what it did.
+- **What is not:** cost. It reads the vocabulary once for the model *and its retirements*, once
+  more for the status scan, and twice more for `newly_broken` — four passes, the same shape as a
+  deprecation — and then runs `elsewhere` across every vocabulary in the store. The surroundings
+  section additionally scans the whole `Retirements` index for resources naming this one as their
+  replacement, which is linear in the retirements the vocabulary holds and is therefore most
+  expensive in exactly the migration case where it matters.
+- **Note:** the tenth unmeasured cost in this crate. The proposal to replace the whole run of them
+  with measurements has been unpromoted since iteration 45.
+- **What would close it:** the command run against the 100k and 1M generated vocabularies
+  `adr/0013` and `adr/0024` already build, with a large fraction of the concepts retired, and
+  wall-clock and peak memory recorded.
+- **Opened:** iteration 47
+
+### An `owl:deprecated` this build cannot read is handled only in a unit test
+- **Kind:** partial-coverage
+- **What is proven:** `CoreModel::reinstate` leaves an `owl:deprecated` whose object is not read as
+  `true` — `"false"`, an IRI, a language-tagged literal — exactly where it is, and reports it in
+  `Reinstatement::unread` so the report can say what was not touched and why (`adr/0042` §5).
+  Tested in the domain crate against a hand-built statement.
+- **What is not:** that the path survives a real import. Nothing here has pushed
+  `owl:deprecated "false"^^xsd:boolean` through Oxigraph's Turtle parser and out again, so the
+  lexical form the store hands back — and therefore whether `says_true` reads it the same way
+  after a round trip through the store as it does from a fixture — is untested. The same doubt
+  applies to `says_true`'s leniency about a plain `"true"`, which has always been tested from
+  fixtures only.
+- **What would close it:** a binary-level test that imports a vocabulary carrying both spellings of
+  the marker and an unreadable one, and asserts what `openbiz reinstate` removes and what it names.
+- **Opened:** iteration 47
+
+### Nothing takes back a retirement in bulk, and a reversed migration is one command per concept
+- **Kind:** partial-coverage
+- **What is proven:** one resource, one command, one candidate — and the report tells the operator
+  which of its neighbours are still retired, so the next command is at least discoverable.
+- **What is not:** the case the deprecation lifecycle was built for. A migration retires a large
+  fraction of a scheme; abandoning that migration means taking back every one of those retirements,
+  and there is no way to do it but to run the command once per concept, each producing its own
+  candidate for a reviewer to approve separately. `openbiz move` has the same shape and solved it
+  by acting on a subtree; nothing here does.
+- **Note:** this is the mirror of iteration 46's "still uncertain" about whether *show and mark*
+  survives a vocabulary that has retired most of itself. Both are the sparse-case assumption
+  showing through, from opposite ends of the lifecycle.
+- **What would close it:** either a subtree or query-scoped form of the command, or a recorded
+  decision that one-at-a-time is right because each retirement was its own decision. Proposed in
+  `docs/PROPOSED.md`, unpromoted.
+- **Opened:** iteration 47
