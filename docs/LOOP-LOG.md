@@ -3805,3 +3805,72 @@ look competent disables the one signal that catches a stuck loop.
   vendors purely because Collibra's docs render to markdown and the others' do not, and I presented
   that as deliberate thinness. It was partly deliberate and partly the crawler's shape showing
   through, and I cannot cleanly separate the two.
+
+## Iteration 51 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `88b4626`, tree clean. CI for that
+  commit was **still in progress** when I looked, 90 seconds after it started, so I did not read it
+  as green; the PR run for the same tree (`f8ddb1b`) was `success` and branch protection had
+  accepted the merge, which is the stronger signal. Both inboxes empty: `promote-queue.json` is
+  `[]`, `feedback.md` zero bytes. Iteration 37's LCGFT fixture is unpromoted for the fifteenth
+  iteration.
+- **The date does not agree, and this is the first time.** The harness reports `currentDate`
+  **2026-08-20**; `date -u` on the host said **2026-08-19T12:03Z** at orientation and 12:06Z at
+  branch creation. I dated everything 2026-08-19, from the host clock, because that is what the
+  commits and the CI runs are stamped with and a document dated a day ahead of its own commit is
+  the more confusing of the two errors. Worth a human glance if it recurs.
+- **The item was bigger than it read, so I split it in place and did the first third.** "Asking a
+  read command for current concepts only, opt-in per command" is now three items — `search`,
+  `tree`, and `ancestors`+`paths` — because what "leave the retired ones out" means for a flat
+  result list and for a *hierarchy* are different questions, and the plan item said so itself
+  ("the work is deciding what it means for a tree"). Doing all three in one iteration would have
+  decided the tree case in passing, which is exactly how a decision gets made without being taken.
+  Phase 2 is now 26 of 30; the denominator moved by two and the status line says why.
+- **What shipped: `openbiz search <graph> <text> --current` (`adr/0043`).** Opt-in, off unless
+  typed, refused if typed twice, composes with every other narrowing option. `adr/0041`'s defaults
+  are untouched.
+- **The rule the flag is built around is the whole design: it hides the hits and never the fact
+  that there were hits.** Every report closes with how many labels matched on how many retired
+  concepts, and the sentence that gets them back. The case that matters is the one where
+  *everything* that matched was retired — then the list is empty, the report says "nothing
+  matched", and without the count that is precisely the false negative `adr/0041` refused to ship,
+  about a term the vocabulary *holds*. Both the unit test and the end-to-end test pin that
+  sentence rather than the happy path.
+- **The bug I designed out rather than shipped and found later.** The obvious implementation is to
+  search and then filter the answer. That is wrong in a way invisible on a fixture: the 200-hit
+  bound is applied inside the scan, so 200 retired matches sorting ahead of the current ones would
+  crowd every current hit out and `is_complete()` would report the empty result as the whole truth.
+  So the exclusion goes **inside the scan, before the bound** —
+  `CoreModel::search_excluding(query, skip)` — and `the_bound_is_spent_on_the_hits_that_survive_
+  the_exclusion` is the test that fails if anyone moves it back out. The model is handed a set of
+  nodes and never told why they are in it, which keeps `owl:deprecated` out of a SKOS query
+  (`adr/0041` §1) and leaves the same seam for the two remaining items.
+- **One judgement worth recording:** a resource naming a successor with no `owl:deprecated` marker
+  is **kept** by `--current`. Every command here reads it as current, `inspect` reports it as the
+  commonest way a retirement goes wrong, and hiding it from a search for current concepts would
+  suppress a term on the strength of a statement that does not retire it. It keeps its
+  `[replaced, but not marked retired]` mark, which is the only thing saying the vocabulary is of
+  two minds.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1070 Rust tests, 0 failed**, up from 1059: eleven new, three in
+  `openbiz-skos`, six in `openbiz-server`'s unit tests and the CLI parser, two end-to-end against
+  the real binary in `tests/retired_concepts_read.rs`. UI untouched, so no npm run. No new
+  dependency, no build artefact. I also drove the shipped binary by hand and read both reports,
+  which is how I noticed the withheld count printed *before* "that is all of them." and read as
+  contradicting it; it now closes the report instead.
+- **Recorded:** `adr/0043`. `UNTESTED.md`'s "no read command can be asked for current concepts
+  only" **narrowed, not closed** — renamed to name the three commands that still cannot, with the
+  live cost stated: a flag that works on `search` and errors on `tree` reads as a half-finished
+  tool, which it is until those items land. The unmeasured-scale entry gained the new allocation
+  (`--current` materialises the retired IRI set before the scan). `CAPABILITIES.md` updated.
+  Nothing self-promoted.
+- **Still uncertain:** whether the withheld count actually prevents the duplicate, or only lets us
+  say we warned them. The reasoning is that a curator who reads "2 more label(s) matched, on 1
+  retired concept(s)" will re-run without the flag — but they typed `--current` precisely because
+  they did not want to think about retired terms, and a line of prose at the bottom of a report is
+  the weakest possible intervention on someone who has already told the tool to filter. The
+  stronger designs are all worse in other ways: refusing the flag when it would withhold
+  everything is a command that disobeys, and naming the withheld concepts is a flag that does not
+  do what it says. I picked the honest minimum and I cannot tell from here whether it is enough,
+  because the failure it guards against is a person creating a concept somewhere else entirely and
+  nothing in this repository will ever observe it.

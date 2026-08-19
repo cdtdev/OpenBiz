@@ -3,19 +3,19 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **55 of 221 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **56 of 223 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 25 of 28. Every count on this line is
-derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was left; that is a
-product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records how the
-denominator has moved as items were split.
+wait on authorisation, not on anything else. Phase 2 is 26 of 30; the denominator moved by two
+because iteration 51 split the "current concepts only" item into one per command. Every count on
+this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was
+left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records
+how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **25 of 28**. Iteration 50 took no code item
-either: it was the scheduled every-25th **product-owner pass**, which closed the catalog-vendor gap
-in `docs/COMPETITIVE.md` and sharpened the ISO 25964 findings. Of the three items left in the phase,
-one — the candidate seam over HTTP and in the interface — is **blocked on authentication**
-(`BLOCKED.md`); the next unblocked item is asking a read command for current concepts only, and it
-is what the next iteration should take.
+**Current position:** Phase 2 (SKOS authoring model), **26 of 30**. Iteration 51 landed
+`openbiz search --current`, the first of the three commands the "current concepts only" item was
+split into. Of the four items left, one — the candidate seam over HTTP and in the interface — is
+**blocked on authentication** (`BLOCKED.md`); the next unblocked item is the same flag for
+`openbiz tree`, which is the hard case the split was made to give room to.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1157,12 +1157,44 @@ the interface is a core differentiator, and building it late means retrofitting 
       > **Scope, honestly:** one resource per command, so reversing a migration is one candidate
       > per concept — in `docs/UNTESTED.md`, with the subtree form proposed rather than built. Cost
       > is unmeasured on a large vocabulary, as with every other bulk operation.
-- [ ] **Asking a read command for current concepts only**, opt-in per command
-      > `adr/0041` decided that no command hides a retired concept by default, and gave the
-      > reasons. A curator building a new branch still has a real need for a browse or a search
-      > that leaves them out. The shape is a flag; the work is deciding what it means for a *tree*,
-      > where hiding a retired concept with current children below it cannot simply drop the
-      > branch.
+- [x] **Asking for current concepts only — `openbiz search`**, opt-in and never a default
+      > `openbiz search <graph> <text> --current` (`adr/0043`). Split out of the item below at
+      > iteration 51, because "leave the retired ones out" of a flat result list and out of a
+      > *hierarchy* are different questions with different answers, and doing both at once would
+      > have decided the second one in passing.
+      > **The rule the flag is built around: it hides the hits and never the fact that there were
+      > hits.** Every report closes with how many labels matched on how many retired concepts and
+      > the sentence that gets them back — run the same search without `--current`. The case it
+      > exists for is the one where *everything* that matched was retired: without the count, that
+      > report says "nothing matched" about a term the vocabulary holds, which is the false
+      > negative `adr/0041` refused to ship and the way a duplicate gets created (`CLAUDE.md`
+      > §1.7). Both the unit test and the end-to-end test pin that sentence, not the happy path.
+      > The exclusion runs **inside the scan, before the bound**, via
+      > `CoreModel::search_excluding(query, skip)`. Filtering the answer afterwards would let
+      > retired matches sorting ahead of current ones use up the 200-hit bound and then report the
+      > empty result as complete. The model is handed a set of nodes and never told why: the
+      > status stays beside it (`adr/0041` §1), and the same seam serves the two items below.
+      > A resource naming a successor without the marker is **kept** — every command here reads it
+      > as current, and it keeps the mark that says the vocabulary is of two minds about it.
+      > Proved end to end against the real binary in `tests/retired_concepts_read.rs`.
+      > **Scope, honestly:** `search` only. The two items below are the rest, and until they land
+      > `--current` on another command is an unknown-option error. In `docs/UNTESTED.md`.
+- [ ] **Asking for current concepts only — `openbiz tree`**, the case a flat list does not have
+      > The hard one, and the reason the original item was split. A retired concept with current
+      > concepts below it is the *commonest* outcome of a retirement (`adr/0040` §4), so hiding it
+      > cannot simply drop the branch: the children would hang off nothing and the report would
+      > misstate the shape of the vocabulary. Deciding between lifting them, printing the retired
+      > parent as a bare structural line, and refusing the combination is the work. `adr/0043`'s
+      > rule binds it — whatever is hidden, the count of what was hidden is still reported — and
+      > `CoreModel::search_excluding`'s seam is the shape to follow: hand the walk a set of nodes,
+      > not a status.
+- [ ] **Asking for current concepts only — `openbiz ancestors` and `openbiz paths`**
+      > Both answer about *routes*, so the question is not which concepts to drop but what to say
+      > about a route that runs through a retired one. A path with a retired concept in the middle
+      > is not a path a breadcrumb should offer and is also not a path that has stopped existing.
+      > `openbiz inspect` deliberately gets no such flag: its retirement section is a report
+      > *about* the retirements, and narrowing it to current concepts would empty the one thing it
+      > is for.
 - [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation
       > The hook lands here so the creation path is **built around discovery** rather than
       > retrofitted. Enterprise and public sources arrive in Phase 12 (`adr/0003`).
