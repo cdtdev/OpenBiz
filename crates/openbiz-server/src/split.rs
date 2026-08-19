@@ -36,6 +36,31 @@
 //! §1.7 working as designed, but arrives as a message about an IRI when the operator's problem is
 //! a name. That asymmetry is real, it is tested both ways, and it is in `docs/UNTESTED.md`.
 //!
+//! # The record `adr/0003` §3 requires, on a path that creates several things at once
+//!
+//! `--because "…"` files one justification per part (`adr/0050`), each naming what discovery found
+//! under *that part's* name and passed over. Two decisions that a mint did not have to take:
+//!
+//! **One reason covers every part.** The judgement being justified — that this concept conflates
+//! senses nothing existing covers, so it is being divided — is made once, for the split. A reason
+//! per part would have to be aligned to the `--into` labels positionally, and a miscounted list
+//! would file each reason against the wrong part with nothing to signal it. `adr/0003` §4 also
+//! binds here: reuse must be *less* work than recreating, and three reasons for a three-part split
+//! is a mechanism people route around. What is per part is the thing an auditor queries — what was
+//! found and passed over — and that could never have been one field.
+//!
+//! **A rejected candidate does not take its justifications away.** The records are written when the
+//! split is proposed, and they stand whatever the reviewer decides, because a justification is a
+//! statement somebody made at a time and an audit trail that erased its entries when a change was
+//! refused would be evidence of nothing. What makes that honest rather than convenient is that each
+//! record **names the candidate it arose from**, so `openbiz justifications` reads that candidate's
+//! state back and says whether the concept was ever created. A part that was rejected is reported
+//! as a creation that did not happen, not counted as proliferation.
+//!
+//! **The concept being split is never among what a part "passed over"** — `adr/0048`'s rule,
+//! carried into the record. The original is what is being divided; filing it as a match a part
+//! declined to reuse would record the original as a duplicate of its own parts.
+//!
 //! # Why a command and not an endpoint
 //!
 //! The same objection every writing path in this build records: there is no authentication yet,
@@ -48,7 +73,9 @@ use openbiz_discovery::{Discovered, Discovery, LocalVocabularies, Match};
 use openbiz_skos::{
     mint as mint_iri, CoreModel, LabelQuery, Node, Part, PartRequest, Placement, SlugBound, Split,
 };
-use openbiz_store::{Candidate, CandidateSource, GraphId, Provenance, Store};
+use openbiz_store::{
+    Candidate, CandidateSource, GraphId, Justification, NewJustification, Provenance, Store,
+};
 
 use crate::cli::{actor, CommandError};
 use crate::discovery::StoreCorpus;
@@ -60,6 +87,11 @@ use crate::staging::{borrowed, elsewhere, newly_broken, BrokenConditions};
 ///
 /// Reads the vocabulary, mints an IRI for each part, computes the change, and stages it as a
 /// candidate. **Nothing is written to the vocabulary, and nothing about `concept` is removed.**
+///
+/// With `because`, one justification per part is recorded once the candidate exists — see the
+/// module documentation for why one reason covers every part and why a rejected candidate does not
+/// take its records away with it.
+#[allow(clippy::too_many_arguments)]
 pub fn split(
     store: &Store,
     graph: &str,
@@ -68,6 +100,7 @@ pub fn split(
     placement: Placement,
     language: Option<&str>,
     pattern: Option<&str>,
+    because: Option<&str>,
 ) -> Result<String, CommandError> {
     let vocabulary = GraphId::vocabulary(graph)?;
     let model = crate::inspect::read(store, graph)?;
@@ -148,9 +181,106 @@ pub fn split(
     let additions = borrowed(split.additions());
     let candidate = store.propose_edit(&vocabulary, &additions, &[], &provenance)?;
 
+    // After the candidate, because each record names it: a justification whose creation was
+    // proposed as a change nobody can look up would say nothing about whether the concept exists.
+    let recorded = match because {
+        Some(reason) => record_justifications(
+            store,
+            &vocabulary,
+            &parts,
+            &already,
+            &concept,
+            reason,
+            &candidate,
+        )?,
+        None => Vec::new(),
+    };
+
     Ok(report(
-        graph, &model, &split, &source, &elsewhere, &candidate, &already,
+        graph, &model, &split, &source, &elsewhere, &candidate, &already, because, &recorded,
     ))
+}
+
+/// File one justification per part: what that part's name found, and why it was created anyway.
+///
+/// One `reason` covers all of them and each carries its own considered list — the two halves of the
+/// decision in the module note. The concept being divided is excluded from every list, because it
+/// is not something a part passed over.
+///
+/// Written in one transaction: a split that recorded two parts out of three would read as though
+/// the third had been reused, and nothing would distinguish that from a record that was lost.
+fn record_justifications(
+    store: &Store,
+    vocabulary: &GraphId,
+    parts: &[PartRequest],
+    already: &[(String, Option<Discovered>)],
+    concept: &Node,
+    reason: &str,
+    candidate: &Candidate,
+) -> Result<Vec<Justification>, CommandError> {
+    // Both are built first and kept, because the requests below borrow them.
+    let considered: Vec<Vec<String>> = already
+        .iter()
+        .map(|(_, found)| passed_over(found.as_ref(), concept))
+        .collect();
+    let by = actor()?;
+
+    let requests: Vec<NewJustification<'_>> = parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| NewJustification {
+            graph: vocabulary,
+            // A minted IRI is an IRI; an empty string here would be refused by the store rather
+            // than recorded, which is the right way for an impossible case to fail.
+            concept: part.iri.as_iri().unwrap_or_default(),
+            label: &part.label,
+            considered: considered.get(index).map(Vec::as_slice).unwrap_or_default(),
+            reason,
+            // A part discovery could not be asked about has no search behind it at all, which is
+            // weaker than a search that was cut short and is recorded as the weaker of the two.
+            // Today nothing reaches it: a split refuses a label with no lexical form.
+            search_was_complete: already
+                .get(index)
+                .and_then(|(_, found)| found.as_ref())
+                .is_some_and(|found| found.is_complete() && found.unavailable().next().is_none()),
+            arising_from: Some(candidate.id()),
+            recorded_by: &by,
+        })
+        .collect();
+
+    Ok(store.record_justifications(&requests)?)
+}
+
+/// Whether any part's name matched the concept being divided.
+///
+/// The one case where the record's silence about the original is worth explaining: a part carrying
+/// a label the original already has is a label to apportion, and a reader who saw it above and not
+/// in the records is owed the reason.
+fn matched_the_original(already: &[(String, Option<Discovered>)], concept: &Node) -> bool {
+    already.iter().any(|(_, found)| {
+        found
+            .as_ref()
+            .is_some_and(|found| found.matches().iter().any(|hit| hit.resource == *concept))
+    })
+}
+
+/// What one part's name found and did not reuse, as IRIs an auditor can look up.
+///
+/// Exact and containing matches alike, because the question is what the person saw and passed over.
+/// Never the concept being split (`adr/0048`), and never a blank node, which cannot be named in a
+/// record — the report counts those instead.
+fn passed_over(found: Option<&Discovered>, concept: &Node) -> Vec<String> {
+    let Some(found) = found else {
+        return Vec::new();
+    };
+    found
+        .matches()
+        .iter()
+        .filter(|hit| hit.resource != *concept)
+        .filter_map(|hit| hit.resource.as_iri().map(str::to_owned))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// What discovery found for each part's name, in the order the parts were given.
@@ -200,6 +330,7 @@ fn already_here(
 /// because that is what was asked for. **What is still on the original comes before the diff**,
 /// because it is the work this command deliberately did not do and the reader has to see it before
 /// they decide the change is finished.
+#[allow(clippy::too_many_arguments)]
 fn report(
     graph: &str,
     model: &CoreModel,
@@ -208,6 +339,8 @@ fn report(
     elsewhere: &[(String, usize)],
     candidate: &Candidate,
     already: &[(String, Option<Discovered>)],
+    because: Option<&str>,
+    recorded: &[Justification],
 ) -> String {
     let mut out = String::new();
 
@@ -223,7 +356,12 @@ fn report(
     ));
     out.push_str(&format!("in {graph}\n"));
 
-    out.push_str(&discovered(already, split.parts(), split.concept()));
+    out.push_str(&discovered(
+        already,
+        split.parts(),
+        split.concept(),
+        because.is_some(),
+    ));
 
     out.push_str(&format!(
         "\nthe parts, named under {}:\n",
@@ -232,6 +370,12 @@ fn report(
     for part in split.parts() {
         out.push_str(&format!("  {} {}\n", part.iri, part.label));
     }
+
+    out.push_str(&justifications(
+        recorded,
+        candidate,
+        matched_the_original(already, split.concept()),
+    ));
 
     out.push_str("\nplaced:\n");
     match split.placement() {
@@ -349,11 +493,22 @@ fn report(
     }
     out.push_str("and remove nothing.\n");
 
+    // Two wordings, because with `--because` the shorter one would be false. Nothing reached the
+    // vocabulary either way; what changed is that OpenBiz's own graph now holds the records, and a
+    // report that said "nothing has been written" full stop would be describing the other case.
     out.push_str(&format!(
-        "\nproposed candidate {} against {}. Nothing has been written to the vocabulary. Review \
-         it with `openbiz candidate {}`, then `openbiz approve {}` or `openbiz reject {}`.\n",
+        "\nproposed candidate {} against {}. {} Review it with `openbiz candidate {}`, then \
+         `openbiz approve {}` or `openbiz reject {}`.\n",
         candidate.id(),
         candidate.target(),
+        match recorded.is_empty() {
+            true => "Nothing has been written to the vocabulary.".to_owned(),
+            false => format!(
+                "Nothing has been written to the vocabulary; the {} justification(s) above are in \
+                 OpenBiz's own graph and stay there whatever is decided.",
+                recorded.len()
+            ),
+        },
         candidate.id(),
         candidate.id(),
         candidate.id(),
@@ -374,7 +529,12 @@ fn report(
 /// The three things this must never do are the ones `openbiz mint` names: report a bounded list
 /// as a complete one, report an unavailable source as an absent match, or print a bare "nothing
 /// found" without saying how far the looking went.
-fn discovered(already: &[(String, Option<Discovered>)], parts: &[Part], concept: &Node) -> String {
+fn discovered(
+    already: &[(String, Option<Discovered>)],
+    parts: &[Part],
+    concept: &Node,
+    justified: bool,
+) -> String {
     let mut out = String::from(
         "\nwhat already exists, asked once per part before any of them was named (CLAUDE.md \
          §1.7):\n",
@@ -484,6 +644,10 @@ fn discovered(already: &[(String, Option<Discovered>)], parts: &[Part], concept:
     if anything {
         out.push_str(LADDER);
         out.push_str(STILL_PROPOSED);
+        out.push_str(match justified {
+            true => JUSTIFIED,
+            false => UNJUSTIFIED,
+        });
     }
 
     // Said before the counts, because a reader who takes "18 label(s) read" for the size of the
@@ -500,6 +664,64 @@ fn discovered(already: &[(String, Option<Discovered>)], parts: &[Part], concept:
             .filter_map(|(_, found)| found.clone())
             .collect::<Vec<_>>(),
     )));
+    out
+}
+
+/// What was filed, part by part, and the two things a reader must not assume about it.
+///
+/// Nothing at all without `--because`: the ladder above has already named the flag, and a section
+/// saying "no records" under every split would be the paragraph readers learn to skip.
+fn justifications(
+    recorded: &[Justification],
+    candidate: &Candidate,
+    original_matched: bool,
+) -> String {
+    if recorded.is_empty() {
+        return String::new();
+    }
+
+    let mut out = format!(
+        "\nrecorded, one justification for each part, against candidate {} (adr/0003 §3):\n",
+        candidate.id()
+    );
+    for record in recorded {
+        out.push_str(&format!(
+            "  {} <{}> {:?}\n",
+            record.id(),
+            record.concept(),
+            record.label()
+        ));
+        match record.considered().len() {
+            0 => out.push_str("    naming nothing passed over under that name\n"),
+            count => {
+                out.push_str(&format!("    naming {count} passed over:\n"));
+                for resource in record.considered() {
+                    out.push_str(&format!("      <{resource}>\n"));
+                }
+            }
+        }
+        if !record.search_was_complete() {
+            out.push_str("    and saying the search behind it did not finish\n");
+        }
+    }
+
+    // Said only where it is news — a part took a label the original carries — because a sentence
+    // printed under every split is one a reader learns to skip on the day it applies.
+    if original_matched {
+        out.push_str(
+            "the concept being divided is not among what these name as passed over: it is what is \
+             being split, not a concept a part declined to reuse.\n",
+        );
+    }
+    // And this one always, because it is what the records do *not* say, which is where a
+    // governance report gets read as stronger than it is.
+    out.push_str(&format!(
+        "these stand whether candidate {} is approved or rejected, because a justification is a \
+         statement made at a time. `openbiz justifications` reads each one's candidate back, so a \
+         part that was rejected is reported as a creation that did not happen rather than counted \
+         as one that did.\n",
+        candidate.id()
+    ));
     out
 }
 
@@ -525,9 +747,23 @@ const STILL_PROPOSED: &str = concat!(
     "The parts are still proposed below, because two concepts can legitimately share a label — ",
     "but if one of these is the concept a part means, approving this change creates the ",
     "duplicate. Nothing has been written to the vocabulary yet: `openbiz reject` costs nothing.\n",
-    "nothing here records a justification for creating these instead: adr/0003 §3 requires that ",
-    "record, and the note on the candidate below says what this command did rather than why the ",
-    "concepts above did not fit.\n",
+);
+
+/// The ladder's last rung when nothing was recorded: the flag that would record it.
+///
+/// Said here rather than left for the operator to find, because `adr/0003` §4 makes the cost of
+/// the record part of whether it gets used at all.
+const UNJUSTIFIED: &str = concat!(
+    "nothing here records a justification for creating these instead: §3 asks for a reason naming ",
+    "what was found and why none of it fitted, and --because \"…\" files one for each part, which ",
+    "`openbiz justifications` and any SPARQL query over the system graph can then be asked ",
+    "about.\n",
+);
+
+/// And when one was: where it is, and what it is worth.
+const JUSTIFIED: &str = concat!(
+    "the reason given with --because is recorded against each part below, together with what that ",
+    "part's own name found and passed over.\n",
 );
 
 /// Where the minting pattern came from, in one clause.
@@ -634,6 +870,7 @@ mod tests {
             Placement::Beside,
             None,
             Some("http://example.org/{slug}"),
+            None,
         )
     }
 
@@ -719,6 +956,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/{slug}"),
+            None,
         )
         .expect("a granularity split");
 
@@ -744,6 +982,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a three-part split under a numbered pattern");
 
@@ -804,6 +1043,7 @@ mod tests {
             &[refused("Money")],
             &[part],
             &openbiz_skos::Node::iri(BANKS),
+            false,
         );
 
         assert!(
@@ -828,7 +1068,12 @@ mod tests {
     /// check ran and came back empty, rather than being left to read silence as safety.
     #[test]
     fn a_direct_check_that_finds_nothing_says_so_rather_than_saying_nothing() {
-        let report = super::discovered(&[refused("Vaults")], &[], &openbiz_skos::Node::iri(BANKS));
+        let report = super::discovered(
+            &[refused("Vaults")],
+            &[],
+            &openbiz_skos::Node::iri(BANKS),
+            false,
+        );
 
         assert!(
             report.contains("nothing here is already called any of these"),
@@ -849,6 +1094,7 @@ mod tests {
             &[("".to_owned(), None)],
             &[],
             &openbiz_skos::Node::iri(BANKS),
+            false,
         );
 
         assert!(
@@ -875,6 +1121,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a colliding label is a warning, not a wall");
 
@@ -913,6 +1160,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a match elsewhere is a warning, not a wall");
 
@@ -962,6 +1210,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a match in a pending change is a warning, not a wall");
 
@@ -987,6 +1236,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a part named after the original is legitimate");
 
@@ -1025,6 +1275,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a split that duplicates nothing");
 
@@ -1066,6 +1317,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a split");
 
@@ -1092,6 +1344,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/c_{n}"),
+            None,
         )
         .expect("a split");
 
@@ -1124,6 +1377,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/{slug}"),
+            None,
         )
         .expect_err("the slug of an existing label is an existing IRI");
 
@@ -1146,6 +1400,7 @@ mod tests {
             Placement::Below,
             None,
             Some("http://example.org/{slug}"),
+            None,
         )
         .expect_err("`tellers` is already an IRI in this vocabulary");
 
@@ -1206,6 +1461,7 @@ mod tests {
             Placement::Beside,
             None,
             Some("http://example.org/{slug}"),
+            None,
         )
         .expect_err("a concept scheme is not a concept");
 
@@ -1213,5 +1469,190 @@ mod tests {
             CommandError::Split(SplitError::NotAConcept { .. }) => {}
             other => panic!("expected a split refusal, got {other}"),
         }
+    }
+
+    /// A split with a reason, so the recording half can be read.
+    fn justified(store: &Store, labels: &[String], reason: &str) -> Result<String, CommandError> {
+        split(
+            store,
+            VOCABULARY,
+            BANKS,
+            labels,
+            Placement::Beside,
+            None,
+            Some("http://example.org/c_{n}"),
+            Some(reason),
+        )
+    }
+
+    /// **The item.** A split is *N* creations, so it files *N* records — each naming what that
+    /// part's own name found, which is the thing one field on the candidate could never have said.
+    #[test]
+    fn a_split_records_one_justification_for_each_part_with_its_own_findings() {
+        let (_directory, store) = store_with(POLYSEMOUS);
+        load(
+            &store,
+            OTHER,
+            r#"
+            @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+            @prefix other: <http://example.org/other/> .
+            other:rivers a skos:Concept ; skos:prefLabel "Rivers"@en .
+            "#,
+        );
+
+        let report = justified(
+            &store,
+            &["Rivers".to_owned(), "Vaults".to_owned()],
+            "the river sense elsewhere belongs to another scheme entirely",
+        )
+        .expect("a two-part split");
+
+        let recorded = store.justifications().expect("readable");
+        assert_eq!(
+            recorded.len(),
+            2,
+            "one for each part, not one for the split"
+        );
+        assert_eq!(recorded[0].label(), "Rivers");
+        assert_eq!(
+            recorded[0].considered(),
+            ["http://example.org/other/rivers".to_owned()],
+            "the part that duplicates something names it"
+        );
+        assert_eq!(recorded[1].label(), "Vaults");
+        assert!(
+            recorded[1].considered().is_empty(),
+            "and the part that duplicates nothing records that it found nothing, which is not the \
+             same as no record"
+        );
+        for record in &recorded {
+            assert_eq!(
+                record.reason(),
+                "the river sense elsewhere belongs to another scheme entirely",
+                "one reason covers the split, because the judgement was made once"
+            );
+            assert!(record.search_was_complete());
+        }
+        assert!(
+            report.contains("recorded, one justification for each part"),
+            "{report}"
+        );
+        assert!(
+            report.contains("<http://example.org/other/rivers>"),
+            "the report shows what was filed, not just that something was: {report}"
+        );
+    }
+
+    /// Every record names the candidate the creation was proposed as, which is what makes a
+    /// rejected split reportable as a creation that did not happen.
+    #[test]
+    fn every_record_names_the_candidate_the_split_was_proposed_as() {
+        let (_directory, store) = store_with(POLYSEMOUS);
+        justified(&store, &senses(), "two senses, neither of them here").expect("a split");
+
+        let staged = store
+            .candidates()
+            .expect("the store's candidates")
+            .into_iter()
+            .find(|candidate| candidate.state() == CandidateState::Proposed)
+            .expect("the split's candidate");
+        for record in store.justifications().expect("readable") {
+            assert_eq!(
+                record.arising_from(),
+                Some(staged.id()),
+                "a record with no candidate could not say whether the concept was ever created"
+            );
+        }
+
+        // And rejecting it leaves the records exactly as they were: a justification is a statement
+        // made at a time, not a claim about the present.
+        store
+            .decide(staged.id(), Decision::Reject, "bob")
+            .expect("the reviewer refuses it");
+        assert_eq!(
+            store.justifications().expect("readable").len(),
+            2,
+            "a refused change does not erase the record of why it was proposed"
+        );
+    }
+
+    /// `adr/0048`'s rule, carried into the record: the concept being divided is not something a
+    /// part "passed over". Recording it would file the original as a duplicate of its own parts.
+    #[test]
+    fn the_concept_being_split_is_never_recorded_as_passed_over() {
+        let (_directory, store) = store_with(POLYSEMOUS);
+
+        // "Bank" is an alternative label of the concept being split, so discovery matches the
+        // original itself — the case iteration 56 found by running the command.
+        let report = justified(
+            &store,
+            &["Bank".to_owned(), "Riverbank".to_owned()],
+            "the two senses need separate concepts",
+        )
+        .expect("a two-part split");
+
+        let recorded = store.justifications().expect("readable");
+        assert_eq!(recorded[0].label(), "Bank");
+        assert!(
+            recorded[0].considered().is_empty(),
+            "the original is what is being divided, not a concept the part declined to reuse: {:?}",
+            recorded[0].considered()
+        );
+        assert!(
+            report.contains("the concept being divided is not among what these name"),
+            "and the report says why it is absent, having shown the match above: {report}"
+        );
+    }
+
+    /// Without a reason nothing is recorded, and the report says which flag would record one —
+    /// `adr/0003` §4, where the cost of the record decides whether it is ever used.
+    #[test]
+    fn a_split_without_a_reason_records_nothing_and_names_the_flag() {
+        let (_directory, store) = store_with(POLYSEMOUS);
+        let report = split(
+            &store,
+            VOCABULARY,
+            BANKS,
+            &["Money".to_owned(), "Rivers".to_owned()],
+            Placement::Beside,
+            None,
+            Some("http://example.org/c_{n}"),
+            None,
+        )
+        .expect("a split with no reason is still a split");
+
+        assert!(
+            store.justifications().expect("readable").is_empty(),
+            "nothing is recorded unless it is asked for"
+        );
+        assert!(report.contains("--because"), "{report}");
+        assert!(
+            !report.contains("recorded, one justification"),
+            "and no section claims otherwise: {report}"
+        );
+    }
+
+    /// A split that fails after the discovery pass records nothing, because the records name a
+    /// candidate and there is none.
+    #[test]
+    fn a_refused_split_records_no_justification() {
+        let (_directory, store) = store_with(POLYSEMOUS);
+        let error = split(
+            &store,
+            VOCABULARY,
+            "http://example.org/scheme",
+            &senses(),
+            Placement::Beside,
+            None,
+            Some("http://example.org/c_{n}"),
+            Some("a reason nobody will read"),
+        )
+        .expect_err("a concept scheme is not a concept");
+
+        assert!(matches!(error, CommandError::Split(_)), "{error}");
+        assert!(
+            store.justifications().expect("readable").is_empty(),
+            "a justification for a creation that was never even proposed is not evidence"
+        );
     }
 }

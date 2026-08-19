@@ -173,7 +173,7 @@ fn a_justification_recorded_by_one_invocation_is_read_by_the_next() {
 
     let read = ok(dir.path(), &["justifications"]);
     assert!(
-        read.contains("1 record(s), of which 1 created something despite an existing match"),
+        read.contains("1 record(s), of which 1 passed over something that already existed"),
         "{read}"
     );
     assert!(read.contains(EXISTING), "what was passed over: {read}");
@@ -265,7 +265,7 @@ fn a_creation_with_nothing_found_is_recorded_and_distinguished() {
 
     let read = ok(dir.path(), &["justifications"]);
     assert!(
-        read.contains("1 record(s), of which 0 created something despite an existing match"),
+        read.contains("1 record(s), of which 0 passed over something that already existed"),
         "{read}"
     );
     assert!(read.contains("nothing existing was found"), "{read}");
@@ -433,4 +433,140 @@ fn a_second_justification_does_not_replace_the_first() {
     assert!(read.contains("2 record(s)"), "{read}");
     assert!(read.contains("a distinct sense"), "{read}");
     assert!(read.contains("and on reflection, still distinct"), "{read}");
+}
+
+/// **The other creation path, end to end.** `openbiz split` creates several concepts from one
+/// command, so it files one record per part — each naming what *that part's* name found — and the
+/// records name the candidate, which is what lets a later invocation say whether the concepts were
+/// ever created.
+#[test]
+fn a_split_records_one_justification_for_each_part_and_names_its_candidate() {
+    let dir = authored();
+
+    let proposed = ok(
+        dir.path(),
+        &[
+            "split",
+            ENERGY,
+            "https://example.org/energy/c_1",
+            "--place",
+            "beside",
+            "--into",
+            "Solar power",
+            "--into",
+            "Wind power",
+            "--because",
+            "the existing solar concept is a funding programme, not the technology",
+        ],
+    );
+    assert!(
+        proposed.contains("recorded, one justification for each part"),
+        "{proposed}"
+    );
+    assert!(
+        proposed.contains("against candidate 2"),
+        "the records name the change they arose from: {proposed}"
+    );
+
+    let read = ok(dir.path(), &["justifications"]);
+    assert!(
+        read.contains("2 record(s), of which 1 passed over something that already existed"),
+        "one part duplicated something and the other did not: {read}"
+    );
+    assert!(
+        read.contains(EXISTING),
+        "what the solar part passed over: {read}"
+    );
+    assert!(
+        read.contains("proposed as candidate 2, which nobody has decided yet"),
+        "the fate of the creation, while it is still open: {read}"
+    );
+
+    // And what was passed over is on disk as an IRI in the object position, with the candidate
+    // beside it — the two joins this record exists to support.
+    ok(dir.path(), &["backup", "out.nq"]);
+    let written = std::fs::read_to_string(dir.path().join("out.nq")).expect("the backup is there");
+    assert!(
+        written.contains(&format!(
+            "<urn:openbiz:justificationConsidered> <{EXISTING}>"
+        )),
+        "an IRI and not a literal: {written}"
+    );
+    assert!(
+        written.contains("<urn:openbiz:justificationCandidate> <urn:openbiz:candidate:2>"),
+        "the candidate is a node an auditor can join to its state: {written}"
+    );
+}
+
+/// A rejected split is **not** proliferation, and the report has to say so: nothing was created.
+/// The records stay, because a justification is a statement somebody made at a time.
+#[test]
+fn a_rejected_split_reads_as_a_creation_that_did_not_happen() {
+    let dir = authored();
+
+    ok(
+        dir.path(),
+        &[
+            "split",
+            ENERGY,
+            "https://example.org/energy/c_1",
+            "--place",
+            "beside",
+            "--into",
+            "Solar power",
+            "--into",
+            "Wind power",
+            "--because",
+            "a distinct sense of the term",
+        ],
+    );
+    ok(dir.path(), &["reject", "2"]);
+
+    let read = ok(dir.path(), &["justifications"]);
+    assert!(
+        read.contains("2 record(s)"),
+        "the records outlive the change they justified: {read}"
+    );
+    assert!(
+        read.contains("which was refused — the concept was never created"),
+        "{read}"
+    );
+    assert!(
+        read.contains("2 of these justify a creation that was then refused"),
+        "counted as well as marked, for a reader who stops at the summary: {read}"
+    );
+}
+
+/// A split with no reason records nothing and says which flag would have recorded one. This is the
+/// behaviour every existing script depends on, and `adr/0003` §4 makes naming the flag part of
+/// whether the record is ever used.
+#[test]
+fn a_split_without_the_flag_records_nothing() {
+    let dir = authored();
+
+    let proposed = ok(
+        dir.path(),
+        &[
+            "split",
+            ENERGY,
+            "https://example.org/energy/c_1",
+            "--place",
+            "beside",
+            "--into",
+            "Solar power",
+            "--into",
+            "Wind power",
+        ],
+    );
+    assert!(
+        proposed.contains("--because"),
+        "the ladder names the flag that files the record: {proposed}"
+    );
+    assert!(
+        !proposed.contains("recorded, one justification"),
+        "{proposed}"
+    );
+
+    let read = ok(dir.path(), &["justifications"]);
+    assert!(read.contains("nothing is recorded"), "{read}");
 }

@@ -1838,7 +1838,17 @@ worth nothing if they did not write it._
   to know who overrode it.
 
 ### Say whether a justified creation ever actually happened
-- **Status:** proposed.
+- **Status:** proposed — **half of it landed at iteration 58 as part of the `openbiz split` item,
+  and this entry is now only the other half.** `adr/0050` answered the decision this proposal said
+  was blocking it: the record is kept whatever the reviewer does, and it names the candidate it
+  arose from, so `openbiz justifications` reports a refused change as a concept that was never
+  created and counts those apart. What is still proposed is the **vocabulary** half below: an
+  approved change that was later deprecated, merged away, or retracted still reads as approved, and
+  a mint's record cannot see that the same IRI later arrived through an import. Cost is now
+  well understood — one subject lookup per record, on top of the candidate lookup that already
+  happens — and the reason it was not taken here is that it doubles the cost of a report whose cost
+  is unmeasured, and that "is it there today" invites a reader to treat an audit trail as a live
+  view.
 - **Gap:** a justification records that somebody decided to create rather than reuse. It does not
   record whether they then did. A curator can file one and never stage the concept, or stage it and
   have the candidate rejected, and `openbiz justifications` will still report the IRI as created

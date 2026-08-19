@@ -2857,7 +2857,7 @@ module's own tests and end to end against the real binary reading a store off di
   (Phase 12) — at which point the degraded path becomes ordinary rather than defensive.
 - **Opened:** iteration 56
 
-### ~~The reuse ladder is printed and still records nothing~~ — half closed at iteration 57
+### ~~The reuse ladder is printed and still records nothing~~ — CLOSED, iteration 58
 - **Kind:** partial-standard
 - **What is proven:** both creation paths print `adr/0003` §3's ladder when something is found, in
   the same words, from one shared constant — and both say in as many words that nothing here records
@@ -2877,6 +2877,11 @@ module's own tests and end to end against the real binary reading a store off di
   created despite an existing match" is now a query and a command. It is **half** closed because
   `openbiz split` still records nothing, so the sentence above is still true of that path, and
   because nothing is refused on either. Both remaining halves are below.
+- **Closed at iteration 58.** `openbiz split --because "…"` files one record per part (`adr/0050`),
+  so both creation paths in this build now write the record and both reports read it back. The
+  refusal half is *not* closed and is not part of this entry any more — it has its own, immediately
+  below, because "nothing makes anybody file one" is a different claim from "there is nowhere to
+  file one".
 - **Opened:** iteration 56
 
 ### A justification is recorded when asked for, and nothing asks
@@ -2927,7 +2932,7 @@ module's own tests and end to end against the real binary reading a store off di
   through `openbiz mint --because`, asserting the count and that the record names the rest.
 - **Opened:** iteration 57
 
-### A justification survives its creation being abandoned, and nothing notices
+### ~~A justification survives its creation being abandoned, and nothing notices~~ — closed at iteration 58, with a residue below
 - **Kind:** partial-standard
 - **What is proven:** recording appends and never replaces, so an audit trail does not overwrite its
   own entries.
@@ -2936,13 +2941,17 @@ module's own tests and end to end against the real binary reading a store off di
   or stage it and have the candidate rejected. The record still says a concept was created despite a
   match. Nothing joins a justification to whether its IRI ever reached a vocabulary, so
   `openbiz justifications` over-reports proliferation by an unknown amount.
-- **What would close it:** a line on each entry saying whether the IRI is now in the vocabulary,
-  which is a read the store can already do. It was left out because the interesting version of it —
-  what to do about a *rejected* candidate's justification — is the `openbiz split` item's decision,
-  and taking it here would settle it by accident.
+- **Closed at iteration 58.** A record now names the candidate its creation was proposed as
+  (`adr/0050`), and `openbiz justifications` reads that candidate's state back: a refused change is
+  reported as a concept that was never created, and counted separately, so the report no longer
+  reads a rejection as proliferation. A mint's record says "nothing was proposed" in as many words,
+  which is the same correction on the path that has no candidate at all. Checked by mutation:
+  reporting a rejected candidate as approved fails the end-to-end test.
+- **What is still not proven** is the vocabulary half, and it is now its own entry below — the
+  report says what a *reviewer* did, not what the vocabulary holds.
 - **Opened:** iteration 57
 
-### Reading every justification reads every record, unmeasured
+### Reading every justification reads every record — and now a candidate for each — unmeasured
 - **Kind:** unmeasured-scale
 - **What is proven:** correctness on stores holding a handful.
 - **What is not:** anything about a store holding thousands. `Store::justifications` lists every
@@ -2950,6 +2959,74 @@ module's own tests and end to end against the real binary reading a store off di
   and `openbiz justifications` filters to a vocabulary *after* that. A governance function that
   records one per creation for a year is the ordinary case, not the extreme one. This is the tenth
   entry in the unmeasured-scale family and the second on a read a person waits on.
+- **Worse since iteration 58**, deliberately: reporting each record's fate reads **one candidate
+  record per justification** on top of that, and the candidate lookup happens for every record shown,
+  before any of them is printed. The cost of answering "was it ever created" is a second read per
+  row, and nothing has measured either.
 - **What would close it:** a benchmark over a store with 10k records, and if it is slow, narrowing
-  in the store rather than in the caller.
-- **Opened:** iteration 57
+  in the store rather than in the caller, and reading the candidates in one pass rather than one at
+  a time.
+- **Opened:** iteration 57 · **widened:** iteration 58
+
+### One reason covers every part of a split, and a curator whose reasons differ has one sentence
+- **Kind:** partial-standard
+- **What is proven:** `openbiz split … --because "…"` files one record per part, each naming what
+  *that part's* name found and passed over, and every record carries the one reason. Tested both
+  ways round: the part that duplicated something names it, the part that duplicated nothing records
+  that it found nothing.
+- **What is not:** that one sentence is enough. `adr/0050` chose it deliberately — positional
+  alignment of N reasons to N `--into` labels would misfile silently, and `adr/0003` §4 says the
+  record must cost less than recreating — but the case it loses is real: a three-part split where
+  part A was not reused because the match is a broader term and part B because the match is in a
+  retired scheme now records one sentence covering both. An auditor reading the record for part B
+  reads a reason that may be about part A.
+- **What would close it:** knowing whether curators actually want per-part reasons, which is a
+  usability question this repository cannot answer, and — if they do — a form that cannot misalign,
+  such as `--because "label=reason"` keyed to the label rather than to position.
+- **Opened:** iteration 58
+
+### The fate a record reports is what a reviewer did, not what the vocabulary now holds
+- **Kind:** partial-standard
+- **What is proven:** each record names the candidate it arose from, and `openbiz justifications`
+  reports that candidate's state — undecided, approved, refused — or says nothing was proposed where
+  there is no candidate. A refused creation is reported as one that never happened and counted
+  separately from the rest.
+- **What is not:** whether the concept is in the vocabulary *now*. An approved candidate is reported
+  as approved, and the report is careful not to say "the concept exists" — but a concept approved and
+  then deprecated, merged away, or retracted still reads as approved, and a mint's record ("nothing
+  was proposed") cannot see that the same IRI later arrived through an import. The report is honest
+  about being a statement about the change, not about the vocabulary, which is not the same as
+  answering the question a governance team will actually ask.
+- **What would close it:** a read of the vocabulary per record — one subject lookup — and a fifth
+  fate: "approved, and the concept is/is not there today". Left out because it doubles the cost of a
+  report whose cost is already unmeasured (see above), and because "is it there today" invites the
+  reader to treat this record as a live view when it is an audit trail.
+- **Opened:** iteration 58
+
+### Two branches of the new fate reporting have no production caller
+- **Kind:** no-production-caller
+- **What is proven:** the four fates a build can produce — no candidate, proposed, applied,
+  rejected — each with a test.
+- **What is not:** two branches nothing can reach. The **unknown-state** arm exists because
+  `CandidateState` is `#[non_exhaustive]`, so a store written by a later build could carry a state
+  this one does not know; no test can construct one without inventing a state. And **a record naming
+  a candidate the store does not hold** is treated as corrupt, which nothing in this build can
+  produce: candidates are never deleted, and the record is written in the same command that raised
+  the candidate. Both are the honest handling of a case that cannot happen *yet*; both are untested
+  in the only way that would count, which is against a store that really has one.
+- **What would close it:** a hand-written store fixture with a doctored system graph, as
+  `a_candidate_this_build_cannot_look_up_is_corrupt` does at the store level — the server-level
+  report has no equivalent.
+- **Opened:** iteration 58
+
+### A split writes N justifications in one transaction, and N has never been large
+- **Kind:** unmeasured-scale
+- **What is proven:** the batch is atomic — one refusable request refuses all of them, checked by
+  mutation — and the identifiers of one split are consecutive. Every test splits into two parts.
+- **What is not:** a split into fifty. `Store::record_justifications` validates every request, then
+  writes them all inside one transaction that holds the store's write lock, having first computed the
+  next identifier by scanning every justification the store holds. That scan is once per batch rather
+  than once per record, which is the reason for the batch, but neither the scan nor the transaction
+  has been run against a store with thousands of records or a split with dozens of parts.
+- **What would close it:** the same benchmark as the entry above, driving a wide split.
+- **Opened:** iteration 58

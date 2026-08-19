@@ -59,8 +59,10 @@ use oxigraph::model::vocab::{rdf, xsd};
 use oxigraph::model::{Literal, NamedNode, Quad, Term};
 use thiserror::Error;
 
+use crate::candidate::{candidate_of_subject, candidate_subject};
 use crate::{
-    named_node, GraphId, GraphKind, RecordedAt, RegistryReader, Store, StoreError, Transaction,
+    named_node, CandidateId, GraphId, GraphKind, RecordedAt, RegistryReader, Store, StoreError,
+    Transaction,
 };
 
 /// The class every justification record is typed with, in the system graph.
@@ -96,6 +98,16 @@ const RECORDED_BY_IRI: &str = "urn:openbiz:justificationRecordedBy";
 
 /// Predicate carrying when it was recorded, as an `xsd:dateTime` on the UTC clock.
 const RECORDED_AT_IRI: &str = "urn:openbiz:justificationRecordedAt";
+
+/// Predicate naming the candidate the justified creation was proposed as. Absent, or exactly one.
+///
+/// A candidate's record, as an IRI in the object position, for the same reason the considered
+/// resources are: `?j <justificationCandidate> ?c . ?c <candidateState> "rejected"` is the question
+/// "what did we record a justification for and then not create", and it is only a query if the
+/// candidate is a node. It is absent where there is no candidate — `openbiz mint` computes an IRI
+/// and stages nothing — and that absence is reported rather than glossed, because a record with no
+/// candidate behind it says less about what exists than one with an applied candidate behind it.
+const CANDIDATE_IRI: &str = "urn:openbiz:justificationCandidate";
 
 /// Identifies one justification.
 ///
@@ -161,6 +173,7 @@ pub struct Justification {
     considered: Vec<String>,
     reason: String,
     search_was_complete: bool,
+    arising_from: Option<CandidateId>,
     recorded_by: String,
     recorded_at: RecordedAt,
 }
@@ -208,6 +221,21 @@ impl Justification {
         self.search_was_complete
     }
 
+    /// The candidate the justified creation was proposed as, if it was proposed as one.
+    ///
+    /// `None` says there is no proposal behind this record and never was: `openbiz mint` computes
+    /// an IRI and stages nothing, so a record it wrote is evidence that somebody looked before
+    /// naming something, not evidence that anything was created.
+    ///
+    /// `Some` is what makes the fate of the creation readable. The record itself never changes —
+    /// a justification is a statement made at a time — but the candidate it names has a state, so
+    /// a reader can tell a justified creation that happened from one that was rejected. Without
+    /// this the two are indistinguishable, and a governance report would count both as
+    /// proliferation.
+    pub fn arising_from(&self) -> Option<CandidateId> {
+        self.arising_from
+    }
+
     /// Who recorded it, named the way an auditor would want it named.
     pub fn recorded_by(&self) -> &str {
         &self.recorded_by
@@ -219,8 +247,34 @@ impl Justification {
     }
 }
 
+/// What a caller asks to have recorded, before the store has made a record of it.
+///
+/// A struct rather than a list of arguments because the fields are not interchangeable and several
+/// of them are strings: `record_justification(graph, concept, label, …)` is a call whose two middle
+/// arguments can be swapped without the compiler noticing, and a record that names the wrong
+/// concept is worse than no record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewJustification<'a> {
+    /// The vocabulary the concept was created for.
+    pub graph: &'a GraphId,
+    /// The IRI that was created.
+    pub concept: &'a str,
+    /// The label it was created under, which is the question discovery was asked.
+    pub label: &'a str,
+    /// Every resource discovery found under that label and the creator passed over.
+    pub considered: &'a [String],
+    /// Why none of them fitted, in the words of the person who decided that.
+    pub reason: &'a str,
+    /// Whether the search behind it reached every source and listed every match.
+    pub search_was_complete: bool,
+    /// The candidate this creation was proposed as, where there is one.
+    pub arising_from: Option<CandidateId>,
+    /// Who is answerable for the judgement.
+    pub recorded_by: &'a str,
+}
+
 impl Store {
-    /// Record why a new concept was created for `graph` rather than one of `considered` reused.
+    /// Record why a new concept was created for a vocabulary rather than an existing one reused.
     ///
     /// Appends; it never replaces. Two justifications for one IRI are two statements made at two
     /// times, and overwriting the first would delete evidence — the opposite of what the record is
@@ -232,98 +286,69 @@ impl Store {
     ///
     /// Writes to the system graph and never to a vocabulary, so it is not a change to a vocabulary
     /// and does not go through the candidate seam (`CLAUDE.md` §3).
-    #[allow(clippy::too_many_arguments)]
     pub fn record_justification(
         &self,
-        graph: &GraphId,
-        concept: &str,
-        label: &str,
-        considered: &[String],
-        reason: &str,
-        search_was_complete: bool,
-        recorded_by: &str,
+        request: &NewJustification<'_>,
     ) -> Result<Justification, StoreError> {
-        let refuse = |detail: String| {
-            Err(StoreError::JustificationRejected(JustificationRejected {
-                concept: concept.to_owned(),
-                detail,
-            }))
-        };
+        let mut written = self.record_justifications(std::slice::from_ref(request))?;
+        match written.pop() {
+            Some(record) => Ok(record),
+            // Unreachable: one request in, one record out. Said as an error rather than an
+            // `expect`, which `CLAUDE.md` §6 bars outside tests and startup.
+            None => Err(StoreError::JustificationRejected(JustificationRejected {
+                concept: request.concept.to_owned(),
+                detail: "the store recorded nothing for it and said nothing about why".to_owned(),
+            })),
+        }
+    }
 
-        if graph.kind() != GraphKind::Vocabulary {
-            return refuse(format!(
-                "{} is a {} graph, and concepts are created in vocabularies; nothing creates one \
-                 in OpenBiz's own graphs",
-                graph.iri(),
-                graph.kind()
-            ));
-        }
-        let Some(subject) = NamedNode::new(concept).ok() else {
-            return refuse(
-                "the thing it says was created is not an IRI, and a justification that cannot \
-                 name what it justifies is unattached to anything"
-                    .to_owned(),
-            );
-        };
-        if label.trim().is_empty() {
-            return refuse(
-                "it records no label, and the label is the question discovery was asked; a \
-                 justification that does not say what was searched for is not evidence that \
-                 anything was searched for"
-                    .to_owned(),
-            );
-        }
-        if reason.trim().is_empty() {
-            return refuse(
-                "it gives no reason, and adr/0003 §3 asks for a reason naming why nothing that \
-                 already exists fitted; a blank one is the click-through that section rules out"
-                    .to_owned(),
-            );
-        }
-        if recorded_by.trim().is_empty() {
-            return refuse(
-                "it does not say who decided that nothing existing fitted, and creating a \
-                 concept anyway is a judgement somebody is answerable for"
-                    .to_owned(),
-            );
-        }
-        let mut considered_nodes = Vec::with_capacity(considered.len());
-        for resource in considered {
-            match NamedNode::new(resource) {
-                Ok(node) => considered_nodes.push(node),
-                Err(_) => {
-                    return refuse(format!(
-                        "it lists {resource:?} among what already existed, and that is not an \
-                         IRI; a considered resource nobody can look up cannot be weighed against \
-                         the reason for passing it over"
-                    ))
-                }
-            }
+    /// Record several justifications at once — one creation each — in a single transaction.
+    ///
+    /// This is what a split needs: `openbiz split` creates *N* concepts from one command, and each
+    /// one has its own answer to "what already existed under this name". They are written together
+    /// because a partial governance record is the worst of the three outcomes. A report saying
+    /// "three parts, two justified" invites the reader to assume the third was reused, and nothing
+    /// distinguishes a part nobody justified from a part whose record was lost halfway through.
+    ///
+    /// So one refusal refuses them all, and the identifiers of a single split are consecutive.
+    /// An empty list records nothing and is not an error: a caller with nothing to record should
+    /// not have to special-case that.
+    pub fn record_justifications(
+        &self,
+        requests: &[NewJustification<'_>],
+    ) -> Result<Vec<Justification>, StoreError> {
+        let mut checked = Vec::with_capacity(requests.len());
+        for request in requests {
+            checked.push(check(request)?);
         }
 
         self.transaction(|txn| {
-            if !txn.contains_graph(graph.iri())? {
-                return Err(StoreError::NoSuchGraph {
-                    iri: graph.iri().to_owned(),
-                });
-            }
+            let mut written = Vec::with_capacity(checked.len());
+            let mut next = next_justification_id(txn)?;
+            for (request, subject) in requests.iter().zip(&checked) {
+                if !txn.contains_graph(request.graph.iri())? {
+                    return Err(StoreError::NoSuchGraph {
+                        iri: request.graph.iri().to_owned(),
+                    });
+                }
 
-            let record = Justification {
-                id: next_justification_id(txn)?,
-                concept: subject.as_str().to_owned(),
-                graph: graph.clone(),
-                label: label.to_owned(),
-                considered: considered_nodes
-                    .iter()
-                    .map(|node| node.as_str().to_owned())
-                    .collect(),
-                reason: reason.to_owned(),
-                search_was_complete,
-                recorded_by: recorded_by.to_owned(),
-                recorded_at: RecordedAt::now(),
-            };
-            txn.extend_graph(&GraphId::system(), &quads_of(&record))?;
-            Ok(record)
+                let record = Justification {
+                    id: next,
+                    concept: subject.as_str().to_owned(),
+                    graph: request.graph.clone(),
+                    label: request.label.to_owned(),
+                    considered: request.considered.to_vec(),
+                    reason: request.reason.to_owned(),
+                    search_was_complete: request.search_was_complete,
+                    arising_from: request.arising_from,
+                    recorded_by: request.recorded_by.to_owned(),
+                    recorded_at: RecordedAt::now(),
+                };
+                txn.extend_graph(&GraphId::system(), &quads_of(&record))?;
+                next = JustificationId(next.0 + 1);
+                written.push(record);
+            }
+            Ok(written)
         })
     }
 
@@ -367,6 +392,68 @@ impl Store {
             .map(|id| read_record(&self.backend, id, self.path()))
             .collect()
     }
+}
+
+/// Everything about a request that can be judged before the store is opened, judged.
+///
+/// Returns the created IRI as a node, because parsing it is one of the checks and parsing it twice
+/// would be a second place for the two answers to differ. Run for every request in a batch before
+/// any of them is written, so a refusal refuses the whole batch.
+fn check(request: &NewJustification<'_>) -> Result<NamedNode, StoreError> {
+    let refuse = |detail: String| {
+        Err(StoreError::JustificationRejected(JustificationRejected {
+            concept: request.concept.to_owned(),
+            detail,
+        }))
+    };
+
+    if request.graph.kind() != GraphKind::Vocabulary {
+        return refuse(format!(
+            "{} is a {} graph, and concepts are created in vocabularies; nothing creates one in \
+             OpenBiz's own graphs",
+            request.graph.iri(),
+            request.graph.kind()
+        ));
+    }
+    let Ok(subject) = NamedNode::new(request.concept) else {
+        return refuse(
+            "the thing it says was created is not an IRI, and a justification that cannot name \
+             what it justifies is unattached to anything"
+                .to_owned(),
+        );
+    };
+    if request.label.trim().is_empty() {
+        return refuse(
+            "it records no label, and the label is the question discovery was asked; a \
+             justification that does not say what was searched for is not evidence that anything \
+             was searched for"
+                .to_owned(),
+        );
+    }
+    if request.reason.trim().is_empty() {
+        return refuse(
+            "it gives no reason, and adr/0003 §3 asks for a reason naming why nothing that \
+             already exists fitted; a blank one is the click-through that section rules out"
+                .to_owned(),
+        );
+    }
+    if request.recorded_by.trim().is_empty() {
+        return refuse(
+            "it does not say who decided that nothing existing fitted, and creating a concept \
+             anyway is a judgement somebody is answerable for"
+                .to_owned(),
+        );
+    }
+    for resource in request.considered {
+        if NamedNode::new(resource).is_err() {
+            return refuse(format!(
+                "it lists {resource:?} among what already existed, and that is not an IRI; a \
+                 considered resource nobody can look up cannot be weighed against the reason for \
+                 passing it over"
+            ));
+        }
+    }
+    Ok(subject)
 }
 
 /// The next identifier to mint, one past the highest the store holds.
@@ -452,6 +539,12 @@ fn quads_of(record: &Justification) -> Vec<Quad> {
             CONSIDERED_IRI,
             NamedNode::new_unchecked(resource.clone()).into(),
         ));
+    }
+    // Absent rather than written as "none", so a query for the records with no proposal behind
+    // them is `FILTER NOT EXISTS`, and so a build that never writes one is not asserting anything
+    // about a candidate it does not have.
+    if let Some(candidate) = record.arising_from {
+        quads.push(quad(CANDIDATE_IRI, candidate_subject(candidate).into()));
     }
     quads
 }
@@ -555,6 +648,35 @@ fn read_record(
     }
     considered.sort_unstable();
 
+    // Optional, and re-read rather than trusted: a record naming a candidate this build cannot
+    // address is refused rather than reported without one, because "no candidate" is a claim about
+    // the creation — that nothing was ever proposed — and a build that cannot read the name it was
+    // given would be making that claim falsely.
+    let arising_from = match held.get(CANDIDATE_IRI).map(Vec::as_slice) {
+        None | Some([]) => None,
+        Some([Term::NamedNode(node)]) => {
+            Some(candidate_of_subject(node.as_str()).ok_or_else(|| {
+                corrupt(format!(
+                    "justification {id} says it arose from {node}, which does not identify a \
+                     candidate this build can look up; whether the creation it justifies ever \
+                     happened would then be unanswerable"
+                ))
+            })?)
+        }
+        Some([other]) => {
+            return Err(corrupt(format!(
+                "justification {id} has {other} for <{CANDIDATE_IRI}>, which is not an IRI"
+            )))
+        }
+        Some(many) => {
+            return Err(corrupt(format!(
+                "justification {id} names {} candidates, and one creation is proposed as at most \
+                 one",
+                many.len()
+            )))
+        }
+    };
+
     Ok(Justification {
         id,
         concept: iri(CONCEPT_IRI)?,
@@ -563,6 +685,7 @@ fn read_record(
         considered,
         reason: text(REASON_IRI)?,
         search_was_complete,
+        arising_from,
         recorded_by: text(RECORDED_BY_IRI)?,
         recorded_at,
     })
@@ -580,6 +703,25 @@ mod tests {
     /// The vocabulary IRI as the API takes it.
     fn id(iri: &str) -> GraphId {
         GraphId::vocabulary(iri).expect("a vocabulary IRI")
+    }
+
+    /// A request with the fields a test is not exercising already filled in.
+    fn asking<'a>(
+        graph: &'a GraphId,
+        concept: &'a str,
+        label: &'a str,
+        reason: &'a str,
+    ) -> NewJustification<'a> {
+        NewJustification {
+            graph,
+            concept,
+            label,
+            considered: &[],
+            reason,
+            search_was_complete: true,
+            arising_from: None,
+            recorded_by: "ada",
+        }
     }
 
     /// A store holding two registered vocabularies, one of which describes [`EXISTING`].
@@ -616,15 +758,15 @@ mod tests {
         let (_dir, store) = store();
 
         let written = store
-            .record_justification(
-                &id(ENERGY),
-                SOLAR,
-                "Solar power",
-                &[EXISTING.to_owned()],
-                "the existing one is a funding programme, not the technology",
-                true,
-                "ada",
-            )
+            .record_justification(&NewJustification {
+                considered: &[EXISTING.to_owned()],
+                ..asking(
+                    &id(ENERGY),
+                    SOLAR,
+                    "Solar power",
+                    "the existing one is a funding programme, not the technology",
+                )
+            })
             .expect("a complete justification is recorded");
 
         let read = store.justifications().expect("readable");
@@ -640,6 +782,12 @@ mod tests {
             "the existing one is a funding programme, not the technology"
         );
         assert!(only.search_was_complete());
+        assert_eq!(
+            only.arising_from(),
+            None,
+            "nothing was proposed, and a record that implied otherwise would say a creation \
+             happened"
+        );
         assert_eq!(only.recorded_by(), "ada");
         assert!(
             RecordedAt::parse(only.recorded_at()).is_ok(),
@@ -656,26 +804,23 @@ mod tests {
         let (_dir, store) = store();
 
         store
-            .record_justification(
-                &id(ENERGY),
-                SOLAR,
-                "Solar power",
-                &[EXISTING.to_owned()],
-                "a different sense of the term",
-                true,
-                "ada",
-            )
+            .record_justification(&NewJustification {
+                considered: &[EXISTING.to_owned()],
+                ..asking(
+                    &id(ENERGY),
+                    SOLAR,
+                    "Solar power",
+                    "a different sense of the term",
+                )
+            })
             .expect("recorded");
         store
-            .record_justification(
+            .record_justification(&asking(
                 &id(ENERGY),
                 "https://example.org/energy/c_2",
                 "Tidal power",
-                &[],
                 "nothing was found under this name",
-                true,
-                "ada",
-            )
+            ))
             .expect("recorded");
 
         // The join is the point, and it is why the resource passed over is an IRI in the object
@@ -723,7 +868,7 @@ mod tests {
             "and on reflection, still a different sense",
         ] {
             store
-                .record_justification(&id(ENERGY), SOLAR, "Solar power", &[], reason, true, "ada")
+                .record_justification(&asking(&id(ENERGY), SOLAR, "Solar power", reason))
                 .expect("recorded");
         }
 
@@ -745,15 +890,12 @@ mod tests {
         let (_dir, store) = store();
 
         let written = store
-            .record_justification(
+            .record_justification(&asking(
                 &id(ENERGY),
                 SOLAR,
                 "Solar power",
-                &[],
                 "nothing discovery reached is called this",
-                true,
-                "ada",
-            )
+            ))
             .expect("a justification with nothing considered is still a justification");
 
         assert!(written.considered().is_empty());
@@ -767,15 +909,15 @@ mod tests {
         let (_dir, store) = store();
 
         store
-            .record_justification(
-                &id(ENERGY),
-                SOLAR,
-                "Solar power",
-                &[],
-                "nothing was found, but one source could not be reached",
-                false,
-                "ada",
-            )
+            .record_justification(&NewJustification {
+                search_was_complete: false,
+                ..asking(
+                    &id(ENERGY),
+                    SOLAR,
+                    "Solar power",
+                    "nothing was found, but one source could not be reached",
+                )
+            })
             .expect("recorded");
 
         let read = store.justifications().expect("readable");
@@ -834,7 +976,11 @@ mod tests {
         {
             let considered = considered.as_slice();
             let error = store
-                .record_justification(&id(ENERGY), concept, label, considered, reason, true, by)
+                .record_justification(&NewJustification {
+                    considered,
+                    recorded_by: by,
+                    ..asking(&id(ENERGY), concept, label, reason)
+                })
                 .expect_err("refused");
             let detail = error.to_string();
             assert!(
@@ -860,15 +1006,12 @@ mod tests {
         let (_dir, store) = store();
 
         let error = store
-            .record_justification(
+            .record_justification(&asking(
                 &GraphId::system(),
                 SOLAR,
                 "Solar power",
-                &[],
                 "a reason",
-                true,
-                "ada",
-            )
+            ))
             .expect_err("refused");
         assert!(
             error.to_string().contains("OpenBiz's own graphs"),
@@ -876,15 +1019,12 @@ mod tests {
         );
 
         let error = store
-            .record_justification(
+            .record_justification(&asking(
                 &id("https://example.org/absent"),
                 SOLAR,
                 "Solar power",
-                &[],
                 "a reason",
-                true,
-                "ada",
-            )
+            ))
             .expect_err("refused");
         assert!(
             matches!(error, StoreError::NoSuchGraph { .. }),
@@ -899,15 +1039,7 @@ mod tests {
         let (_dir, store) = store();
 
         store
-            .record_justification(
-                &id(ENERGY),
-                SOLAR,
-                "Solar power",
-                &[],
-                "a reason",
-                true,
-                "ada",
-            )
+            .record_justification(&asking(&id(ENERGY), SOLAR, "Solar power", "a reason"))
             .expect("recorded");
 
         let subject = JustificationId(1).subject();
@@ -943,15 +1075,7 @@ mod tests {
         let (_dir, store) = store();
 
         store
-            .record_justification(
-                &id(ENERGY),
-                SOLAR,
-                "Solar power",
-                &[],
-                "a reason",
-                true,
-                "ada",
-            )
+            .record_justification(&asking(&id(ENERGY), SOLAR, "Solar power", "a reason"))
             .expect("recorded");
 
         let subject = JustificationId(1).subject();
@@ -992,7 +1116,7 @@ mod tests {
 
         for (graph, concept) in [(ENERGY, SOLAR), (WATER, EXISTING), (ENERGY, SOLAR)] {
             store
-                .record_justification(&id(graph), concept, "a label", &[], "a reason", true, "ada")
+                .record_justification(&asking(&id(graph), concept, "a label", "a reason"))
                 .expect("recorded");
         }
 
@@ -1007,6 +1131,166 @@ mod tests {
                 .map(|one| one.graph().iri().to_owned())
                 .collect::<Vec<_>>(),
             vec![ENERGY, WATER, ENERGY]
+        );
+    }
+
+    /// A candidate raised against the fixture's vocabulary, to be named by a justification.
+    fn proposal(store: &Store) -> crate::CandidateId {
+        store
+            .propose_import(
+                &id(ENERGY),
+                crate::RdfSyntax::Turtle,
+                "<https://example.org/energy/c_4> a \
+                 <http://www.w3.org/2004/02/skos/core#Concept> ."
+                    .as_bytes(),
+                &crate::Provenance {
+                    source: crate::CandidateSource::BulkEdit,
+                    agent: "ada (a test)".to_owned(),
+                    note: "a part of a split".to_owned(),
+                    confidence: None,
+                },
+            )
+            .expect("a candidate is raised")
+            .id()
+    }
+
+    /// **Whether the justified creation ever happened is a query**, and it is a query because the
+    /// candidate is an IRI in the object position rather than a number written into the prose.
+    ///
+    /// This is the second representational decision in this module, and it is the one that answers
+    /// the split's own governance question: a part whose candidate is rejected was never created,
+    /// and a governance report that could not tell that from a creation that went ahead would
+    /// count both as proliferation.
+    #[test]
+    fn whether_a_justified_creation_happened_is_answerable_in_sparql() {
+        let (_dir, store) = store();
+        let candidate = proposal(&store);
+
+        store
+            .record_justification(&NewJustification {
+                arising_from: Some(candidate),
+                ..asking(&id(ENERGY), SOLAR, "Solar power", "a different sense")
+            })
+            .expect("recorded");
+        store
+            .decide(candidate, crate::Decision::Reject, "bob")
+            .expect("the reviewer refuses it");
+
+        let query = format!(
+            "SELECT ?concept ?state FROM <{}> WHERE {{ \
+             ?j <{CONCEPT_IRI}> ?concept ; <{CANDIDATE_IRI}> ?candidate . \
+             ?candidate <urn:openbiz:candidateState> ?state }}",
+            crate::SYSTEM_GRAPH_IRI
+        );
+        let mut written = Vec::new();
+        let report = store
+            .query(
+                &query,
+                crate::QueryFormats::default(),
+                crate::QueryLimits::default(),
+                &mut written,
+            )
+            .expect("the query runs");
+        let answer = String::from_utf8_lossy(&written).into_owned();
+
+        assert_eq!(report.answers(), 1, "{answer}");
+        assert!(answer.contains(SOLAR), "{answer}");
+        assert!(
+            answer.contains("rejected"),
+            "the record joins to the fate of the change it arose from, which prose could not do: \
+             {answer}"
+        );
+
+        // And the record itself is unchanged by the rejection: a justification is a statement made
+        // at a time, and an audit trail that rewrote its entries when the world moved on would be
+        // evidence of nothing.
+        let read = store.justifications().expect("readable");
+        assert_eq!(read[0].arising_from(), Some(candidate));
+        assert_eq!(read[0].reason(), "a different sense");
+    }
+
+    /// A split is *N* creations from one command, and a partial governance record is worse than
+    /// none: "three parts, two justified" reads as though the third was reused.
+    #[test]
+    fn one_refused_request_records_none_of_a_batch() {
+        let (_dir, store) = store();
+
+        let error = store
+            .record_justifications(&[
+                asking(&id(ENERGY), SOLAR, "Solar power", "a distinct sense"),
+                asking(&id(ENERGY), "https://example.org/energy/c_2", "Tidal", "  "),
+            ])
+            .expect_err("the blank reason is refused");
+        assert!(error.to_string().contains("reason"), "{error}");
+        assert!(
+            store.justifications().expect("readable").is_empty(),
+            "the first request must not have landed on its own"
+        );
+
+        let written = store
+            .record_justifications(&[
+                asking(&id(ENERGY), SOLAR, "Solar power", "a distinct sense"),
+                asking(
+                    &id(ENERGY),
+                    "https://example.org/energy/c_2",
+                    "Tidal",
+                    "nothing found",
+                ),
+            ])
+            .expect("both are recorded once neither is refusable");
+        assert_eq!(
+            written.iter().map(|one| one.id().0).collect::<Vec<_>>(),
+            vec![1, 2],
+            "the parts of one split have consecutive identifiers"
+        );
+        assert_eq!(store.justifications().expect("readable").len(), 2);
+    }
+
+    /// Recording nothing is not an error: a caller with no parts to justify should not have to
+    /// special-case the empty list, and an empty batch writes nothing.
+    #[test]
+    fn an_empty_batch_records_nothing_and_is_not_an_error() {
+        let (_dir, store) = store();
+
+        assert!(store
+            .record_justifications(&[])
+            .expect("an empty batch is allowed")
+            .is_empty());
+        assert!(store.justifications().expect("readable").is_empty());
+    }
+
+    /// A record naming something that is not a candidate this build can look up is corrupt rather
+    /// than read as a record with no candidate — because "no candidate" is itself a claim, that
+    /// nothing was ever proposed, and making it falsely is how a report says a creation never
+    /// happened when it did.
+    #[test]
+    fn a_candidate_this_build_cannot_look_up_is_corrupt() {
+        let (_dir, store) = store();
+
+        store
+            .record_justification(&asking(&id(ENERGY), SOLAR, "Solar power", "a reason"))
+            .expect("recorded");
+
+        let subject = JustificationId(1).subject();
+        store
+            .transaction(|txn| {
+                txn.extend_graph(
+                    &GraphId::system(),
+                    &[Quad::new(
+                        subject.clone(),
+                        named_node(CANDIDATE_IRI).into_owned(),
+                        NamedNode::new_unchecked("urn:openbiz:candidate:007"),
+                        NamedNode::new_unchecked(GraphId::system().iri()),
+                    )],
+                )
+            })
+            .expect("the field is written by hand");
+
+        let error = store.justifications().expect_err("refused");
+        assert!(matches!(error, StoreError::Corrupt { .. }), "{error}");
+        assert!(
+            error.to_string().contains("candidate:007"),
+            "the refusal names what it could not look up: {error}"
         );
     }
 }

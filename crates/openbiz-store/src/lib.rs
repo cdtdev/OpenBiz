@@ -78,7 +78,7 @@ pub use candidate::{
     Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, Provenance,
 };
 pub use clock::{ClockError, RecordedAt};
-pub use justification::{Justification, JustificationId, JustificationRejected};
+pub use justification::{Justification, JustificationId, JustificationRejected, NewJustification};
 pub use migrate::{Migration, MigrationReport, MigrationStep};
 pub use policy::{IriPolicy, PolicyRecorded};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};

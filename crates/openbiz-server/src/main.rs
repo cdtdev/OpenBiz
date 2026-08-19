@@ -194,6 +194,7 @@ async fn main() -> anyhow::Result<()> {
             placement,
             language,
             pattern,
+            because,
         } => one_shot(store, |store| {
             openbiz_server::split(
                 store,
@@ -203,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
                 placement,
                 language.as_deref(),
                 pattern.as_deref(),
+                because.as_deref(),
             )
         }),
         Command::Deprecate {
