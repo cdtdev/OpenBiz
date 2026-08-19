@@ -2806,3 +2806,78 @@ look competent disables the one signal that catches a stuck loop.
   mode the proposal was written to fix, and I do not know the way out: a required check needs the
   network, an optional one needs a discipline the last six iterations are evidence against. That is
   question (c) in the proposal and it is the one I would most like a human to answer.
+
+## Iteration 38 — 2026-08-19
+- **The tree was dirty at the start, and inspecting it was the first real decision.** `main` was
+  green on `25e0c2b`, both human inboxes empty — but two untracked files and two modified ones were
+  sitting in the working tree: about 1 170 lines of a label-search feature, from an iteration that
+  was killed before it could commit. The standing rule says inspect and then either commit honestly
+  or reset. I read all of it before running anything: the `openbiz-skos` half was complete with 16
+  passing tests, the server half had **no tests at all**, and the whole thing did not compile — a
+  helper the option parser called did not exist. It was also *exactly* the next unchecked Phase 2
+  item, so I adopted it onto a branch rather than resetting, finished it, and am recording here
+  that roughly two thirds of what landed was written by an iteration that never got to report it.
+- **Took:** Phase 2 — "Full-text search across labels with language filtering and prefix/infix
+  matching". `openbiz search <graph> <text>` is now the first command in this build that starts
+  from a **word** instead of an IRI, which is the only thing a subject-matter expert has when they
+  sit down in front of a thesaurus they did not write.
+- **Every default is the forgiving one, and that is a commercial decision rather than a taste.**
+  `CLAUDE.md` §1.7 says reuse outranks creation; the mechanism by which a silo is *actually* created
+  is a failed search — somebody looks, does not find, concludes it is not there, and makes the tenth
+  overlapping concept. A search that is case-sensitive, whole-label-only, preferred-labels-only and
+  monolingual manufactures that outcome and reports it as "no results", which on screen is
+  indistinguishable from the truth. So: anywhere in the label, any language, all three lexical
+  properties. Narrowing exists (`--exact`, `--prefix`, `--lang`, `--untagged`, `--kind`, `--limit`)
+  and is never assumed.
+- **§5.1 is one sentence that decides two different things, and reading it as one would have been
+  wrong.** The specification justifies `skos:hiddenLabel` by search — "if the mis-spelled query can
+  be matched against a hidden label, the user will be able to find the relevant concept" — so
+  skipping it would defeat the only labelling property SKOS defines for this purpose, and it is
+  searched by default. The clause after it — "won't otherwise be visible to the user" — is a
+  **display** rule and binds `display_label`, which already never picks a hidden label. So a hit on
+  a hidden label is reported, annotated with what §5.1 says about it, and the concept is still
+  *named* by its preferred label. A public-facing front end narrows with `--kind`; a curator, who
+  cannot maintain a hidden label they are never shown matching, does not.
+- **Running the product found the one real defect, for the tenth iteration running, and it was the
+  worst kind this command can have.** Against a store on disk, `--limit 0` printed **"nothing
+  matched"** when eight labels had matched and the bound had suppressed them. The report was
+  branching on whether the *shown list* was empty. That is a false negative in the single command
+  whose false negatives create duplicate concepts — the exact failure the forgiving defaults exist
+  to prevent, reintroduced two layers down in the printing. A failing test was written first, then
+  the branch moved to the match count, and the zero case now states both numbers.
+- **Two options that narrow the same thing are refused rather than resolved last-wins.** `--exact
+  --prefix` is not somebody changing their mind mid-line; it is somebody who does not know which
+  they asked for, and quietly obeying the second hands them a report narrower than they believe it
+  is. Same for `--lang fr --untagged`, which asks for two disjoint sets. Both positionals are also
+  read *before* any option, so a term beginning with a hyphen needs no escaping — `openbiz search
+  <graph> --exact` searches for the string `--exact`, and a test pins it.
+- **RFC 4647's wildcard is not "everything", which is why the filter has three cases.** `*` matches
+  any *tag*; an RDF 1.1 simple literal has no tag at all, so `--lang '*'` is every tagged label,
+  `--untagged` is the set a multilingual audit is actually hunting for, and no filter is a third
+  thing. A malformed range is refused at the command line rather than kept and matched against
+  nothing — a range with a typo in it that selects no labels reads, in a report, exactly like a
+  vocabulary that has none in that language.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never from a pipe. **748 Rust tests, up from 716**: 16 inherited in `openbiz-skos`, 10 new report
+  tests and 6 new option-parsing tests written this iteration. No new dependency. UI untouched.
+- **Recorded:** `adr/0034`. Four `UNTESTED.md` entries opened, none closed — matching neither
+  case-folds nor normalises (both **pinned by tests that assert the miss**, so the ledger cannot go
+  stale silently); RFC 4647 extended filtering is absent; `SearchBound::DEFAULT` is the third
+  unmeasured constant after `WalkBound` and `PathBound`; and every search is a linear scan of a
+  model rebuilt per request with nothing indexing anything. No proposals: the two that would follow
+  from this (a normalisation dependency, an index) are §1.5 and Phase 13 decisions and iteration
+  37's proposal already sits unpromoted.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T06:52Z.
+- **Still uncertain:** whether the two pinned misses are honestly "recorded gaps" or a defect we
+  have made comfortable. A German-language thesaurus is a completely ordinary enterprise input, and
+  in one `strasse` does not find `Straße` — the test asserting that miss is *correct engineering*
+  and also a test that certifies a user-visible failure and lets it survive indefinitely. What
+  makes me unsure rather than merely unhappy is that the fix is genuinely a charter decision I am
+  not licensed to take alone: `unicode-normalization` and a case-folding table are two more
+  dependencies against §1.5's budget, for a feature whose §1.7 justification is precisely that a
+  missed match creates a silo. So the constraint that forbids me adding them is defending the same
+  document as the requirement that says the search must not miss. I do not know which way a human
+  would settle that, and I have deliberately not written it into `PROPOSED.md` as though the answer
+  were obvious — but if the next iteration finds this line here again unchanged, that is the loop
+  getting comfortable with a defect it has learned to describe well.
