@@ -2881,3 +2881,76 @@ look competent disables the one signal that catches a stuck loop.
   would settle that, and I have deliberately not written it into `PROPOSED.md` as though the answer
   were obvious — but if the next iteration finds this line here again unchanged, that is the loop
   getting comfortable with a defect it has learned to describe well.
+
+## Iteration 39 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `eeb7708`, tree clean, both human
+  inboxes empty. The CI run for the previous merge was still `in_progress` at orientation, so I
+  waited for it rather than reading a stale `success` off the run before it — it went green.
+- **Took:** Phase 2 — "Concept IRI minting: configurable patterns, collision detection,
+  opaque-vs-readable policy", **split in place** into part 1 (the pattern, the two policies,
+  collision detection) and part 2 (the policy persisted per vocabulary). Part 1 is done. The split
+  is not convenience: part 2 needs a home for per-vocabulary settings that does not exist, and
+  bundling them would have held a usable capability behind an unbuilt one.
+- **The command reserves nothing, and that is the design, not a limitation.** A minter that looks
+  like an allocator is worse than none — somebody mints twice, believes they hold two identifiers,
+  and creates two concepts on one IRI, which is the precise failure the command exists to prevent.
+  So `openbiz mint` reads, writes nothing, and answers the same both times; an integration test
+  takes a backup before and after and compares. The seam that makes this coherent already exists:
+  an IRI becomes taken when a change carrying it is *staged*, and the next mint sees it there.
+- **The default pattern is evidence rather than a preference.** Every incumbent has a configurable
+  URI pattern and makes you configure it against nothing. Here the namespace and the local-name
+  shape are read off the vocabulary's own concepts with the counts printed — and a vocabulary whose
+  concepts are spread over namespaces with no majority gets **no** suggestion and `--pattern`
+  becomes required. Refusing to guess is the part I would defend hardest: an invented namespace
+  mints IRIs that look official and belong to nothing.
+- **The two collision rules differ on purpose and both are §1.7.** A number goes above the highest
+  in use and never fills a gap, because a gap is evidence something was once there. A slug that is
+  taken is refused outright — `renewable-energy-2` is a silo with a suffix, and the answer
+  thesaurus practice has used for decades is a qualifier in the term, which the report names rather
+  than leaving a dead end. Collisions are checked across **every** vocabulary in the store and
+  every change staged against one, because an IRI is a global identifier and two vocabularies
+  extending one namespace is ordinary enterprise data.
+- **Nothing is transliterated, and that is a standards reading rather than a taste.** RFC 3987 §2.2
+  puts essentially all of assigned Unicode in `ucschar`, so `Énergie marémotrice` mints
+  `…/énergie-marémotrice`; mapping `ö` to `o` is a language-specific guess that manufactures
+  collisions between different words. The `ucschar` ranges are transcribed range by range with the
+  boundaries pinned, and an integration test puts a minted non-ASCII IRI through `openbiz import`
+  and reads it back out of a real store unchanged — "it is a legal IRI" and "this store round-trips
+  it" being two different claims.
+- **Running the product found three things, for the tenth iteration running, and one was a lie
+  about the user's own data.** Of a vocabulary holding `c_1`, `c_3` and `c_12` the report said
+  "written with 2 digits, which is how this vocabulary writes them"; it writes them with one, one
+  and two. The width of the highest number is not evidence of a padding convention — a leading zero
+  is. The *output* was accidentally right (`format!` pads to a minimum width), which is what makes
+  it worth recording: the defect was in a sentence, not in an IRI, and no unit test was ever going
+  to fail on it. Second, the report contradicted itself: the IRI half read staged changes and the
+  label half did not, so it could print "nothing is already called that" directly above "the IRI is
+  taken by candidate 2". Both true, together nonsense; the label check now reads staged changes and
+  says which one. Third, "a opaque IRI", on the first line of every numbered mint.
+- **The padding fix was verified by reverting it.** The test was written after the fix rather than
+  before — a process slip against §6 — so I put the buggy line back, watched
+  `an_unpadded_vocabulary_is_not_described_as_padded` fail, and restored. A test that has never
+  been red is a test I have no evidence about.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **803 Rust tests, up from 748**: 27 in `openbiz-skos`, 23 in the server's
+  report and argument parsing, 5 against the real binary on disk. No new dependency. UI untouched —
+  Phase 2 is the model and the command line, and the interface is Phase 3, which is the same basis
+  every item in this phase was closed on.
+- **Recorded:** `adr/0035`. Three `UNTESTED.md` entries, none closed: the engine-free IRI check is
+  a subset of RFC 3987 with the store's parser as the real gate; every mint scans every vocabulary
+  in the store and that is untimed; and `SlugBound::DEFAULT` is the **fourth** unmeasured constant
+  in four iterations after `WalkBound`, `PathBound` and `SearchBound`. No proposals — iteration
+  37's still sits unpromoted and adding a second would be noise.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T07:27Z.
+- **Still uncertain:** whether "the default is inferred from the vocabulary, every time" is a
+  feature or a bug I have written up as a feature. It is genuinely better than a setting nobody
+  checked — but it also means the answer to "what IRI do we mint?" depends on the vocabulary's
+  current contents, so a vocabulary whose first ten concepts arrived in one namespace and whose
+  next ten arrive in another will silently change its own convention mid-import, and every mint
+  after the tipping point disagrees with every mint before it. I split part 2 out precisely
+  because a *recorded* policy is the answer to that, which means part 1 ships a mechanism whose
+  main weakness is the thing part 2 fixes. I do not know whether that ordering was right or whether
+  I should have refused to ship inference without persistence; the argument for shipping is that a
+  curator writing an import file today has nothing at all, and the argument against is that a
+  default which drifts is exactly the kind of quiet wrongness this ledger exists to catch.
