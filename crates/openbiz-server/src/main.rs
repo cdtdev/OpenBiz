@@ -154,6 +154,13 @@ async fn main() -> anyhow::Result<()> {
         } => one_shot(store, |store| {
             openbiz_server::relocate(store, &graph, &concept, &to, from.as_deref())
         }),
+        Command::Merge {
+            graph,
+            source,
+            target,
+        } => one_shot(store, |store| {
+            openbiz_server::merge(store, &graph, &source, &target)
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

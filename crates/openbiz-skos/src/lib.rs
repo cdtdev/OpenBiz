@@ -11,6 +11,7 @@ mod hierarchy;
 mod integrity;
 mod labels;
 mod mapping;
+mod merge;
 mod mint;
 mod model;
 mod notes;
@@ -33,8 +34,9 @@ pub use ancestry::Ancestry;
 pub use equivalence::{EquivalenceBound, ExactMatchCluster};
 pub use hierarchy::WalkBound;
 pub use integrity::{
-    Authority, Caveat, ConditionOutcome, Declaration, DeclaredRefinements, IntegrityCondition,
-    RefinementScan, RefinementScanBound, UnreadRefinement, Verdict, CONDITIONS, RDFS_SUB_CLASS_OF,
+    newly_violated, Authority, Caveat, ConditionOutcome, Declaration, DeclaredRefinements,
+    IntegrityCondition, RefinementScan, RefinementScanBound, UnreadRefinement, Verdict, CONDITIONS,
+    RDFS_SUB_CLASS_OF,
 };
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
@@ -44,6 +46,7 @@ pub use mapping::{
     ExactMatchDisjointness, MappingProperty, SKOS_BROAD_MATCH, SKOS_CLOSE_MATCH, SKOS_EXACT_MATCH,
     SKOS_MAPPING_RELATION, SKOS_NARROW_MATCH, SKOS_RELATED_MATCH,
 };
+pub use merge::{Demotion, Merge, MergeError, MergeScan, MergeScanBuilder, ReferenceBound};
 pub use mint::{
     mint, slug, Evidence, HighestInUse, IriConvention, MintDerivation, MintError, MintPattern,
     MintPolicy, MintScan, Minted, NoConvention, PatternError, Placeholder, Slug, SlugBound,

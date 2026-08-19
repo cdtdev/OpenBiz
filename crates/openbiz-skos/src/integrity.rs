@@ -75,7 +75,7 @@ use crate::mapping::{
     SKOS_RELATED_MATCH,
 };
 use crate::model::{
-    Finding, Node, SkosRule, Term, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER,
+    CoreModel, Finding, Node, SkosRule, Term, SKOS_HAS_TOP_CONCEPT, SKOS_IN_SCHEME, SKOS_MEMBER,
     SKOS_MEMBER_LIST, SKOS_TOP_CONCEPT_OF,
 };
 use crate::ns;
@@ -476,6 +476,36 @@ impl ConditionOutcome {
             Verdict::Unchecked
         }
     }
+}
+
+/// The integrity conditions a change would break: violated after it, and not before.
+///
+/// This is how a **proposed** change is checked, and it is deliberately the whole set rather than
+/// a hand-rolled subset of the conditions the change is thought likely to break. A bulk operation
+/// that rewrites statements can break a condition nobody predicted — merging two concepts is the
+/// worked case: it obviously risks S14, because both concepts have a preferred label, and it also
+/// breaks S27 when one of them is associatively linked to something above the other, which is not
+/// obvious at all and which a check written from the author's expectations would have missed.
+///
+/// **Only newly broken conditions count.** A vocabulary that already violates a condition must not
+/// have every subsequent edit refused for a fault the edit did not introduce; the operator would
+/// then be unable to use the tool to fix it. `Unchecked` before and `Violated` after counts as
+/// newly broken: a bound that was hit is not evidence the condition held.
+pub fn newly_violated(before: &CoreModel, after: &CoreModel) -> Vec<ConditionOutcome> {
+    let was: BTreeSet<SkosRule> = before
+        .integrity()
+        .iter()
+        .filter(|outcome| outcome.verdict() == Verdict::Violated)
+        .map(|outcome| outcome.condition.rule())
+        .collect();
+
+    after
+        .integrity()
+        .into_iter()
+        .filter(|outcome| {
+            outcome.verdict() == Verdict::Violated && !was.contains(&outcome.condition.rule())
+        })
+        .collect()
 }
 
 /// A declared refinement whose consequences this build does not draw.

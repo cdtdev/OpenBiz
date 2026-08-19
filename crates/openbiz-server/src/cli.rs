@@ -44,8 +44,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use openbiz_skos::{
-    LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, NoConvention, PatternError,
-    RelocationError, SearchBound,
+    LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, MergeError, NoConvention,
+    PatternError, RelocationError, SearchBound,
 };
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
@@ -140,6 +140,15 @@ pub enum Command {
         /// The broader concept being left. Required when the concept has more than one.
         from: Option<String>,
     },
+    /// Propose merging one concept into another, repointing every reference to it.
+    Merge {
+        /// The IRI of the vocabulary both concepts are in.
+        graph: String,
+        /// The IRI of the duplicate concept, which stops existing.
+        source: String,
+        /// The IRI of the concept that survives and absorbs it.
+        target: String,
+    },
     /// Show, or record, the IRI-minting pattern a vocabulary's new concepts are given.
     Policy {
         /// The IRI of the vocabulary the policy belongs to.
@@ -210,6 +219,8 @@ Usage:
                              show, or record, the pattern <graph> mints new IRIs under
   openbiz move <graph> <concept> <to> [--from <parent>]
                              propose moving <concept> and everything below it under <to>
+  openbiz merge <graph> <duplicate> <survivor>
+                             propose merging <duplicate> into <survivor>, references and all
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -285,6 +296,18 @@ diff can move forty thousand concepts, and the report says how many before it sa
 It refuses a move into the concept itself or into anything below it, which SKOS calls consistent
 and which leaves a branch with no route to a root. A concept with more than one broader concept
 needs --from to say which link is being replaced.
+
+Merge writes nothing either, and stages one candidate the same way. The duplicate stops existing:
+every statement in the vocabulary that mentions it goes, and every one of them arrives repointed
+at the survivor — including the statements SKOS has no reading of, which is why this reads the raw
+graph and not only the SKOS model. What does not arrive is a link between the two, which would
+become a link from the survivor to itself; a statement the vocabulary already carries; and a label
+the survivor already has. A preferred label that collides becomes an alternative one, because S14
+allows one per language and dropping it would lose the term that made the duplicate findable.
+It refuses a merge that would close a hierarchy cycle, which SKOS again calls consistent. A
+reference from another vocabulary is a change to that vocabulary, so it is counted and named
+rather than rewritten. No tombstone is left behind: the candidate is the record that the IRI
+existed, and deprecating a concept in place is a different change.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -508,6 +531,22 @@ impl Command {
                 )?;
                 return Self::move_command(graph, concept, to, args);
             }
+            "merge" => (
+                "merge",
+                Self::Merge {
+                    graph: Self::text("merge", "the IRI of the vocabulary to change", &mut args)?,
+                    source: Self::text(
+                        "merge",
+                        "the IRI of the duplicate concept, which stops existing",
+                        &mut args,
+                    )?,
+                    target: Self::text(
+                        "merge",
+                        "the IRI of the concept that survives and absorbs it",
+                        &mut args,
+                    )?,
+                },
+            ),
             "integrity" => (
                 "integrity",
                 Self::Integrity {
@@ -951,6 +990,18 @@ pub enum CommandError {
         /// What would have been minted.
         iri: String,
     },
+    /// A merge would leave a graph that is not a SKOS vocabulary.
+    ///
+    /// Boxed because it carries the counter-examples, which is far the largest thing any variant
+    /// here holds and which every other refusal would otherwise pay for on the stack.
+    #[error("that merge is refused: {0}")]
+    MergeBreaksIntegrity(Box<crate::merge::BrokenConditions>),
+    /// A merge could not be computed. The reason is the operator's to resolve.
+    ///
+    /// Wrapped without `#[from]` deliberately: `#[from]` makes the inner error `source()`, and
+    /// `anyhow` then prints the same sentence twice — once as the message and once as its cause.
+    #[error("that merge is refused: {0}")]
+    Merge(MergeError),
     /// A move could not be computed. The reason is the operator's to resolve.
     ///
     /// Wrapped rather than sourced — a `#[from]` here makes the inner error `source()`, and the
@@ -1393,6 +1444,56 @@ mod tests {
                 label: Some("--peculiar".to_owned()),
                 pattern: None,
             })
+        );
+    }
+
+    /// Three positionals, duplicate first and survivor second — the order the refusal for
+    /// merging a concept into itself names, because getting it backwards deletes the wrong one.
+    #[test]
+    fn merge_takes_the_vocabulary_then_the_duplicate_then_the_survivor() {
+        assert_eq!(
+            parse(&[
+                "merge",
+                "http://e.org/v",
+                "http://e.org/v/dup",
+                "http://e.org/v/keep"
+            ]),
+            Ok(Command::Merge {
+                graph: "http://e.org/v".to_owned(),
+                source: "http://e.org/v/dup".to_owned(),
+                target: "http://e.org/v/keep".to_owned(),
+            })
+        );
+    }
+
+    /// A merge with two of its three IRIs is refused, rather than merging something unnamed, and
+    /// a fourth argument is refused rather than ignored.
+    #[test]
+    fn merge_needs_exactly_three_positionals() {
+        assert_eq!(
+            parse(&["merge", "http://e.org/v", "http://e.org/v/dup"]),
+            Err(ArgsError::MissingArgument {
+                command: "merge",
+                what: "the IRI of the concept that survives and absorbs it",
+            })
+        );
+        assert_eq!(
+            parse(&["merge", "http://e.org/v"]),
+            Err(ArgsError::MissingArgument {
+                command: "merge",
+                what: "the IRI of the duplicate concept, which stops existing",
+            })
+        );
+        assert!(
+            parse(&[
+                "merge",
+                "http://e.org/v",
+                "http://e.org/v/dup",
+                "http://e.org/v/keep",
+                "http://e.org/v/extra",
+            ])
+            .is_err(),
+            "a fourth IRI is a mistake, and taking it silently would merge the wrong pair"
         );
     }
 

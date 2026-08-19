@@ -2269,3 +2269,85 @@ module's own tests and end to end against the real binary reading a store off di
   refusal starts, then deciding whether the downward bound a move uses should be its own number
   rather than `WalkBound::DEFAULT`.
 - **Opened:** iteration 42
+
+### `openbiz move` does not run the integrity check a merge now runs, and leaves an S27 violation
+- **Kind:** defect in a checked-off item, reproduced by hand
+- **What is proven:** it is real, and it was measured rather than reasoned about. At iteration 43,
+  against the debug binary and a store on disk:
+  ```
+  ex:a a skos:Concept .
+  ex:b a skos:Concept .
+  ex:c a skos:Concept ; skos:broader ex:a ; skos:related ex:b .
+  ```
+  `openbiz move <v> ex:c ex:b` is **accepted**, the candidate approves, and
+  `openbiz integrity <v>` afterwards reports `S27 VIOLATED (1)` where it held before. The move
+  wrote `<c> skos:broader <b>` beside an existing `<c> skos:related <b>`, and §8.4 makes those
+  disjoint. Nothing refused it and nothing warned.
+- **What is not:** there is no test for this. `adr/0037`'s refusals are all about the *hierarchy*
+  the move leaves — cycles, ambiguity, a stale transitive link — and none of them asks whether the
+  resulting graph is still a SKOS vocabulary.
+- **Why it was not fixed here:** the mechanism to fix it landed in this iteration
+  (`openbiz_skos::newly_violated`, `adr/0038` decision 5) and the fix is one call plus a test. It
+  was not taken because the loop's standing rule is one item per iteration and this is a second
+  one; promoting my own scope is the brake `CLAUDE.md` §7 exists to keep. It is in `PROPOSED.md`
+  with the reproduction above so the next iteration can act on it in one step.
+- **What would close it:** `crates/openbiz-server/src/relocate.rs` calling `would_break` the way
+  `merge.rs` does, a `CommandError` variant for it, and this reproduction as the failing test
+  first. The same question should then be asked of `openbiz import` and `openbiz retract`, which
+  can also leave a graph that is not a SKOS vocabulary and which say nothing either.
+- **Opened:** iteration 43
+
+### A merge cannot join two concepts whose labels are SKOS-XL, and refuses rather than reconciling
+- **Kind:** product limit, proven to be a refusal rather than a defect
+- **What is proven:** that the failure is loud. `merge_concepts.rs` imports two concepts each with
+  a `skosxl:prefLabel` pointing at a label resource with an English literal form, and the merge is
+  **refused** with `S14` named, because S55 would dump both down to preferred labels in one
+  language on the survivor. The vocabulary is untouched and no candidate is staged.
+- **What is not:** that an operator can do anything about it except retract a label by hand first.
+  The label reconciliation in `adr/0038` decision 2 — demote the colliding preferred label to an
+  alternative one — works on plain `skos:prefLabel` statements and has no SKOS-XL equivalent. The
+  same hole applies to a label written with a *refinement* of `skos:prefLabel`, which is repointed
+  as written; that one is untested, and it is only the integrity check standing behind it.
+- **Why it was not handled:** the SKOS-XL analogue is not the same operation. Demoting a plain
+  label rewrites a predicate; demoting an XL label means changing which SKOS-XL property points at
+  the label resource, and B.3's S55–S57 chains then have to be re-read to know whether the result
+  says what was meant. That is a decision about SKOS-XL semantics, not a branch in a rewrite.
+- **What would close it:** an XL arm on `CoreModel::reconcile` that moves a `skosxl:prefLabel` to
+  `skosxl:altLabel` when the survivor already has a preferred literal form in that language, plus
+  Appendix B examples as the test. `ISO 25964 fidelity depends on SKOS-XL` (`lib.rs`'s own module
+  note), so an enterprise thesaurus is more likely to hit this path than the plain one.
+- **Opened:** iteration 43
+
+### `ReferenceBound::DEFAULT` is the fifth unmeasured constant
+- **Kind:** unmeasured judgement
+- **What is proven:** that hitting it refuses rather than truncates, asserted with the bound set to
+  four; and that a truncated scan cannot answer, because "the vocabulary does not already say this"
+  is exactly the question the survivor's statements answer and a half-kept set answers it wrongly.
+- **What is not:** the number. 100 000 statements about one concept was chosen by the argument that
+  a hub concept is the one least likely to be merged into anything, which is plausible and
+  untested. It joins `WalkBound::DEFAULT`, `PathBound::DEFAULT`, `SearchBound::DEFAULT`,
+  `SlugBound::DEFAULT` and `RefinementBound::DEFAULT` — six constants now, each with an entry here
+  saying the same thing, which is itself the finding: this build has a systematic habit of choosing
+  a ceiling by argument and never returning to it.
+- **What would close it:** the scale generator producing a hub concept and the bound measured
+  against it — or, better, one piece of work that measures all six together, since they are the
+  same question asked six times.
+- **Opened:** iteration 43
+
+### A merge is four passes over the graph and two models, and that is unmeasured
+- **Kind:** unproven-at-scale
+- **What is proven:** correctness. The integrity check reads the vocabulary as it *would be* — the
+  graph without the removals, with the additions — and that is what catches S14 and S27.
+- **What is not:** the cost. `crate::inspect::read` is two passes and one model; a merge adds a
+  scan for the references and a second two-pass model read, so it is four passes and two models.
+  Every fixture here has under a dozen statements. `adr/0013` measured that reading a large
+  vocabulary is the expensive thing this build does, and a merge now does it twice. The
+  cross-vocabulary reference count adds one more full pass **per other vocabulary in the store**,
+  which is unbounded in the number of vocabularies rather than in their size.
+- **Why it was not measured here:** the item was already carrying a decision that was not in the
+  plan when it started (`adr/0038` decision 5), and measurement is separable work.
+- **What would close it:** the existing scale generator at 10k/100k/1M, timing `openbiz merge`
+  against a leaf duplicate, and a decision on whether the integrity check should be optional — with
+  the honest note that making it optional is how a governance product ends up shipping the default
+  that skips it.
+- **Opened:** iteration 43
