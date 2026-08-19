@@ -3,237 +3,31 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** Phase 0 is complete — verified by counting the unchecked boxes in the phase, not from
-memory of what was left (a product-owner correction after iteration 4; see `FEEDBACK-LOG.md`).
-Phase 1 is **12 of 14**, and the two that remain are deliberately deferred — see below. The embedded store opens, stamps, and closes an Oxigraph instance inside
-the binary; it has a **named-graph model with a real enforcement point** — one graph per
-vocabulary, a system graph for OpenBiz's own metadata, `urn:openbiz:` reserved against user
-authoring, and a single write choke point that every write passes through — and **that model is now
-visible to a user**: `GET /api/graphs` serves the registry, and the interface lists the
-vocabularies in it while keeping OpenBiz's own graphs out of the user's list and counted rather
-than hidden. **Writes are transactional and serialised**, which closed a real corruption race in
-the creation path. **A graph can be got back out**: `GET /api/export` serialises any registered
-graph to any of the six syntaxes §2 commits to, the interface offers it per vocabulary with a
-format chooser read from the server, and the export carries none of OpenBiz's own bookkeeping.
-**And it can be asked questions**: `GET`/`POST /api/sparql` evaluates SPARQL 1.1 queries in all
-four results formats and all six RDF syntaxes, over a default dataset that is the user's
-vocabularies and none of OpenBiz's own graphs, bounded by limits that refuse rather than truncate.
-402 Rust tests and 30 UI tests passing; `cargo fmt`, `cargo clippy -D warnings`,
-`cargo deny`, and the UI typecheck/test/build are green. **And the serialisation claim is now
-narrower and better evidenced:** N-Triples and N-Quads are checked against a reader written from
-the published EBNF rather than against the library that wrote the bytes, which found two real
-defects nobody had seen (see `adr/0012`). **And the store's literal handling is characterised rather than assumed:** the boundaries at which
-`xsd:integer`, `xsd:decimal`, `xsd:double`, `xsd:dateTime`, and `xsd:duration` stop being
-interpreted are measured and pinned, and the finding is that a literal past the boundary
-round-trips perfectly while silently ceasing to be a value — so a filter over it omits rows rather
-than failing. A derived integer datatype is silently replaced by `xsd:integer`, which loses
-statements (see `adr/0014`). **And the engine is now measured rather than trusted:**
-the charter's standing warning that Oxigraph's query evaluation is unoptimised has a number against
-it at 10k, 100k, and 1M concepts, taken through our own query entry point against the queries the
-interface will issue — navigation is flat and fast, the tree's *first* query is a 21-second cliff
-with a 0.6 ms fix, and label search does not scale (see `adr/0013`).
-**And a deployment can now be got out and put back:** `openbiz backup <file>` writes the whole
-store — every vocabulary and OpenBiz's own registry — as N-Quads rather than as a snapshot of the
-storage engine, and `openbiz restore <file>` rebuilds an empty store from one, refusing anything
-that would not open afterwards (see `adr/0015`), and its production caller is the command line
-rather than an unauthenticated endpoint. **The single binary is real:**
-a `Single binary` CI job deletes `ui/dist` from disk and the release binary still serves the full
-interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
-`UNTESTED.md` are readable by anyone.
+**Status:** **55 of 221 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
+wait on authorisation, not on anything else. Phase 2 is 25 of 28. Every count on this line is
+derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was left; that is a
+product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records how the
+denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **25 of 28 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). 26 was 23 plus the three items iteration 42 split the bulk-operations line into; 28 is 26 plus the two iteration 46 split off the deprecation-lifecycle line, which turned out to hold three separable pieces rather than one. The numerator went up by one at 42, at 43, at 44, at 45 — which closed the last of the four bulk operations — at 46, and at 47. **The deprecation lifecycle is now whole**: `openbiz reinstate` takes a retirement back, removing the marker and the recorded successor together and keeping every `skos:changeNote`, because the retirement happened and a history tidied until it never appears is the opaque change log this product exists to replace (`adr/0042`). It is the first operation here whose whole purpose is to remove statements, so the candidate seam's removal half now carries a computed change and not only `openbiz retract`'s file.  **And a retired term now reads as retired everywhere a person looks**: `openbiz tree`, `ancestors`, `paths`, `search` and `inspect` all know what `owl:deprecated` means, which is the half `openbiz deprecate` deliberately could not do for itself. The decision is **show and mark, never hide** — hiding a retired concept would leave its live children hanging off nothing in a tree, and hiding a search hit would report a term this vocabulary holds as one it has never heard of, which is precisely how a duplicate gets created. Each report also says what its marks add up to: the current concepts a retirement left below it, the retired concepts a breadcrumb runs through, and the vocabulary's whole retirement backlog as counts and never as findings (`adr/0041`). **And a term that has gone out of use can now be retired without breaking anything that stored it**: `openbiz deprecate` marks a concept `owl:deprecated`, records what supersedes it with `dcterms:isReplacedBy`, and **removes nothing at all** — so the IRI keeps resolving, which is the one thing a merge cannot offer. SKOS has no deprecation term, so both come from OWL 2 and Dublin Core rather than from anything invented here. A replacement is a signpost and not a rewrite, so the report counts and names every child, link, mapping and collection membership the retirement stranded, before the diff (`adr/0040`). **And a concept that turned out to be two can now be made two**: `openbiz split` creates the parts, mints them under the vocabulary's own policy, records with `prov:wasDerivedFrom` where each came from, and **removes nothing** — then reports, before the diff, every label, child, link and note still hanging off the original that only a person can apportion (`adr/0039`). **And two concepts that should have been one can now be made one**: `openbiz merge` repoints every reference in the vocabulary — including the statements SKOS has no reading of, which is why it reads the raw graph and not the model — demotes a colliding preferred label rather than dropping it, and **refuses any change that would leave a graph failing a SKOS integrity condition that holds now**. The first working version produced a vocabulary violating S14 and S27 from ordinary input, so the check is the whole condition set run against the vocabulary the change would leave, not the subset an author would have predicted (`adr/0038`). **And a vocabulary's hierarchy can now be changed, not only read**: `openbiz move` re-parents a concept and everything below it as **one** candidate that both removes and adds, because approving half of a move would leave a branch hanging off nothing — the first producer of a two-halved candidate, and what closes the "no production caller" entry the seam has carried since iteration 18 (`adr/0037`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split; 23 is 22 plus the IRI-minting split at iteration 39, recounted from the boxes rather than assumed. **And a new concept can be given a name to be known by**: `openbiz mint` reports the IRI one would get, under a pattern read off what the vocabulary's own concepts already do rather than off a setting nobody checked — a number that goes above the highest in use and never fills a gap, or a slug that is refused rather than suffixed when the vocabulary already holds it. It reads, reserves nothing, and says so; collisions are checked across every vocabulary in the store and every change staged against one (`adr/0035`). **And the pattern is now a recorded decision rather than a reading of the vocabulary that moves as the vocabulary does**: `openbiz policy` writes one down, attributed, in the system graph and never in the vocabulary, and `openbiz mint` takes the first of `--pattern`, the record, then inference — refusing a recorded pattern it cannot parse rather than falling back to a namespace nobody chose (`adr/0036`). **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
-what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
-way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
-SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
-thesaurus is actually in and how far behind each one is — see `adr/0020`, which also records what
-"RDF plain literal" has to mean now that RDF 1.1 has abolished the term. **SKOS-XL is in, both
-halves** (Appendix B.2, B.3 and B.4): a label is a resource with an IRI you can date, attribute and
-version, and the S55–S57 chains dumb it down to a plain SKOS label so the same two integrity
-conditions catch Appendix B's own Examples 84–87 — see `adr/0021`, which records why Appendix B
-having no "Integrity Conditions" heading made every severity in it a decision to write down.
-**And labels can be linked to each other**, which is where ISO 25964 puts an acronym relationship
-and what plain SKOS cannot express: S59–S62 are applied, a link entails its converse because the
-property is symmetric, and a refinement of it is deliberately *not* closed, because B.4.4.1 warns
-that a sub-property of a symmetric property is not necessarily symmetric — see `adr/0022`.
-**And the vocabulary now has a shape**: §8's semantic relations are read and closed, so a
-hierarchy an author wrote in one direction reads in both, polyhierarchy is counted rather than
-complained about, and a `skos:broader` pointing at a collection is caught by a domain rule on a
-property nobody writes — see `adr/0023`. **And the hierarchy can now be read all the way up**: S24's
-transitive closure is applied by a bounded walk rather than stored — `openbiz ancestors <graph>
-<concept>` prints every concept above one with the path that reached it, which for a link nobody
-wrote *is* the derivation — and §8.4's integrity condition S27 is read off that walk, so §8.5's
-Examples 25–29 all come out to the consistency the specification prints beside them. Example 27's
-clash, between two concepts the author never linked directly, was reported as a clean vocabulary
-until iteration 28. A cycle stays consistent, terminates, and is named rather than complained
-about. See `adr/0025`.
-**And a check that gave up no longer reads as a check that passed:** `Severity` gained `Unchecked`
-and `openbiz inspect` closes with one of three sentences instead of two.
-**And the vocabulary can now say what it means**: §7's seven documentation properties are read,
-S17 lifts each of the six specific ones onto `skos:note`, and `openbiz notes <graph> <resource>`
-prints a concept's definition, scope note and examples with the statement behind every note SKOS
-entailed — the one thing a Turtle export of the same vocabulary cannot show. **§7 states no
-integrity condition and we invent none**: a concept with no definition is consistent SKOS, the
-report says so beside the count, and the check every incumbent runs there is named as the Z39.19 /
-ISO 25964 rule pack it actually is. See `adr/0026`.
-**And a vocabulary's own note properties are read too.** §7.1 calls the seven "a set of extension
-points", and an enterprise thesaurus uses them: `ex:usageNote rdfs:subPropertyOf skos:scopeNote`
-plus a statement written with `ex:usageNote` now reaches the report as a scope note citing RDFS
-`rdfs7`, which S17 then lifts to a `skos:note`. Reading it takes **two passes over the source** —
-a declaration can arrive after every statement that uses it, and buffering the alternative would
-cost the graph in memory. `openbiz inspect` names the declared properties rather than only counting
-them, because a number an author cannot check against their own file is not a report. See
-`adr/0028`, and note that `Derivation` can now cite RDFS as well as SKOS, because citing an
-S-number for something SKOS does not state would be a guess wearing a citation.
+**Current position:** Phase 2 (SKOS authoring model), **25 of 28**. Iterations 48 and 49 took no
+code item: 48 acted on product-owner feedback that these two fields had become a changelog and moved
+the capability narrative to `docs/CAPABILITIES.md`, then exited without committing; 49 verified
+those claims against the files and landed them. Of the three items left in the phase, one — the
+candidate seam over HTTP and in the interface — is **blocked on authentication** (`BLOCKED.md`); the
+next unblocked item is asking a read command for current concepts only.
 
-**And a vocabulary can now say what it is joined to.** §10's five mapping properties are read and
-closed (S38–S44), and the load-bearing decision is that a mapping is **not** a section of its own:
-S41 lifts `skos:broadMatch`, `skos:narrowMatch` and `skos:relatedMatch` into §8's relations before
-those are closed, so `openbiz ancestors` climbs through a mapping into another vocabulary's concept
-and §8.4's S27 catches §10.6.2's Examples 59–61 with no rule of §10's own. S46, §10's only
-integrity condition, is reported once per pair and cites §10.4's note where the specification
-argues by inversion rather than naming the property. See `adr/0029`.
-**And S45's closure is now walked too**, which closed a false negative rather than only adding a
-conclusion: `skos:exactMatch` is transitive, so `<A> exactMatch <B> exactMatch <C>` with
-`<A> broadMatch <C>` violates §10.4 — and no statement in that vocabulary names both properties for
-one pair, so it was reported as *consistent* until iteration 33. That is the **hub** shape an
-enterprise actually produces. The walk is over an undirected **cluster** rather than a path
-upwards, because S44 puts every link at both ends, so cycles are ordinary (§10.6.6 requires coping
-with them) and a mapped concept is its own exact match (Example 66, consistent, printed rather than
-hidden). `openbiz mappings <graph> <resource>` is the per-concept view, printing what one concept
-is joined to with the rule behind every link the graph did not state. See `adr/0030`.
+**These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
+what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
+yourself *adding* to one rather than replacing it, the thing you are writing belongs in another
+file — `docs/CAPABILITIES.md` for what the product can do, `docs/LOOP-LOG.md` for how it got there,
+`docs/UNTESTED.md` for what is unproven. This rule is itself product-owner direction
+(`FEEDBACK-LOG.md`, 2026-08-19): a field has a purpose, and appending to it forever defeats that
+purpose even when every addition is individually justified.
 
-**And the vocabulary can now be asked in the only terms a subject-matter expert has.** Every
-command above starts from an IRI the asker already holds; `openbiz search <graph> <text>` starts
-from a *word*. It matches over every lexical label the vocabulary carries — preferred, alternative
-and hidden, the last because SKOS §5.1 justifies that property *in terms of* text search — with
-RFC 4647 basic filtering over languages, and every default set to the forgiving one, because
-`CLAUDE.md` §1.7's silo is created by a search that finds nothing and a person who concludes the
-concept does not exist. Narrowing is explicit and two options that narrow the same thing are
-refused rather than resolved last-wins. A label reachable only by dumbing SKOS-XL down is found and
-quotes the chain that reached it. See `adr/0034` — and note that running the command is what found
-its one real defect, a `--limit 0` that reported "nothing matched" when eight labels had.
-
-**And we now know what that costs, which changed the design of the next item before it was
-written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
-hierarchy shapes and decided, in `adr/0024`, that **S24's closure is never materialised** — a legal
-100 000-link chain licenses five thousand million pairs, and a stored entry can cite the rule but
-cannot name the path, which `CLAUDE.md` §3 requires. Ancestry will be a bounded traversal answered
-on read. The measurement also produced the first hard number that contradicts a non-negotiable:
-a stated link costs **3.9 KiB of resident memory**, 43× the size of the fact, and a million-link
-vocabulary with no labels at all held **4.4 GiB**. That is about what is already shipped, it is
-recorded rather than fixed, and it is in `UNTESTED.md` and three proposals awaiting a human.
-
-**Iteration 40 was a blind-spot pass, so no plan item moved and the count above is unchanged.** It
-did the one thing the last six iterations each asked the next blind-spot pass to do and each then
-deferred: it **widened the scale generator** rather than deepening a seventh rule. Every shape
-`crates/openbiz-skos/src/scale.rs` could build was a monohierarchy — one broader concept per
-concept, so exactly one route to a summit — which meant `paths_to_root`'s central ceiling,
-`PathBound::max_paths`, was **unmeasurable in principle** from anything in this repository. Two
-branching shapes now exist: a **polytree** calibrated to iteration 37's count of LC Genre/Form
-Terms (25.8% of concepts with more than one broader, maximum 4), and a **lattice** whose routes
-multiply per level. Three things came out of running them. A realistic million-concept
-polyhierarchy enumerates **16 routes**, three orders of magnitude below a ceiling of 10 000, so the
-doubt recorded four times about that constant is closed in the safe direction. The ceiling is
-instead reached by **thirty concepts and fifty-six links** — it is a shape limit, not a size limit,
-and both sides of that boundary are pinned by a test. And `adr/0024`'s central finding survives the
-new shape: the closure multiple rises one per decade on a polyhierarchy exactly as it does on a
-tree, displaced upwards by about two, so branching behaves like extra average depth rather than
-compounding with it — which is the *opposite* of what iterations 33 and 36 assumed. The cost of
-that shape is recorded rather than fixed: a million-concept polyhierarchy peaks at **8.2 GiB**
-against the tree's 5.1, on a machine with 11. Four of the generator's five axes — labels, notes,
-mapping links, `rdfs:subPropertyOf` — are still unbuilt, and `UNTESTED.md` now carries one entry
-indexing them so that closing branching cannot read as closing the rest.
-
-**Iteration 30 was a blind-spot pass, so no plan item moved and the count above is unchanged.** It
-audited `ancestry.rs`, which iteration 28 had asked the next blind-spot pass to treat as
-inherited-and-unaudited, and found that **the bound protecting §8.4's disjointness check bounded
-nothing**. `AncestryBound::max_links` was per *walk*; the check makes one walk per concept with a
-`skos:related`, so its cost is concepts × depth and the ceiling was never consulted at that level.
-A legal 10 001-concept chain with one associative link per concept built in **30.63 seconds against
-62 ms** without them — 490× the whole rest of the model — and the report said the check had
-**finished**. Nothing caught it because no fixture in the repository stated a `skos:related` at
-scale: `scale.rs` had been measuring the data the pass reads and never the pass. The budget is now
-shared across the sweep (**530 ms**, abandonment reported and counted), and the trade it makes —
-a partial answer where there was a slow complete one — is in `adr/0027` and `UNTESTED.md` with two
-proposals for the real fix.
-
-**Iteration 25 was the product-owner pass, so no plan item moved and the count above is unchanged.**
-It landed one thing that changes the shape of a later phase: **`horned-owl` is LGPL-3.0**, which
-`CLAUDE.md` §5 forbids, so the first Phase 9 item is now blocked on a licence decision a human has
-to take. Two other items — the Phase 4 SHACL spike and Phase 5's `whelk-rs` line — carry notes
-about assumptions in them that no longer hold. The research and its sources are in
-`docs/COMPETITIVE.md`; eight proposals are in `docs/PROPOSED.md` awaiting promotion, and none was
-promoted by the loop.
-
-`openbiz inspect <graph>` reads a vocabulary and reports its concepts, concept
-schemes, and collections — including the ones no statement typed, because SKOS itself entails
-them — and names the specification statement behind every fact it inferred. It separates a violated
-SKOS integrity condition from something merely ill-formed and says which judgement is ours (see
-`adr/0019`). The candidate seam is
-complete except for its HTTP and UI half, which is blocked on authentication — so **every remaining
-Phase 2 item now has the shape it needs to be built against**, which was not true two iterations
-ago. Phase 1 is 12 of 14 and the two that remain — SPARQL Update and the Graph Store Protocol — are
-blocked on **authorisation**, not on the seam: the seam they were waiting for now exists, and what
-is left is that neither may be an unauthenticated write.
-
-**Iteration 18 took the seam's removing half.** A candidate carries two staging graphs, so a merge,
-a split, a move, and a deprecation are expressible for the first time. The decision that took the
-work is the **precondition**: a removal names statements that must already exist, so it is checked
-against the vocabulary at proposal *and* again inside the transaction that applies it, and an
-approval the vocabulary has outgrown is refused rather than partly applied. Store format version 4.
-See `adr/0018`.
-
-**Iteration 17 took Phase 2's candidate seam**, which is the dependency the whole phase is ordered
-around and which three Phase 1 items had been deferred on for six iterations. A proposed change is
-now a **named graph plus a record**: the statements are staged in
-`urn:openbiz:graph:candidate:<id>`, so a pending change is exportable in any of the six syntaxes and
-queryable over SPARQL on the day it exists, and approval is a copy between two graphs *inside the
-transaction that records who approved it* — so the store can never hold statements in a vocabulary
-with no record of who let them in. Provenance is mandatory and its source is a closed token, so
-"show me everything an assistant proposed" is answerable before there is an assistant. The first
-producer is `openbiz import`, and **that closed Phase 1's RDF parsing item**: all six syntaxes,
-round-tripped against the serialiser, with a real production caller. See `adr/0017`.
-
-**Iteration 16 took the store-format migration framework**, whose first migration turned out to be
-code that already existed: an unconditional per-open self-heal that re-registered the system graph forever, for the
-benefit of stores that needed it once and with no record that it had ever happened. It is now a
-versioned, one-off, self-explaining step, and `openbiz restore` migrates an older backup instead of
-refusing it. See `adr/0016`. **Iteration 14 took backup and restore**, which is the
-first item since the two spikes that ships a capability rather than a measurement. A backup is a
-single N-Quads file carrying the whole store including the registry, so it is readable by any
-conforming tool and hand-authorable — the end-to-end test's fixture was written from the
-specification rather than produced by our own writer. A restore is one transaction that re-reads
-the registry it wrote, inside that transaction, and refuses to commit a store this build could not
-open. Its production caller is the command line, because a backup script needs an exit status and
-because an unauthenticated `POST /api/restore` would be the same defect SPARQL Update is deferred
-over. **This also gave the N-Quads parser its first production caller**, which is the condition
-`adr/0010` set — but the parsing item stays open, because one syntax of six reading a whole store
-into an empty one is not an import — a gap iteration 17 closed with the candidate seam's import.
-
-**Iteration 15 took no plan item.** Iteration 14 built, tested, and pushed backup/restore but ended
-without merging it, so PR #17 sat open with a required check wedged in an unbounded `apt-get` and
-`main` did not contain the capability this plan already described as done. Iteration 15 bounded
-CI's toolchain install and every job with `timeout-minutes` — so a stalled network call now fails
-the check instead of leaving it pending forever, which branch protection cannot distinguish from
-still-running — and then landed PR #17. Iteration 16 landed the store-format migration framework,
-which closed that gap: `openbiz restore` no longer refuses a backup written by an older build, it
-migrates it as it reads it (see `adr/0016`).
-
-**Iteration 20 took the SKOS core model**, and the decision that took the work was the
-*layering*: `openbiz-skos` depends on neither Oxigraph nor `openbiz-store`, so the model is
-testable from a literal array of statements and the same code will classify a candidate's staging
-graph, a parsed file, or a discovery result. The price is a duplicated statement type mapped in
-three lines at the composition root, and `adr/0019` records why that was the cheapest of the three
-options. **Next is SKOS-XL labels.**
-
-Phase 1's two open items are no longer waiting on the seam: SPARQL Update and the Graph Store Protocol
-each wait on authorisation, which is what part 3 of the seam waits on too. **Phase 1 is therefore
-as complete as it can be without an identity model.** Vocabulary *creation* over HTTP remains
-deliberately absent for the same §1.7 reason, so `POST /api/graphs` answers 405. **There is still
-no SPARQL console in the interface**; the endpoint's caller is HTTP, and the console is an open
-§4.4 gap in `UNTESTED.md` and a proposal. **And there is no online backup** — both new commands
-need the store to themselves, so a backup means stopping the server; the authenticated endpoint
-that would remove that cost is in `PROPOSED.md`.
+**What the product actually does today is [`CAPABILITIES.md`](CAPABILITIES.md)** — written as prose
+for someone evaluating OpenBiz, rewritten rather than appended to, and honest about what is not
+built. That is the file to read before this one.
 
 **How to work this plan.** Take the next unchecked `- [ ]` item in the current phase. If it turns
 out to be much larger than it reads, split it in place into smaller items and do the first — do not
@@ -260,29 +54,6 @@ merely present.
 
 Phases are ordered by dependency, not importance. Phase 3 (the interface) is deliberately early:
 the interface is a core differentiator, and building it late means retrofitting every API to it.
-
-**And the conformance claim itself is now checkable.** `openbiz integrity <graph>` is the
-roll-call: every condition whose violation makes this build call a graph inconsistent, one row
-each — the specification's six under the heading it gives them, and the ten this build classifies
-itself printed apart and labelled as ours. Each is **held, violated, or unchecked**, and the third
-is not a weaker first: a bounded walk that stopped, or a vocabulary whose own `rdfs:subPropertyOf`
-extension point this build reads past, leaves a named condition genuinely unanswered and the report
-says which and why. A test asserts the roll-call is complete with respect to consistency — every
-inconsistent finding is attributed to a row — so a graph is consistent exactly when no row is
-violated. See `adr/0031`.
-
-**And the tree now reads downwards, which is the direction an author actually works in.**
-`openbiz tree <graph> <concept>` prints what is one `skos:narrower` link below, what shares a
-broader concept with it, and everything below it under `skos:narrowerTransitive` as an indented
-tree in which the indentation *is* the derivation S24 licensed. Three things in it are decisions
-rather than code: **a child is not a descendant one step down** — S22's entailment runs one way, so
-a stated `skos:narrowerTransitive` link makes a concept a descendant with no place in the stated
-tree, and the report names S22 when a vocabulary shows the difference; **"sibling" is our word**,
-labelled as ours, not transitive, never reflexive, and not a relation between two top concepts; and
-**a tree gives each concept one parent**, so the routes it could not show are counted and named
-after it rather than left to a reader to not notice. The bound is now `WalkBound`, because the same
-walk runs both ways — and going down its default is a ceiling an ordinary large vocabulary
-*reaches* rather than a backstop it never approaches. See `adr/0032`.
 
 ---
 
