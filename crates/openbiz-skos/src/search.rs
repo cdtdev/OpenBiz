@@ -449,13 +449,15 @@ impl LabelHit {
     }
 }
 
-/// What a query found, and what it did not look at.
+/// What a query found, what it did not look at, and what it was told to leave out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelSearch {
     hits: Vec<LabelHit>,
     matched: usize,
     labels_read: usize,
     resources_read: usize,
+    withheld: usize,
+    withheld_resources: usize,
     bound: SearchBound,
 }
 
@@ -490,12 +492,31 @@ impl LabelSearch {
         self.resources_read
     }
 
+    /// How many (resource, label) pairs matched on a resource the caller asked to leave out.
+    ///
+    /// Zero from [`CoreModel::search`], which leaves nothing out. Counted rather than discarded:
+    /// a caller that withholds hits is still obliged to say there were some, and the count is the
+    /// only thing standing between "you asked not to see them" and "the vocabulary has never
+    /// heard of it" — which is the reading that makes someone create a duplicate.
+    pub fn withheld(&self) -> usize {
+        self.withheld
+    }
+
+    /// How many distinct resources those withheld matches were on.
+    pub fn withheld_resources(&self) -> usize {
+        self.withheld_resources
+    }
+
     /// The bound this search ran under.
     pub fn bound(&self) -> SearchBound {
         self.bound
     }
 
     /// Whether every match is reported.
+    ///
+    /// About the bound and not about the exclusion: a search that withheld matches on excluded
+    /// resources reported everything it was asked for, and [`withheld`](Self::withheld) is where
+    /// the rest is accounted for.
     pub fn is_complete(&self) -> bool {
         self.matched == self.hits.len()
     }
@@ -513,6 +534,25 @@ impl CoreModel {
     /// on exactly the same terms as one that does not, and each hit carries the
     /// [`LabelOrigin`] that says which it was.
     pub fn search(&self, query: &LabelQuery) -> LabelSearch {
+        self.search_excluding(query, &BTreeSet::new())
+    }
+
+    /// The same search, with the labels of `skip`'s resources matched, counted, and then left out.
+    ///
+    /// The exclusion set is a set of resources and nothing more: this method does not know why a
+    /// caller wants them gone, which is what keeps a status the model does not model — `owl:`
+    /// `deprecated` is not SKOS (`docs/adr/0041`) — from leaking into a SKOS query. The caller
+    /// reads the status beside the model and hands over the nodes.
+    ///
+    /// **The exclusion is applied before the bound, and that is the whole reason it lives here.**
+    /// Filtering the hits a bounded search returned would let 200 retired matches crowd out the
+    /// current ones a caller asked for and report the result as complete — a false negative in
+    /// the one command whose false negatives make people create duplicate concepts. Excluding
+    /// during the scan means the bound is spent entirely on hits the caller will see.
+    ///
+    /// What is excluded is still *matched*, and [`LabelSearch::withheld`] carries the count. A
+    /// caller may hide a hit; nothing here lets it hide that there was one.
+    pub fn search_excluding(&self, query: &LabelQuery, skip: &BTreeSet<Node>) -> LabelSearch {
         let cap = query.bound.max_hits;
         // Sorting and truncating whenever the buffer reaches twice the ceiling keeps the memory a
         // search holds bounded by the ceiling, however many matches the vocabulary has. The result
@@ -522,9 +562,13 @@ impl CoreModel {
         let mut matched = 0;
         let mut labels_read = 0;
         let mut resources_read = 0;
+        let mut withheld = 0;
+        let mut withheld_resources = 0;
 
         for (node, resource) in self.resources() {
             resources_read += 1;
+            let excluded = skip.contains(node);
+            let mut counted_this_resource = false;
             for (label, origins) in resource.labels() {
                 labels_read += 1;
                 if !query.selects_language(label) {
@@ -541,6 +585,16 @@ impl CoreModel {
                 let Some(quality) = query.matches_text(label) else {
                     continue;
                 };
+                // Counted before the bound is consulted, so a caller is told what it asked not to
+                // see whether or not the answer was also truncated.
+                if excluded {
+                    withheld += 1;
+                    if !counted_this_resource {
+                        counted_this_resource = true;
+                        withheld_resources += 1;
+                    }
+                    continue;
+                }
                 matched += 1;
                 if cap == 0 {
                     continue;
@@ -566,6 +620,8 @@ impl CoreModel {
             matched,
             labels_read,
             resources_read,
+            withheld,
+            withheld_resources,
             bound: query.bound,
         }
     }
@@ -1006,6 +1062,89 @@ mod tests {
 
         assert_eq!(unbounded.len(), 200);
         assert_eq!(bounded.hits(), &unbounded.hits()[..7]);
+    }
+
+    /// An excluded resource contributes no hit, and the count of what it would have contributed
+    /// is the thing that stops the exclusion reading as an absence.
+    #[test]
+    fn excluding_a_resource_withholds_its_hits_and_counts_them() {
+        let model = vocabulary();
+        let query = LabelQuery::new("bank").expect("a query");
+
+        let skip = BTreeSet::from([ex("bank")]);
+        let search = model.search_excluding(&query, &skip);
+
+        assert!(
+            !found(&search).iter().any(|hit| hit.contains("/bank> ")),
+            "{:?}",
+            found(&search)
+        );
+        // Two labels on the one excluded resource matched: "Bank"@en and "Banking house"@en.
+        assert_eq!(search.withheld(), 2);
+        assert_eq!(search.withheld_resources(), 1);
+        assert!(
+            search.is_complete(),
+            "everything the caller asked for is shown; is_complete is about the bound"
+        );
+    }
+
+    /// The claim that makes the exclusion belong here rather than in the caller: the bound is
+    /// spent entirely on hits the caller will see. Filtering a bounded answer afterwards would
+    /// return nothing at all from this vocabulary and call it complete.
+    #[test]
+    fn the_bound_is_spent_on_the_hits_that_survive_the_exclusion() {
+        let mut statements = Vec::new();
+        let mut skip = BTreeSet::new();
+        // Fifty excluded resources whose labels sort ahead of every current one, so a bound
+        // applied first would be exhausted before a single current hit was kept.
+        for index in 0..50 {
+            let node = ex(&format!("old{index:02}"));
+            statements.push(labelled(
+                &node,
+                LabelKind::Preferred,
+                &format!("Bank AAA {index:02}"),
+                Some("en"),
+            ));
+            skip.insert(node);
+        }
+        for index in 0..3 {
+            statements.push(labelled(
+                &ex(&format!("new{index:02}")),
+                LabelKind::Preferred,
+                &format!("Bank ZZZ {index:02}"),
+                Some("en"),
+            ));
+        }
+        let model = CoreModel::from_statements(statements);
+
+        let query = LabelQuery::new("bank")
+            .expect("a query")
+            .with_bound(SearchBound { max_hits: 3 });
+        let search = model.search_excluding(&query, &skip);
+
+        assert_eq!(search.len(), 3, "the bound went to the current concepts");
+        assert!(search.is_complete());
+        assert_eq!(search.withheld(), 50);
+        assert_eq!(search.withheld_resources(), 50);
+        assert!(
+            found(&search).iter().all(|hit| hit.contains("ZZZ")),
+            "{:?}",
+            found(&search)
+        );
+    }
+
+    /// A search that excludes nothing is the search that was there before, withheld count and all.
+    #[test]
+    fn an_ordinary_search_withholds_nothing() {
+        let search = vocabulary().search(&LabelQuery::new("bank").expect("a query"));
+
+        assert_eq!(search.withheld(), 0);
+        assert_eq!(search.withheld_resources(), 0);
+        assert_eq!(
+            search,
+            vocabulary()
+                .search_excluding(&LabelQuery::new("bank").expect("a query"), &BTreeSet::new())
+        );
     }
 
     /// What the search looked at, which is what makes its cost legible in a report.

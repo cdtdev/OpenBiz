@@ -22,6 +22,18 @@
 //! `CLAUDE.md` §3 requires every answer to say why it holds. So the matched label is printed with
 //! its kind, and the concept is still *named* by its preferred label, never by the hidden one.
 //! See `docs/adr/0034`.
+//!
+//! # `--current`, and the hole it has to not re-open
+//!
+//! `docs/adr/0041` shows every retired concept and marks it, in this command above all: told
+//! "it exists, it is retired, use this instead", someone reusing a term does the right thing.
+//! A curator building a new branch still has a real need for a list without them, and `--current`
+//! is that request. It is opt-in, it is never the default, and it is bounded by one rule recorded
+//! in `docs/adr/0043`: **it hides the hits and never the fact that there were hits.** The retired
+//! matches are counted during the scan and the count closes the report, including — especially —
+//! when it is the only thing that matched.
+
+use std::collections::BTreeSet;
 
 use openbiz_skos::{
     CoreModel, LabelKind, LabelOrigin, LabelQuery, LabelSearch, MatchMode, Node, Resource,
@@ -35,8 +47,14 @@ use crate::status;
 
 /// Report every label in the vocabulary at `graph` that `query` matches.
 ///
-/// Reads and nothing else.
-pub fn search(store: &Store, graph: &str, query: &LabelQuery) -> Result<String, CommandError> {
+/// With `current_only`, the hits on concepts the vocabulary marks retired are left out of the
+/// list and counted into the sentence that closes the report. Reads and nothing else.
+pub fn search(
+    store: &Store,
+    graph: &str,
+    query: &LabelQuery,
+    current_only: bool,
+) -> Result<String, CommandError> {
     let mut builder = CoreModel::builder();
     let mut retirements = Retirements::builder();
     store.for_each_statement(graph, |statement| {
@@ -47,8 +65,34 @@ pub fn search(store: &Store, graph: &str, query: &LabelQuery) -> Result<String, 
     let model = builder.build();
     let retirements = retirements.build();
 
-    let found = model.search(query);
-    Ok(report(graph, query, &model, &retirements, found))
+    // The set is built here and not inside the search because `owl:deprecated` is not SKOS
+    // (`docs/adr/0041`): the model is asked to leave out some resources, and which ones is a
+    // status question answered beside it.
+    let found = match current_only {
+        true => model.search_excluding(query, &retired_in(&retirements)),
+        false => model.search(query),
+    };
+    Ok(report(
+        graph,
+        query,
+        &model,
+        &retirements,
+        current_only,
+        found,
+    ))
+}
+
+/// Every resource this vocabulary marks `owl:deprecated`, as the set a search is told to skip.
+///
+/// Deliberately [`Retirement::is_retired`] and not "anything the index knows about". The other
+/// state it records — a replacement named with no marker — is a concept every command here reads
+/// as **current**, and dropping it from a search for current concepts would hide a term the
+/// vocabulary has not retired on the strength of a statement that does not retire it.
+fn retired_in(retirements: &Retirements) -> BTreeSet<Node> {
+    retirements
+        .retired()
+        .map(|(node, _)| node.clone())
+        .collect()
 }
 
 /// The report itself, kept apart from the store so it can be tested against a model in hand.
@@ -57,6 +101,7 @@ fn report(
     query: &LabelQuery,
     model: &CoreModel,
     retirements: &Retirements,
+    current_only: bool,
     found: LabelSearch,
 ) -> String {
     let mut out = String::new();
@@ -71,6 +116,13 @@ fn report(
         query.language(),
         kinds_asked_for(query),
     ));
+    // Said at the top, before any count, because every number below it is a number about a
+    // narrowed search and a reader who learns that at the bottom has already read them as totals.
+    if current_only {
+        out.push_str(
+            "current concepts only: the vocabulary's retired concepts were matched and left out.\n",
+        );
+    }
 
     // Deliberately `matched()` and not `is_empty()`. They differ exactly when the bound
     // suppressed every hit, and reporting that as "nothing matched" is a false negative in the one
@@ -89,6 +141,11 @@ fn report(
             "matching ignores case but not accents or spelling: an unaccented or differently \
              spelled query will not find an accented or differently spelled label.\n",
         );
+        // Last, because it is the sentence that changes what the reader does next. This is the one
+        // outcome that makes `--current` dangerous: every match this vocabulary had was on a
+        // retired concept, so the flag has turned "it exists, and here is what replaced it" into
+        // "no results" — the reading that gets a duplicate created (`CLAUDE.md` §1.7).
+        withheld_note(&mut out, &found);
         return out;
     }
 
@@ -174,8 +231,34 @@ fn report(
             found.matched() - found.len()
         ));
     }
+    // After the completeness line and not before it: "that is all of them" is about the bound, and
+    // a reader who meets the withheld count first reads the two as contradicting each other.
+    withheld_note(&mut out, &found);
 
     out
+}
+
+/// What `--current` left out, always said, and never said as nothing.
+///
+/// This is the whole safety of the flag. `docs/adr/0041` refuses to hide a retired concept by
+/// default because a search that omits one reports a term the vocabulary *holds* as one it has
+/// never heard of, and that reading is how a duplicate concept gets created. Asking for current
+/// concepts only is a legitimate request and it re-opens exactly that hole — so the hits go, the
+/// count stays, and the reader is told in one line how to get them back.
+///
+/// Nothing is printed when nothing was withheld, which is every search on the overwhelming
+/// majority of vocabularies: they have no retired concept at all.
+fn withheld_note(out: &mut String, found: &LabelSearch) {
+    if found.withheld() == 0 {
+        return;
+    }
+    out.push_str(&format!(
+        "\n{} more label(s) matched, on {} retired concept(s), and are not listed because \
+         --current was asked for. They are in this vocabulary: run the same search without \
+         --current to see them and what each one says to use instead.\n",
+        found.withheld(),
+        found.withheld_resources(),
+    ));
 }
 
 /// The label kinds a query asked for, as a phrase.
@@ -301,7 +384,8 @@ mod tests {
     #[test]
     fn a_word_finds_every_concept_labelled_with_it_however_it_is_labelled() {
         let (_directory, store) = store_with(PACKAGING);
-        let report = search(&store, VOCABULARY, &query("bag")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("bag"), false).expect("a readable vocabulary");
 
         assert!(report.contains("<http://example.org/bag>"), "{report}");
         assert!(report.contains("<http://example.org/paper>"), "{report}");
@@ -315,8 +399,8 @@ mod tests {
     #[test]
     fn a_hidden_label_is_matched_and_never_becomes_the_concepts_name() {
         let (_directory, store) = store_with(PACKAGING);
-        let report =
-            search(&store, VOCABULARY, &query("carrier-bag")).expect("a readable vocabulary");
+        let report = search(&store, VOCABULARY, &query("carrier-bag"), false)
+            .expect("a readable vocabulary");
 
         assert!(report.contains("\"carrier-bag\"@en"), "{report}");
         assert!(report.contains("under skos:hiddenLabel"), "{report}");
@@ -337,7 +421,8 @@ mod tests {
     #[test]
     fn a_skos_xl_label_is_found_and_says_why_it_was_reachable() {
         let (_directory, store) = store_with(PACKAGING);
-        let report = search(&store, VOCABULARY, &query("tote")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("tote"), false).expect("a readable vocabulary");
 
         assert!(report.contains("<http://example.org/tote>"), "{report}");
         assert!(
@@ -355,7 +440,8 @@ mod tests {
     #[test]
     fn a_hit_that_is_not_a_concept_says_so() {
         let (_directory, store) = store_with(PACKAGING);
-        let report = search(&store, VOCABULARY, &query("Baggage")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("Baggage"), false).expect("a readable vocabulary");
 
         assert!(
             report.contains("not a concept: skos:Collection"),
@@ -363,7 +449,7 @@ mod tests {
         );
 
         let scheme =
-            search(&store, VOCABULARY, &query("thesaurus")).expect("a readable vocabulary");
+            search(&store, VOCABULARY, &query("thesaurus"), false).expect("a readable vocabulary");
         assert!(
             scheme.contains("not a concept: skos:ConceptScheme"),
             "{scheme}"
@@ -375,7 +461,8 @@ mod tests {
     #[test]
     fn nothing_found_says_what_was_read_and_why_a_match_might_have_been_missed() {
         let (_directory, store) = store_with(PACKAGING);
-        let report = search(&store, VOCABULARY, &query("kayak")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("kayak"), false).expect("a readable vocabulary");
 
         assert!(report.contains("nothing matched"), "{report}");
         assert!(report.contains("label(s) on"), "{report}");
@@ -395,6 +482,7 @@ mod tests {
             &store,
             VOCABULARY,
             &query("bag").with_bound(SearchBound { max_hits: 0 }),
+            false,
         )
         .expect("a readable vocabulary");
 
@@ -417,6 +505,7 @@ mod tests {
             &store,
             VOCABULARY,
             &query("bag").with_bound(SearchBound { max_hits: 2 }),
+            false,
         )
         .expect("a readable vocabulary");
 
@@ -439,6 +528,7 @@ mod tests {
                 ))
                 .with_kinds([LabelKind::Preferred])
                 .expect("one kind"),
+            false,
         )
         .expect("a readable vocabulary");
 
@@ -463,6 +553,7 @@ mod tests {
             &store,
             VOCABULARY,
             &query("bag").with_language(LanguageFilter::Untagged),
+            false,
         )
         .expect("a readable vocabulary");
 
@@ -476,7 +567,7 @@ mod tests {
     #[test]
     fn an_unregistered_vocabulary_is_refused_rather_than_reported_empty() {
         let (_directory, store) = store_with(PACKAGING);
-        let error = search(&store, "http://example.org/absent", &query("bag"))
+        let error = search(&store, "http://example.org/absent", &query("bag"), false)
             .expect_err("no such vocabulary");
 
         assert!(
@@ -505,7 +596,8 @@ mod tests {
     #[test]
     fn a_retired_hit_carries_the_full_account_and_the_successor() {
         let (_directory, store) = store_with(RETIRED_BAGS);
-        let report = search(&store, VOCABULARY, &query("carrier")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("carrier"), false).expect("a readable vocabulary");
 
         assert!(report.contains("<http://example.org/bag>"), "{report}");
         assert!(report.contains("[retired]"), "{report}");
@@ -523,7 +615,8 @@ mod tests {
     #[test]
     fn retired_hits_are_counted_and_shown_rather_than_omitted() {
         let (_directory, store) = store_with(RETIRED_BAGS);
-        let report = search(&store, VOCABULARY, &query("bag")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("bag"), false).expect("a readable vocabulary");
 
         assert!(report.contains("3 label(s) matched"), "{report}");
         assert!(
@@ -546,7 +639,8 @@ mod tests {
     #[test]
     fn a_retired_hit_with_no_successor_says_so_plainly() {
         let (_directory, store) = store_with(RETIRED_BAGS);
-        let report = search(&store, VOCABULARY, &query("paper")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("paper"), false).expect("a readable vocabulary");
 
         assert!(report.contains("<http://example.org/sack>"), "{report}");
         assert!(
@@ -560,8 +654,122 @@ mod tests {
     #[test]
     fn a_vocabulary_with_no_retirements_says_nothing_about_them() {
         let (_directory, store) = store_with(PACKAGING);
-        let report = search(&store, VOCABULARY, &query("bag")).expect("a readable vocabulary");
+        let report =
+            search(&store, VOCABULARY, &query("bag"), false).expect("a readable vocabulary");
 
         assert!(!report.contains("retired"), "{report}");
+    }
+
+    /// The request the flag exists for: a curator building a new branch wants the list without the
+    /// obsolete terms in it. They get it, and they are told what it cost them.
+    #[test]
+    fn current_only_leaves_the_retired_hits_out_and_says_how_many() {
+        let (_directory, store) = store_with(RETIRED_BAGS);
+        let report =
+            search(&store, VOCABULARY, &query("bag"), true).expect("a readable vocabulary");
+
+        assert!(
+            report.contains("<http://example.org/reusable>  (\"Reusable bag\"@en)"),
+            "{report}"
+        );
+        assert!(!report.contains("<http://example.org/bag>"), "{report}");
+        assert!(!report.contains("<http://example.org/sack>"), "{report}");
+        assert!(report.contains("current concepts only"), "{report}");
+        assert!(
+            report.contains("2 more label(s) matched, on 2 retired concept(s)"),
+            "{report}"
+        );
+        assert!(
+            report.contains("run the same search without --current"),
+            "the way back is one line away, not a thing to work out: {report}"
+        );
+    }
+
+    /// **The outcome that makes the flag dangerous, and the test that pins the mitigation.** Every
+    /// match was on a retired concept, so without the withheld count this report would read
+    /// "nothing matched" about a term the vocabulary holds — which is how a duplicate gets
+    /// created (`CLAUDE.md` §1.7). `docs/adr/0043`.
+    #[test]
+    fn current_only_never_reports_an_empty_search_when_retired_concepts_matched() {
+        let (_directory, store) = store_with(RETIRED_BAGS);
+        let report =
+            search(&store, VOCABULARY, &query("carrier"), true).expect("a readable vocabulary");
+
+        assert!(report.contains("nothing matched"), "{report}");
+        assert!(
+            report.contains("1 more label(s) matched, on 1 retired concept(s)"),
+            "the absence is explained rather than left to be read as non-existence: {report}"
+        );
+        assert!(report.contains("They are in this vocabulary"), "{report}");
+    }
+
+    /// The bound is spent on the hits that survive the flag, which is why the exclusion happens
+    /// inside the search and not over its answer. Filtering afterwards would show nothing here and
+    /// call it the whole answer.
+    #[test]
+    fn current_only_does_not_let_retired_hits_use_up_the_limit() {
+        let (_directory, store) = store_with(RETIRED_BAGS);
+        let report = search(
+            &store,
+            VOCABULARY,
+            &query("bag").with_bound(SearchBound { max_hits: 1 }),
+            true,
+        )
+        .expect("a readable vocabulary");
+
+        assert!(
+            report.contains("<http://example.org/reusable>"),
+            "the one slot went to the one current concept: {report}"
+        );
+        assert!(report.contains("that is all of them."), "{report}");
+    }
+
+    /// A concept naming a successor without carrying the marker is one every command here reads as
+    /// **current**, so `--current` keeps it — and keeps its mark, which is the only thing telling
+    /// the reader the vocabulary is of two minds about it.
+    #[test]
+    fn current_only_keeps_a_concept_that_is_replaced_but_not_marked_retired() {
+        const HALF: &str = r#"
+            @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+            @prefix dcterms: <http://purl.org/dc/terms/> .
+            @prefix ex: <http://example.org/> .
+
+            ex:bag a skos:Concept ; skos:prefLabel "Carrier bag"@en ;
+                dcterms:isReplacedBy ex:reusable .
+            ex:reusable a skos:Concept ; skos:prefLabel "Reusable bag"@en .
+        "#;
+        let (_directory, store) = store_with(HALF);
+        let report =
+            search(&store, VOCABULARY, &query("carrier"), true).expect("a readable vocabulary");
+
+        assert!(report.contains("<http://example.org/bag>"), "{report}");
+        assert!(
+            report.contains("[replaced, but not marked retired]"),
+            "{report}"
+        );
+        assert!(
+            !report.contains("more label(s) matched"),
+            "nothing was withheld, so nothing is claimed to have been: {report}"
+        );
+    }
+
+    /// Asking for current concepts only in a vocabulary that has retired nothing changes no word
+    /// of the answer except the line saying what was asked for.
+    #[test]
+    fn current_only_over_a_vocabulary_with_no_retirements_withholds_nothing() {
+        let (_directory, store) = store_with(PACKAGING);
+        let asked = search(&store, VOCABULARY, &query("bag"), true).expect("a readable vocabulary");
+        let plain =
+            search(&store, VOCABULARY, &query("bag"), false).expect("a readable vocabulary");
+
+        assert!(!asked.contains("more label(s) matched"), "{asked}");
+        assert_eq!(
+            asked.replace(
+                "current concepts only: the vocabulary's retired concepts were matched and left \
+                 out.\n",
+                ""
+            ),
+            plain
+        );
     }
 }

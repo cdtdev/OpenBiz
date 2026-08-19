@@ -2565,21 +2565,26 @@ module's own tests and end to end against the real binary reading a store off di
   they are per-resource reports, so the focus rule in `adr/0041` §4 applies rather than the list one.
 - **Opened:** iteration 46
 
-### No read command can be asked for current concepts only
+### Only `openbiz search` can be asked for current concepts only — the browse commands cannot
 - **Kind:** partial-coverage
-- **What is proven:** every read command shows a retired concept and marks it, and a test asserts
-  that a vocabulary retiring nothing reads exactly as it did.
-- **What is not:** the other half of the need. `adr/0041` argues at length that hiding must not be
-  the *default*; it does not argue that hiding should be impossible, and a curator building a new
-  branch of a large thesaurus has a real reason to want a tree or a search with the obsolete terms
-  out of the way. Today the only way to get one is to read past the marks.
-- **Note:** it is the plan item below the one this iteration closed, so this entry exists to keep
-  the gap visible rather than to add work. The hard part is not the flag: it is what a *tree* does
-  when a retired concept has current concepts below it, where dropping the branch would lose them
-  and keeping the node contradicts the flag.
-- **What would close it:** the plan item, with the tree case decided explicitly rather than by
-  whatever falls out of a filter.
-- **Opened:** iteration 46
+- **Was:** *"No read command can be asked for current concepts only"*, opened at iteration 46.
+  **Narrowed, not closed**, at iteration 51: `openbiz search <graph> <text> --current` exists
+  (`adr/0043`), leaves the retired hits out, and always reports how many it withheld and on how
+  many concepts — including when they were everything that matched, which is the case that would
+  otherwise reproduce the false negative `adr/0041` refused to ship. Proven in-process and against
+  the real binary.
+- **What is still not:** `openbiz tree`, `openbiz ancestors` and `openbiz paths` have no such flag,
+  and the hard part of the original entry is exactly the part still open — what a *tree* does when
+  a retired concept has current concepts below it, where dropping the branch loses them and
+  keeping the node contradicts the flag. Both are now their own plan items.
+- **The inconsistency is the live cost, and it is worth stating plainly:** the flag is real on one
+  command of four, so a curator who learns `--current` on `search` and types it on `tree` gets an
+  unknown-option error. That is the right failure — better than a silent no-op — but a flag that
+  works on one command and errors on its neighbours reads as a half-finished tool, which is what
+  it is until the two items land.
+- **What would close it:** those two plan items, with the tree case decided explicitly rather than
+  by whatever falls out of a filter.
+- **Opened:** iteration 46 · **Narrowed:** iteration 51
 
 ### Nothing reads the retirement marker at scale, and `inspect`'s section walks the hierarchy again
 - **Kind:** partial-coverage
@@ -2590,7 +2595,11 @@ module's own tests and end to end against the real binary reading a store off di
   `CoreModel::children` once per retired concept, so a vocabulary that has retired a large fraction
   of itself — a migration is exactly that — pays a walk per retired concept on every inspect. And
   `openbiz search` now calls `status::explain` per hit, which follows every recorded replacement.
-  Both are bounded by the model, and neither has a number against it.
+  Both are bounded by the model, and neither has a number against it. Iteration 51 added a third,
+  smaller one: `--current` materialises the set of retired IRIs before the scan, so a vocabulary
+  mid-migration holds a `BTreeSet<Node>` of a large fraction of its own concepts on top of the
+  model. It is strictly smaller than the model itself — the containment argument `adr/0041` §2
+  makes about `Retirements` — but it is another allocation nobody has measured.
 - **Note:** the ninth unmeasured cost in this crate, and the second one in a *read* path rather
   than a write. The proposal to replace the whole run of them with measurements is in
   `docs/PROPOSED.md` from iteration 45 and is unpromoted.

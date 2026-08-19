@@ -193,3 +193,59 @@ fn inspect_reports_the_retirement_and_what_it_left_standing() {
     // A count and not a complaint: leaving them is the write half's deliberate decision.
     assert!(report.contains("\nfindings: 0\n"), "{report}");
 }
+
+/// The opt-in half of `docs/adr/0041`, end to end: a curator who asks for current concepts only
+/// gets a list without the obsolete terms in it.
+#[test]
+fn search_current_only_leaves_the_retired_concept_out() {
+    let dir = retired();
+    let report = read(
+        dir.path(),
+        &["search", THESAURUS, "telegraphy", "--current"],
+    );
+
+    assert!(
+        report.contains("current concepts only"),
+        "the narrowing is stated before the counts it changes: {report}"
+    );
+    assert!(
+        report.contains(TELEGRAPHY),
+        "the current concept is still found: {report}"
+    );
+    assert!(
+        !report.contains(WIRELESS),
+        "the retired concept is the one thing that was asked to go: {report}"
+    );
+    // "Wireless telegraphy"@en and "Radiotelegraphy"@en, both on the one retired concept.
+    assert!(
+        report.contains("2 more label(s) matched, on 1 retired concept(s)"),
+        "{report}"
+    );
+}
+
+/// **The failure the flag would otherwise reintroduce.** Everything that matched was retired, so
+/// without the withheld count this report would tell someone looking for a term to reuse that the
+/// vocabulary has never heard of it — which is how the duplicate gets created (`CLAUDE.md` §1.7).
+#[test]
+fn search_current_only_still_admits_that_a_retired_concept_matched() {
+    let dir = retired();
+    let report = read(
+        dir.path(),
+        &["search", THESAURUS, "radiotelegraphy", "--current"],
+    );
+
+    assert!(report.contains("nothing matched"), "{report}");
+    assert!(
+        report.contains("1 more label(s) matched, on 1 retired concept(s)"),
+        "{report}"
+    );
+    assert!(
+        report.contains("run the same search without --current"),
+        "the way to see them is in the report, not in the manual: {report}"
+    );
+
+    // And the way back works, from this same store, without any other change.
+    let shown = read(dir.path(), &["search", THESAURUS, "radiotelegraphy"]);
+    assert!(shown.contains(WIRELESS), "{shown}");
+    assert!(shown.contains(RADIO), "the successor is named: {shown}");
+}

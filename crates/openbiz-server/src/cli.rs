@@ -120,6 +120,11 @@ pub enum Command {
         graph: String,
         /// What to look for, and how.
         query: Box<LabelQuery>,
+        /// Leave the hits on retired concepts out of the list, and say how many there were.
+        ///
+        /// Not part of the query: which resources are retired is read from the vocabulary beside
+        /// the model (`docs/adr/0041`), and the parser has not opened the store yet.
+        current_only: bool,
     },
     /// Report the IRI a new concept in a vocabulary would be given. Reads and nothing else.
     Mint {
@@ -316,7 +321,13 @@ duplicate concept gets created. Narrow it with:
   --untagged                 only labels with no language tag
   --kind pref|alt|hidden     only this kind; repeat for more than one
   --limit <n>                report at most n hits (default 200)
+  --current                  leave out the hits on concepts the vocabulary marks retired
 Matching ignores case but not accents, spelling, or Unicode normalisation.
+
+Nothing else hides a retired concept, and neither does this: --current leaves its hits out of the
+list and still reports how many there were and on how many concepts, including when they were all
+that matched. A search that silently omitted them would report a term the vocabulary holds as one
+it has never heard of, which is how a duplicate gets created.
 
 Mint only reads, and reserves nothing: run it twice and it answers the same. It reports the IRI a
 new concept would be given, under a pattern with one placeholder — {n} for an opaque IRI, {slug}
@@ -594,9 +605,11 @@ impl Command {
                 let text = Self::text("search", "the text to look for", &mut args)?;
                 // The two positionals are taken before any option is read, so a search for a term
                 // that begins with a hyphen needs no escaping and is never mistaken for a flag.
+                let (query, current_only) = Self::search_query(&text, args)?;
                 return Ok(Self::Search {
                     graph,
-                    query: Box::new(Self::search_query(&text, args)?),
+                    query: Box::new(query),
+                    current_only,
                 });
             }
             "mint" => {
@@ -1027,12 +1040,13 @@ impl Command {
     fn search_query(
         text: &str,
         args: impl Iterator<Item = OsString>,
-    ) -> Result<LabelQuery, ArgsError> {
+    ) -> Result<(LabelQuery, bool), ArgsError> {
         let mut query = LabelQuery::new(text).map_err(ArgsError::BadQuery)?;
         let mut mode: Option<MatchMode> = None;
         let mut language: Option<LanguageFilter> = None;
         let mut kinds: Vec<LabelKind> = Vec::new();
         let mut limit: Option<usize> = None;
+        let mut current_only: Option<bool> = None;
 
         let mut args = args.map(|arg| arg.into_string()).peekable();
         while let Some(arg) = args.next() {
@@ -1052,6 +1066,9 @@ impl Command {
                     set(&mut language, LanguageFilter::Range(range), "--lang")?;
                 }
                 "--untagged" => set(&mut language, LanguageFilter::Untagged, "--untagged")?,
+                // Not a narrowing of the *query* — every label is still matched, and the ones on
+                // retired concepts are counted before they are dropped. See `docs/adr/0043`.
+                "--current" => set(&mut current_only, true, "--current")?,
                 "--kind" => {
                     let kind = value("--kind")?;
                     kinds.push(match kind.as_str() {
@@ -1099,7 +1116,7 @@ impl Command {
         if let Some(max_hits) = limit {
             query = query.with_bound(SearchBound { max_hits });
         }
-        Ok(query)
+        Ok((query, current_only.unwrap_or(false)))
     }
 
     /// Refuse anything left over rather than ignoring it.
@@ -1687,7 +1704,7 @@ mod tests {
     /// The two positionals, and the defaults that make the command forgiving by design.
     #[test]
     fn search_defaults_to_the_forgiving_query() {
-        let Ok(Command::Search { graph, query }) = parse(&["search", "http://e.org/v", "bag"])
+        let Ok(Command::Search { graph, query, .. }) = parse(&["search", "http://e.org/v", "bag"])
         else {
             panic!("search takes a graph and some text");
         };
@@ -2262,6 +2279,39 @@ mod tests {
             vec![LabelKind::Preferred, LabelKind::Alternative]
         );
         assert_eq!(query.bound(), SearchBound { max_hits: 5 });
+    }
+
+    /// The one option that is not a narrowing of the query: every label is still matched, and
+    /// which of the hits are shown is decided against a status the parser cannot see yet.
+    #[test]
+    fn current_is_off_unless_it_is_asked_for() {
+        let Ok(Command::Search { current_only, .. }) = parse(&["search", "http://e.org/v", "bag"])
+        else {
+            panic!("a search");
+        };
+        assert!(!current_only, "`docs/adr/0041`: never a default");
+
+        let Ok(Command::Search {
+            current_only,
+            query,
+            ..
+        }) = parse(&["search", "http://e.org/v", "bag", "--current", "--exact"])
+        else {
+            panic!("a search with both");
+        };
+        assert!(current_only);
+        assert_eq!(
+            query.mode(),
+            MatchMode::Exact,
+            "it composes with the narrowing options rather than replacing them"
+        );
+
+        assert!(matches!(
+            parse(&["search", "http://e.org/v", "bag", "--current", "--current"]),
+            Err(ArgsError::ConflictingOptions {
+                option: "--current"
+            })
+        ));
     }
 
     /// Two options that narrow the same thing are refused rather than resolved last-wins. A user

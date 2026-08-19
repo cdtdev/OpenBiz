@@ -138,6 +138,7 @@ openbiz ancestors <graph> <concept>   # what is above it, and by what path
 openbiz paths <graph> <concept>       # every route up to a root, and the cycles they hit
 openbiz tree <graph> <concept>        # what is below it and beside it
 openbiz search <graph> <text>         # find concepts by a word, not by an IRI
+openbiz search <graph> <text> --current   # ... leaving out the retired ones, and saying how many
 ```
 
 **The transitive closure is never stored, at any vocabulary size.** A legal 100 000-link SKOS chain
@@ -171,6 +172,15 @@ reports a term the vocabulary holds as one it has never heard of. Each report al
 marks add up to — the current concepts a retirement left below it, the retired concepts a breadcrumb
 runs through, the vocabulary's whole retirement backlog as counts and never as findings
 ([`adr/0041`](adr/0041-a-retired-concept-is-shown-and-marked-never-hidden.md)).
+
+**Leaving them out is a request, not a default.** `openbiz search <graph> <text> --current` gives a
+curator drafting a new branch the list without the obsolete terms in it — and always closes with how
+many labels it withheld, on how many retired concepts, and how to see them. Especially when they were
+*everything* that matched: a report that said "nothing matched" about a term the vocabulary holds is
+the false negative the default exists to prevent. The exclusion runs inside the scan, so the result
+limit is spent on hits you will actually see
+([`adr/0043`](adr/0043-current-only-hides-the-hits-and-never-the-count.md)). It is `search` only so
+far; `tree`, `ancestors` and `paths` still show everything, marked.
 
 ---
 
