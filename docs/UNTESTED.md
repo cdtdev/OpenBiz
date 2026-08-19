@@ -1868,7 +1868,14 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** a breadth row in the scale harness (N concepts, branching factor B,
   depth D) measured for `descent` from the root and for the rendered report's size, at the sizes
   `adr/0024` used.
-- **Opened:** iteration 35
+- **Half of that is done at iteration 40 and the half that matters is not.** The generator now
+  builds breadth — `Shape::Tree` was always there and `Shape::Polytree` and `Shape::Lattice` join
+  it — so the *input* this entry asks for exists at 10k, 100k and 1M. **Nothing measures `descent`
+  from the root on any of them.** The route column added this iteration measures the walk *upwards*,
+  which is the cheap direction and the one `adr/0024` already covered, so this entry's central
+  claim is untouched: the first path in this build whose ordinary answer is the size of the
+  vocabulary has still never been run at any size. Do not read the new shapes as closing it.
+- **Opened:** iteration 35 · **Amended:** iteration 40
 
 ### `WalkBound::DEFAULT` going down is a ceiling an ordinary vocabulary reaches, and nobody here has reached it
 - **Kind:** untested-boundary
@@ -1904,7 +1911,7 @@ module's own tests and end to end against the real binary reading a store off di
   `openbiz paths <graph> <concept>` is the production caller. The two readings of "root" are kept
   apart rather than collapsed — see the entry below, which is what this one turned into.
 
-### `PathBound::DEFAULT` is a judgement about polyhierarchies nobody here has measured
+### ~~`PathBound::DEFAULT` is a judgement about polyhierarchies nobody here has measured~~ — CLOSED, iteration 40
 - **Kind:** untested-boundary
 - **What is proven:** each of the three ceilings refuses rather than truncating, and an incomplete
   enumeration is distinguishable from a complete one — pinned by a test that hits the route ceiling
@@ -1936,7 +1943,26 @@ module's own tests and end to end against the real binary reading a store off di
   vocabularies are not a population, neither is the deep faceted kind, and neither number came from
   a test — but "uncomfortably near the ceiling" is no longer the honest way to state the doubt, and
   the branching generator this entry asks for is still the thing that would close it.
-- **Opened:** iteration 36
+- **Closed, iteration 40, by building the generator this entry has asked for four times.**
+  `crates/openbiz-skos/src/scale.rs` gained two branching shapes: `Polytree`, a balanced tree in
+  which a share of the concepts state extra broader links — calibrated to LC Genre/Form Terms'
+  measured 25.8% and its measured maximum of four — and `Lattice`, levels of *w* concepts each
+  linked to the whole level above, whose routes multiply by *w* per level. Both are asserted
+  against arithmetic that can be done by hand before any timing is read off them.
+- **The number, and it settles the doubt in the direction iteration 37 pointed.** A realistic
+  polyhierarchy at 10 001 / 100 001 / 1 000 001 concepts, with a quarter of the concepts carrying
+  the measured maximum of four broader links, enumerates **10, 13 and 16 routes** from a widened
+  concept. Not thousands. `max_paths` is 10 000, so a million-concept thesaurus of the shape a real
+  one has sits **three orders of magnitude below the ceiling**, and the entry's original fear —
+  "uncomfortably near" — was wrong in the safe direction.
+- **What the ceiling *is* reachable by is a vocabulary of thirty concepts.** A binary lattice whose
+  deepest concept sits on level 15 has 2¹⁴ routes from **56 links**, and
+  `a_thirty_concept_lattice_exhausts_the_default_route_bound` pins both sides of the boundary: 29
+  concepts enumerate 8 192 routes completely, 30 exhaust the bound and report an incomplete answer,
+  and the step budget is nowhere near spent when it happens. So `max_paths` is not a size limit at
+  all — it is a *shape* limit, and the shapes that reach it are legal SKOS graphs that no thesaurus
+  practice produces. That is the right kind of backstop and it is now measured rather than argued.
+- **Opened:** iteration 36 · **Closed:** iteration 40
 
 ### Nothing measures what an enumeration costs when it is abandoned rather than completed
 - **Kind:** partial-coverage
@@ -1949,7 +1975,13 @@ module's own tests and end to end against the real binary reading a store off di
   the one part of this code whose constant factor nobody has looked at.
 - **What would close it:** the same branching row as the entry above, with a cycle planted near the
   top so that the enumeration completes nothing, timed against the same vocabulary without it.
-- **Opened:** iteration 36
+- **Still open after iteration 40, and the missing half is the cycle.** The branching row now
+  exists, so the first half of what would close this is built — but every shape the generator makes
+  is **acyclic by construction**: `Polytree`'s extra parents always point at an earlier index and
+  `Lattice` links strictly one level up, which is exactly what makes them safe to generate and
+  exactly what makes them useless here. The abandoned-work path is still proven correct on four
+  concepts and never proven affordable.
+- **Opened:** iteration 36 · **Amended:** iteration 40
 
 ### A route names its transitive-only steps and no export or endpoint carries that distinction
 - **Kind:** partial-coverage
@@ -2077,3 +2109,50 @@ module's own tests and end to end against the real binary reading a store off di
   is now four iterations old.
 - **What would close it:** label-length percentiles from a real published thesaurus.
 - **Opened:** iteration 39
+
+### The scale generator has branching now, and still generates no labels, notes, mappings or refinements
+- **Kind:** partial-coverage
+- **What is proven:** the hierarchy's *shape*, on five shapes rather than three.
+  `crates/openbiz-skos/src/scale.rs` builds a detached baseline, a tree, a star, a chain, a
+  polytree calibrated to LC Genre/Form Terms' measured 25.8% share and maximum of four broader
+  concepts, and a lattice whose routes multiply per level. Each is asserted against hand-checkable
+  arithmetic before any timing is taken from it.
+- **What is not: four of the five axes six previous iterations recorded.** Branching was the axis
+  iterations 31 to 36 kept deferring and iteration 40 built. The other four are untouched and this
+  entry exists so that closing one does not read as closing them:
+  - **no labels and no notes** (iteration 31) — so `openbiz search`, which scans every label of
+    every concept linearly with nothing indexing anything, is measured here against **zero labels**;
+  - **no mapping links** (iteration 32) — so the S43/S45/S46 passes and `EquivalenceBound` are
+    measured against a vocabulary with no outward links at all;
+  - **no dense `skos:related` clusters** (iteration 33) — the associative shapes are one link per
+    concept, and the quadratic case is a hub;
+  - **no `rdfs:subPropertyOf`** (iteration 34) — the §7.1 extension point that AGROVOC uses 21
+    times in the wild.
+  Each has its own entry above with its own "what would close it"; this one is the index, so that
+  a reader who sees "the generator was widened at iteration 40" does not conclude more than that.
+- **And every shape is acyclic by construction**, which is deliberate — the extra links always
+  point at an earlier index — and which means the cyclic paths through `paths_to_root` and the
+  §8.4 sweep are still measured on nothing.
+- **What would close it:** one axis per blind-spot pass, labels first, because `search` is the
+  command whose cost model is least understood and whose §1.7 justification is strongest.
+- **Opened:** iteration 40
+
+### A realistic million-concept polyhierarchy peaks at 8.2 GiB, which is more than `adr/0024` recorded and near this machine's ceiling
+- **Kind:** untested-boundary
+- **What is proven:** the number, measured this iteration in release on the loop machine.
+  1 000 001 concepts with a quarter of them carrying LC Genre/Form Terms' measured maximum of four
+  broader concepts is 1 749 986 stated links, 6 999 944 held entries, 5 249 958 derivations, a
+  **1 809 MiB** `inspect` report, and a **peak RSS of 8 178 MiB** against a 3 144 MiB delta. The
+  same size with one extra link instead of three peaks at 6 413 MiB.
+- **Why it matters:** `adr/0024` measured the monohierarchic tree at the same size at **5 081 MiB**
+  peak and sized every judgement in this build against it. Branching a quarter of the concepts adds
+  **61%** to that peak, and the machine this loop runs on has 11 GiB. A vocabulary of that size and
+  shape is not exotic — it is AGROVOC's shape at twenty-four times AGROVOC's size.
+- **What is not:** whether it is a wall or a slope. Nothing was measured **above** a million
+  concepts, on a machine with different memory, or with the store's own footprint alongside — every
+  row here builds the model from an in-memory iterator in a process doing nothing else, and the
+  real caller is a server holding an Oxigraph instance at the same time. `CLAUDE.md` §8 puts the
+  hardware side of that outside the loop.
+- **What would close it:** the same table taken with a `Store` open, and a stated policy for what
+  the server does when a vocabulary will not fit — which is a product decision, not a measurement.
+- **Opened:** iteration 40

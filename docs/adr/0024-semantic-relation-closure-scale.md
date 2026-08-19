@@ -7,6 +7,9 @@
   links and three derivations per stated link without measuring what that costs.
 - **Binds:** the next build-plan item, S24 and S27. It settles *where* the transitive closure
   lives before that item chooses.
+- **Extended:** iteration 40, which re-ran the whole table on a **polyhierarchy** — the shape every
+  row below was measured without and which a real thesaurus has. The decision is unchanged; the
+  numbers and what they now cover are in the section at the end.
 
 ## Context
 
@@ -168,3 +171,43 @@ measures.
   derivations ratio fails a test rather than silently changing the units of this table.
 - The numbers are reproducible by anyone: `cargo test --release -p openbiz-skos -- --ignored
   --nocapture --test-threads=1`.
+
+---
+
+## Confirmed at iteration 40 on a shape this ADR never measured
+
+Every row above is a **monohierarchy** — one broader concept per concept. That was not stated as a
+limitation and it silently decided the decision: the closure's size is a property of the hierarchy's
+shape, and a shape with one parent per concept is the cheapest branching a hierarchy can have. Six
+subsequent iterations each recorded, in a different rule's words, that the generator could produce
+nothing else. Iteration 40 built two branching shapes and re-ran the table.
+
+The realistic row is a **polytree**: a balanced tree of branching 10 in which one concept in four
+states extra broader links, calibrated to iteration 37's count of LC Genre/Form Terms — 25.8% of
+concepts with more than one broader concept, maximum 4.
+
+| shape | concepts | stated links | build | peak RSS | held entries | `inspect` report | S24 closure |
+|---|---|---|---|---|---|---|---|
+| tree (above) | 1 000 001 | 1 000 000 | 62.66 s | 5 081 MiB | 4 000 000 | 1 033.8 MiB | 5 876 550 (5.9×) |
+| polytree, +1 broader on ¼ | 1 000 001 | 1 249 998 | 28.57 s | 6 413 MiB | 4 999 992 | 1 292.2 MiB | 7 595 226 (6.1×) |
+| polytree, +3 broader on ¼ | 1 000 001 | 1 749 986 | 23.57 s | **8 178 MiB** | 6 999 944 | 1 809.1 MiB | 13 789 093 (**7.9×**) |
+
+**Finding 2 survives, and branching behaves like extra depth.** The polytree's multiple runs 4.1×
+at 10k, 5.9× at 100k, 7.9× at 1M — the same one-per-decade rise the tree shows, displaced upwards
+by about two. So "the realistic multiple is the average depth" is still the rule; a second parent
+adds to the average depth rather than doing something new to it. That is the reassuring answer, and
+it is the *opposite* of what iterations 33 and 36 assumed when they reasoned that branching and
+depth would compound.
+
+**Finding 1's per-link cost is unchanged**, which is what makes the rows comparable: the model still
+holds four entries and three derivations per stated link with several parents, and the ordinary
+suite now asserts that against the links actually written rather than against `concepts - 1`.
+
+**What did get worse is the absolute memory.** Quadrupling the broader links on a quarter of a
+million-concept vocabulary adds 61% to the peak RSS this ADR sized its judgements against — 8.2 GiB
+on a machine with 11. That is recorded in `docs/UNTESTED.md` rather than acted on here, because it
+changes no decision this ADR took: the closure is still never materialised, and materialising the
+13.8 million pairs the polytree licenses would be worse by exactly the margin the decision avoids.
+
+**The decision therefore stands unchanged**, now measured against a hierarchy shaped like a real
+thesaurus rather than only against one that was easy to generate.

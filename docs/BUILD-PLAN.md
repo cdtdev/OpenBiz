@@ -123,6 +123,27 @@ a stated link costs **3.9 KiB of resident memory**, 43× the size of the fact, a
 vocabulary with no labels at all held **4.4 GiB**. That is about what is already shipped, it is
 recorded rather than fixed, and it is in `UNTESTED.md` and three proposals awaiting a human.
 
+**Iteration 40 was a blind-spot pass, so no plan item moved and the count above is unchanged.** It
+did the one thing the last six iterations each asked the next blind-spot pass to do and each then
+deferred: it **widened the scale generator** rather than deepening a seventh rule. Every shape
+`crates/openbiz-skos/src/scale.rs` could build was a monohierarchy — one broader concept per
+concept, so exactly one route to a summit — which meant `paths_to_root`'s central ceiling,
+`PathBound::max_paths`, was **unmeasurable in principle** from anything in this repository. Two
+branching shapes now exist: a **polytree** calibrated to iteration 37's count of LC Genre/Form
+Terms (25.8% of concepts with more than one broader, maximum 4), and a **lattice** whose routes
+multiply per level. Three things came out of running them. A realistic million-concept
+polyhierarchy enumerates **16 routes**, three orders of magnitude below a ceiling of 10 000, so the
+doubt recorded four times about that constant is closed in the safe direction. The ceiling is
+instead reached by **thirty concepts and fifty-six links** — it is a shape limit, not a size limit,
+and both sides of that boundary are pinned by a test. And `adr/0024`'s central finding survives the
+new shape: the closure multiple rises one per decade on a polyhierarchy exactly as it does on a
+tree, displaced upwards by about two, so branching behaves like extra average depth rather than
+compounding with it — which is the *opposite* of what iterations 33 and 36 assumed. The cost of
+that shape is recorded rather than fixed: a million-concept polyhierarchy peaks at **8.2 GiB**
+against the tree's 5.1, on a machine with 11. Four of the generator's five axes — labels, notes,
+mapping links, `rdfs:subPropertyOf` — are still unbuilt, and `UNTESTED.md` now carries one entry
+indexing them so that closing branching cannot read as closing the rest.
+
 **Iteration 30 was a blind-spot pass, so no plan item moved and the count above is unchanged.** It
 audited `ancestry.rs`, which iteration 28 had asked the next blind-spot pass to treat as
 inherited-and-unaudited, and found that **the bound protecting §8.4's disjointness check bounded
