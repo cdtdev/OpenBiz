@@ -195,6 +195,20 @@ async fn main() -> anyhow::Result<()> {
                 language.as_deref(),
             )
         }),
+        Command::Reinstate {
+            graph,
+            resource,
+            note,
+            language,
+        } => one_shot(store, |store| {
+            openbiz_server::reinstate(
+                store,
+                &graph,
+                &resource,
+                note.as_deref(),
+                language.as_deref(),
+            )
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

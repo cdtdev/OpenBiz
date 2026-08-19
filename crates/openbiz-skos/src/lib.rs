@@ -18,6 +18,7 @@ mod model;
 mod notes;
 mod paths;
 mod refinement;
+mod reinstate;
 mod relations;
 mod relocate;
 mod search;
@@ -73,6 +74,9 @@ pub use paths::{HierarchyCycle, PathBound, RootPath, RootPaths, RouteStep};
 pub use refinement::{
     PropertyRefinements, PropertyRefinementsBuilder, RefinementBound, RefinementExhaustion,
     RDFS_SUB_PROPERTY_OF,
+};
+pub use reinstate::{
+    Reinstatement, ReinstatementError, ReinstatementScan, ReinstatementScanBuilder,
 };
 pub use relations::{
     RelationOrigin, SemanticRelation, SKOS_BROADER, SKOS_BROADER_TRANSITIVE, SKOS_NARROWER,

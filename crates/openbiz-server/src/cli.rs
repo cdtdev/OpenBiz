@@ -45,7 +45,8 @@ use std::path::{Path, PathBuf};
 
 use openbiz_skos::{
     DeprecationError, LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, MergeError,
-    MintError, NoConvention, PatternError, Placement, RelocationError, SearchBound, SplitError,
+    MintError, NoConvention, PatternError, Placement, ReinstatementError, RelocationError,
+    SearchBound, SplitError,
 };
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
@@ -177,6 +178,17 @@ pub enum Command {
         /// The language the note is in. Without it, the concept's own, or untagged.
         language: Option<String>,
     },
+    /// Propose taking back a retirement: the marker and any recorded successor come out.
+    Reinstate {
+        /// The IRI of the vocabulary the resource is in.
+        graph: String,
+        /// The IRI of the resource to put back.
+        resource: String,
+        /// The operator's own sentence about why, written as a `skos:changeNote`.
+        note: Option<String>,
+        /// The language the note is in. Without it, the resource's own, or untagged.
+        language: Option<String>,
+    },
     /// Show, or record, the IRI-minting pattern a vocabulary's new concepts are given.
     Policy {
         /// The IRI of the vocabulary the policy belongs to.
@@ -253,6 +265,8 @@ Usage:
                              propose dividing <concept> into one new concept per --into
   openbiz deprecate <graph> <concept> [--replaced-by <iri>] [--note <text>]
                              propose retiring <concept> in place, without deleting anything
+  openbiz reinstate <graph> <resource> [--note <text>]
+                             propose taking back the retirement of <resource>
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -370,6 +384,16 @@ made to it — every one of those is a decision only a person can make, so the r
 names them before it prints the diff. Retiring a concept that is already retired is refused; so
 is a second, different replacement, because changing one means retracting a statement and this
 adds only.
+
+Reinstate is the other direction, and the first command here whose whole purpose is to remove
+statements. It takes the owl:deprecated marker back off, and with it every dcterms:isReplacedBy
+the resource records: a current concept that is superseded is a contradiction, and leaving that
+statement behind is the half-retirement inspect reports as a defect. What it does not remove is
+the skos:changeNote explaining the retirement. The retirement happened, skos:changeNote is what
+documents a change, and a history tidied until it never appears is the opaque change log this
+product exists to replace — so the note stays, --note adds the sentence saying why it was taken
+back, and the report prints the history you are left with. An owl:deprecated it cannot read as a
+retirement is left alone and named rather than guessed at.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -607,6 +631,19 @@ impl Command {
                 let concept =
                     Self::text("deprecate", "the IRI of the concept to retire", &mut args)?;
                 return Self::deprecate_command(graph, concept, args);
+            }
+            "reinstate" => {
+                let graph = Self::text(
+                    "reinstate",
+                    "the IRI of the vocabulary to change",
+                    &mut args,
+                )?;
+                let resource = Self::text(
+                    "reinstate",
+                    "the IRI of the resource to put back",
+                    &mut args,
+                )?;
+                return Self::reinstate_command(graph, resource, args);
             }
             "merge" => (
                 "merge",
@@ -940,6 +977,48 @@ impl Command {
         })
     }
 
+    /// Read the options `openbiz reinstate` accepts, refusing anything it does not.
+    ///
+    /// There is no `--replaced-by`, and there is deliberately no `--keep-replacement` either. What
+    /// comes out is what the vocabulary says about the resource's status, all of it: a marker left
+    /// behind leaves the concept retired while the command reports that it is not, and a recorded
+    /// successor left behind is the half-retirement `openbiz inspect` reports as a defect.
+    fn reinstate_command(
+        graph: String,
+        resource: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut note: Option<String> = None;
+        let mut language: Option<String> = None;
+        let mut args = args.map(|arg| arg.into_string());
+
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            let mut value = |option: &'static str| {
+                args.next()
+                    .ok_or(ArgsError::MissingOptionValue { option })?
+                    .map_err(|_| ArgsError::NotUnicode)
+            };
+            match arg.as_str() {
+                "--note" => set(&mut note, value("--note")?, "--note")?,
+                "--language" => set(&mut language, value("--language")?, "--language")?,
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "reinstate",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        Ok(Self::Reinstate {
+            graph,
+            resource,
+            note,
+            language,
+        })
+    }
+
     /// Read the options `openbiz search` accepts, refusing anything it does not.
     ///
     /// Every option that narrows the search is refused twice over rather than taken last-wins: a
@@ -1203,6 +1282,11 @@ pub enum CommandError {
     /// Wrapped without `#[from]` for the same reason as [`CommandError::Merge`].
     #[error("that deprecation is refused: {0}")]
     Deprecate(DeprecationError),
+    /// A reinstatement could not be computed. The reason is the operator's to resolve.
+    ///
+    /// Wrapped without `#[from]` for the same reason as [`CommandError::Merge`].
+    #[error("that reinstatement is refused: {0}")]
+    Reinstate(ReinstatementError),
     /// A part of a split could not be given an IRI.
     ///
     /// `openbiz mint` *reports* a failed mint, because reporting is all it does. A split has to
@@ -1655,6 +1739,70 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: Some("--peculiar".to_owned()),
                 pattern: None,
+            })
+        );
+    }
+
+    /// A reinstatement takes the two positionals and nothing else it needs. There is no
+    /// `--replaced-by` and no way to keep half of what it removes: see `reinstate_command`.
+    #[test]
+    fn reinstate_needs_only_a_vocabulary_and_a_resource() {
+        assert_eq!(
+            parse(&["reinstate", "http://e.org/v", "http://e.org/v/wireless"]),
+            Ok(Command::Reinstate {
+                graph: "http://e.org/v".to_owned(),
+                resource: "http://e.org/v/wireless".to_owned(),
+                note: None,
+                language: None,
+            })
+        );
+
+        assert_eq!(
+            parse(&[
+                "reinstate",
+                "http://e.org/v",
+                "http://e.org/v/wireless",
+                "--note",
+                "Retired in error.",
+                "--language",
+                "en",
+            ]),
+            Ok(Command::Reinstate {
+                graph: "http://e.org/v".to_owned(),
+                resource: "http://e.org/v/wireless".to_owned(),
+                note: Some("Retired in error.".to_owned()),
+                language: Some("en".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn reinstate_needs_a_vocabulary_and_a_resource() {
+        assert_eq!(
+            parse(&["reinstate", "http://e.org/v"]),
+            Err(ArgsError::MissingArgument {
+                command: "reinstate",
+                what: "the IRI of the resource to put back",
+            })
+        );
+    }
+
+    /// `--replaced-by` belongs to `deprecate` and is refused here rather than ignored: a reader
+    /// who thinks it selects which replacement to remove would be wrong, and silence would let
+    /// them believe it.
+    #[test]
+    fn reinstate_refuses_an_option_that_belongs_to_deprecate() {
+        assert_eq!(
+            parse(&[
+                "reinstate",
+                "http://e.org/v",
+                "http://e.org/v/wireless",
+                "--replaced-by",
+                "http://e.org/v/radio",
+            ]),
+            Err(ArgsError::UnknownOption {
+                command: "reinstate",
+                option: "--replaced-by".to_owned(),
             })
         );
     }
@@ -2444,6 +2592,7 @@ mod tests {
             "paths",
             "tree",
             "search",
+            "reinstate",
             "notes",
             "mappings",
             "candidates",

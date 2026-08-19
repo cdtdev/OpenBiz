@@ -3515,3 +3515,93 @@ look competent disables the one signal that catches a stuck loop.
   which is a heuristic, and I have no measurement that would tell me where to put its threshold. The
   filter item below this one will make the question urgent rather than answering it: a flag lets a
   user opt out of a default, and does not tell me whether the default is right.
+
+## Iteration 47 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `060e310`, tree clean, and the CI run for
+  that commit `success` — read from `gh run list` rather than from iteration 46's report of it. Both
+  human inboxes empty (`promote-queue.json` is `[]`, `feedback.md` zero bytes). Nothing to drain, so
+  nothing truncated.
+- **Took the next unblocked item.** The candidate seam over HTTP is above it in Phase 2, recorded in
+  `BLOCKED.md` on authentication, and not re-attempted. The next is **un-retiring**, the third and
+  last part of the deprecation lifecycle, which iterations 45 and 46 both deferred by name. Phase 2
+  is 25 of 28, recounted from the boxes.
+- **What shipped.** `openbiz_skos::Reinstatement` and `openbiz reinstate <graph> <resource>
+  [--note <text>] [--language <tag>]`. See `adr/0042`. This is the first operation in this build
+  whose whole purpose is to **remove** statements — every write before it either added only or
+  removed as a side effect of repointing — so the candidate seam's removal half, which `adr/0004`
+  built and only `openbiz retract`'s file-driven path has used, now carries a computed change.
+- **The decision the item turned on was the change note, and the answer is that it stays.** The
+  plan item posed it as an open question. The sufficient reason is mechanical: nothing links a
+  `skos:changeNote` to the `owl:deprecated` it was written beside, so identifying "the note that
+  explained the retirement" means matching on its text or its position in a statement stream, which
+  is a guess that deletes a curator's prose when it is wrong. The better reason is that even an
+  identifiable note should stay — SKOS §7 makes `skos:changeNote` the record of a *modification*,
+  and the modification happened. A vocabulary whose history reads "retired, then reinstated" is
+  telling the truth; one tidied until the retirement never appears is the opaque change history
+  `CLAUDE.md` §1 names as a reason this product exists, and it would be worse here than in a
+  proprietary tool because the tidying would have been done automatically by a command run for a
+  different purpose. So the report **prints the notes it kept**, rather than leaving the operator
+  to find them in an export.
+- **The recorded successor comes out with the marker, and there is deliberately no flag to keep
+  it.** Removing only `owl:deprecated` would leave a resource that is current and records a
+  successor — which is `Retirement::is_unmarked`, the half-retirement iteration 46 added a report
+  for *because it is the commonest way a retirement goes wrong*. A command whose normal outcome
+  manufactured last iteration's defect would be indefensible. DCMI agrees: `dcterms:isReplacedBy`
+  says a resource supersedes this one, and a current concept that is superseded is a contradiction
+  rather than a nuance. `--replaced-by` is refused by the parser rather than ignored, with a test.
+- **Every marker, not the first.** `says_true` has always been lenient — the typed literal and a
+  plain `"true"` both read as a retirement — so a vocabulary that has been through two tools can
+  carry both, and one left behind leaves the concept retired everywhere while the command reports
+  that it is not. That is a false green inside the product, which is the same failure mode the
+  loop's own "never trust a piped exit code" rule exists for.
+- **It is defined by the statements and not by the model, which is the one place it breaks symmetry
+  with `openbiz deprecate`.** Every other operation asks `CoreModel` for the resource and refuses a
+  non-concept. This one removes statements that exist, and the case that settles it is a stray
+  `owl:deprecated` imported about an IRI this vocabulary types as nothing at all: exactly where a
+  person needs the marker gone and exactly where the model has never heard of the subject. An
+  `owl:deprecated` it *cannot* read — `"false"`, an IRI, a language-tagged literal — is left in
+  place and named, because removing it would be inventing a reading this build elsewhere declines
+  to make.
+- **The report says what it did not put right, in both directions.** A parent still retired means
+  this would be a current concept under one nobody should use; children retired by their own
+  decisions stay retired. And one thing gets better on its own and is reported: a concept retired in
+  favour of this one was a trail to another retired concept — `adr/0041`'s own defect report — and
+  now leads somewhere current.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **1059 Rust tests, up from 1028**: 14 in `openbiz-skos` including a round
+  trip asserting that what `CoreModel::deprecate` writes is exactly what this takes back out except
+  the note, 13 in the server across the command and its argument parsing, and 4 against the real
+  binary on disk in separate processes. The strongest of those compares **three** `openbiz backup`
+  outputs — before the retirement, after it, after taking it back — and asserts the vocabulary is
+  letter for letter what it was plus exactly one statement, the change note; a second runs
+  `openbiz tree`, `search` and `inspect` to prove the read half agrees, which nothing inside either
+  index could show. No new dependency. UI untouched: Phase 2 is the model and the command line,
+  which is the basis every item in this phase was closed on.
+- **Recorded:** `adr/0042`. `UNTESTED.md` — **nothing closed, two entries widened and three
+  opened.** Widened: `StatusBound::DEFAULT` now governs a second scan holding statements rather
+  than counting them, so one unmeasured number does more work; and the deprecation-provenance entry,
+  because after a reinstatement the *only* thing in an exported vocabulary saying the retirement
+  happened is a free-text note with no date, no author and nothing machine-readable. Opened: a tenth
+  unmeasured cost, the unreadable-marker path being tested only from fixtures and never through the
+  store's parser, and no way to take back a retirement in bulk. One proposal: reversing a migration
+  as one decision, with the honest option — revert an applied candidate — flagged as belonging to
+  the candidate seam rather than smuggled in as a deprecation feature. Iteration 37's LCGFT fixture
+  is unpromoted for the eleventh iteration.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T10:55Z at branch creation.
+- **Still uncertain:** whether keeping the change note is a decision or an evasion. The mechanical
+  argument — nothing links a note to the marker — is true and is what I leaned on, but it is an
+  argument about *this* build's data model rather than about what an operator wants, and I chose the
+  data model that produced it. `openbiz deprecate` could have written a statement joining its note
+  to the marker; it did not, and I have now built a second command on top of that absence and
+  called the absence a reason. The test of it is a vocabulary retired and reinstated three times:
+  six change notes, all free text, none of which a machine can tell apart from an ordinary editorial
+  note, and an auditor asking "was this term ever actually retired, and when?" has to read prose.
+  That is a worse answer than the incumbents give, and it is the same gap `UNTESTED.md` has now
+  recorded twice as "governance facts live in the candidate and not in the vocabulary". I do not
+  know whether the right fix is a dated status statement in the vocabulary — which `adr/0040`
+  refused, correctly, because `prov:invalidatedAtTime` says the entity ceased to exist — or a
+  provenance sidecar in the export, or an admission that a change note is all SKOS gives us and the
+  history belongs elsewhere. What I am sure of is that I have now made the same call twice on two
+  different items without ever deciding the underlying question, and the third time it comes up the
+  right move is probably to stop and decide it rather than to route around it again.

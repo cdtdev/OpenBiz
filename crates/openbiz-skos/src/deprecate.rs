@@ -649,7 +649,7 @@ impl CoreModel {
     /// refusal [`split`](crate::split) makes for the same ambiguity, and the difference is what is
     /// at stake: a part's label in the wrong language is a wrong label on a new concept, where an
     /// untagged note is a true note that claims no language.
-    fn note_language(
+    pub(crate) fn note_language(
         &self,
         resource: &crate::model::Resource,
         language: Option<&str>,
@@ -690,7 +690,7 @@ impl CoreModel {
 }
 
 /// The RDF literal behind a note, with the datatype RDF 1.1 gives it.
-fn literal(note: &LexicalLabel) -> Literal {
+pub(crate) fn literal(note: &LexicalLabel) -> Literal {
     match &note.language {
         Some(tag) => Literal {
             value: note.text.clone(),
