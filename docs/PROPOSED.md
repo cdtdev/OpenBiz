@@ -694,12 +694,20 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 
 ### Re-cite the ISO 25964 rule pack and methodology pack against the 2026 revision
 - **Status:** proposed.
-- **Gap:** **ISO 25964-1 is being revised and publication is expected in 2026.** The revision went
-  to comment and vote on 2024-07-30 and TC 46's work is reported complete; announced changes include
-  GUIDs, expanded non-Latin-script examples, DEI guideline references, the addition of "concept" and
-  "concept term", and substantial annexe updates. We cite the 2011 edition in `CLAUDE.md` §2, in
-  `docs/METHODOLOGY.md`'s `iso-25964-thesaurus` pack, and in the Phase 4 rule-pack item.
-  (ISO 25964-2:2013 was confirmed in 2023 and is unaffected.)
+- **Gap:** **ISO 25964-1's revision is at FDIS** — Final Draft International Standard, the approval
+  stage, the last one before publication — as `ISO/FDIS 25964-1`, Edition 2, explicitly replacing
+  ISO 25964-1:2011. Announced changes include GUIDs, expanded non-Latin-script examples, DEI
+  guideline references, the addition of "concept" and "concept term", and substantial annexe
+  updates. **The title also changes**, from "Part 1: Thesauri for information retrieval" to "Part 1:
+  Thesauri for information retrieval, **management and use**" — a scope change on the face of the
+  title, in the part whose thesaurus-management-software clauses are what a tool like ours is
+  measured against. We cite the 2011 edition in `CLAUDE.md` §2, in `docs/METHODOLOGY.md`'s
+  `iso-25964-thesaurus` pack, and in the Phase 4 rule-pack item.
+  **Updated at iteration 50** (2026-08-19), which sharpened "expected in 2026" to "at FDIS" and
+  **corrected one thing this proposal previously said**: ISO 25964-**2** is no longer static —
+  it was confirmed in 2023, but revision work on it has now recently started. Part 2 is the
+  vocabulary-*mapping* standard our mapping features implement against, so it is worth watching,
+  though "recently started" is early enough that nothing is actionable there yet.
 - **Why load-bearing:** `CLAUDE.md` §7's review rule says in as many words that **a pack which
   misrepresents its source methodology is worse than no pack**, and a rule pack sold as ISO 25964
   conformance while checking a superseded edition is that failure exactly — in front of the buyer
@@ -768,24 +776,58 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   Nothing depends on it today.
 - **Suggested phase:** Phase 5.
 
-### Record the catalog vendors as competitors, not only as discovery connectors
-- **Status:** proposed.
-- **Gap:** `docs/COMPETITIVE.md` covers PoolParty, metaphactory, TopBraid EDG, Protégé and VocBench
-  — the semantic-web-native tools. It says nothing about Collibra, Alation, Microsoft Purview,
-  data.world, and their business-glossary modules. `adr/0003` names them, but only as **discovery
-  connectors** — sources to read from. They are also where a data-governance buyer's budget usually
-  already sits, and "we already have a glossary in Collibra" is the objection our positioning most
-  has to answer.
-- **Why load-bearing:** it changes what the product has to prove. Against PoolParty we argue
-  deployment weight and price; against an incumbent catalog we argue that a glossary of flat terms
-  with no `broader`, no scheme, no SKOS export and no integrity conditions is not a vocabulary, and
-  that theirs and ours should be **connected** rather than one replacing the other — which is the
-  `adr/0003` posture and a genuinely stronger sales position than displacement. The research to
-  support that argument does not exist in our files, so today it is an assertion.
-- **Cost & impact:** research and writing, no code. Half an iteration. The risk of *not* doing it is
-  that a Phase 12 connector gets built on guesses about what those products actually expose.
-- **Suggested phase:** not a build phase — a research task for a future product-owner pass, listed
-  here so the next one does not have to rediscover the gap.
+### Index the product-owner pass to the calendar, not to the iteration counter
+- **Status:** proposed. Written at iteration 50, about the rule that produced iteration 50.
+- **Gap:** `CLAUDE.md` §7 and the iteration driver schedule the product-owner pass **every 25th
+  iteration**. Iteration 25's pass ran on 2026-08-18 and iteration 50's ran on **2026-08-19** — the
+  two scheduled market-research passes of this project's life are **one calendar day apart**. The
+  things the rule asks us to review (ISO revisions, vendor roadmaps, crate maturity, methodology
+  revisions) move on a scale of months. The counter and the subject matter are on different clocks
+  by roughly two orders of magnitude.
+- **Why load-bearing:** the failure is not wasted effort, it is **manufactured news**. A pass that
+  is told to re-run market research and report findings, run against a market that has not moved,
+  is under quiet pressure to produce something — and the way that goes wrong is a secondary-source
+  claim written up as a finding. This pass hit exactly that: a search summary asserting Collibra
+  supports SKOS, which Collibra's own documentation contradicts. It was caught because the file's
+  first rule demands a vendor source, so the rule worked; but the incentive it was resisting is
+  created by the schedule. There is a second, subtler cost: iteration 50's most honest section is
+  the list of things it re-checked and found unchanged, and a schedule that reliably produces
+  "unchanged" trains whoever reads these to stop reading them.
+- **Cost & impact:** a `CLAUDE.md` §7 edit and a matching edit to the iteration driver — perhaps
+  "the product-owner pass runs at the first iteration on or after 30 days since the last one, and
+  `docs/COMPETITIVE.md` records the date it last ran". Minutes of work. **It is filed rather than
+  done because it edits the charter and the driver**, which is a human's call under §1's amendment
+  rule, and because a loop rewriting its own oversight schedule is precisely the change that should
+  not be self-authorised — even, and especially, when its argument for doing so is a good one.
+  Note the interaction: the every-10th blind-spot pass has the opposite property and should probably
+  stay iteration-indexed, since what it examines is *our* code, which does move at iteration speed.
+- **Suggested phase:** not a build phase — a charter and driver amendment.
+
+### Verify what the catalog vendors actually expose, before a connector is designed against a guess
+- **Status:** proposed. **Narrowed at iteration 50**, which did the positioning half of the original
+  proposal as part of its product-owner duty — see `docs/COMPETITIVE.md` §"Closing the recorded gap:
+  the catalog and glossary vendors". What follows is the half that pass could *not* close.
+- **Gap:** the competitive question ("what do we argue against an incumbent catalog") is answered.
+  The **connector** question is not, and it now has a specific hazard attached. Two claims about
+  these products are live in our files and only one is sourced. **Sourced:** Collibra's own current
+  Business Glossary documentation names four asset types over Domains and Communities and
+  **mentions no W3C standard at all** — so a connector expecting SKOS out of Collibra would be built
+  on a listicle's assertion that Collibra's own documentation contradicts. **Unsourced:** that
+  data.world's catalog graph is DCAT + Dublin Core + SKOS + PROV, which is our own standards surface
+  and would make it the most important entry in the list — the primary article body was not
+  retrievable on 2026-08-19 and the claim rests on a search summary.
+- **Why load-bearing:** `adr/0003`'s whole posture is that these systems are **discovery sources we
+  read from**, and `CLAUDE.md` §3 names the exact failure — a silently broken connector reports
+  "nothing found", which reads as "nothing exists", turning the anti-silo feature into a silo
+  generator. A connector designed against an assumed SKOS export fails that way *on day one*, and it
+  fails quietly. The cheapest possible moment to catch it is before anyone writes the trait impl.
+- **Cost & impact:** reading, no code. An hour or two, mostly on vendor API documentation:
+  for each of Collibra, Alation, Purview and data.world, answer one question — **is there a
+  standards-native export (SKOS/RDF), a proprietary API, or neither?** — and write the answer with a
+  vendor-sourced citation. The data.world verification alone is worth doing first, because if its
+  model really is DCAT/SKOS/PROV then it is a competitor entry, not just a connector target, and
+  that reordering is cheaper to learn now than in Phase 12.
+- **Suggested phase:** Phase 12, or any product-owner pass willing to spend an hour on it.
 
 ### Adopt a fetch-on-demand real-thesaurus fixture, and stop calling the shape questions unanswerable
 

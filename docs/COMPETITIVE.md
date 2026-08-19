@@ -23,6 +23,8 @@ history and are annotated in place rather than edited.
 |---|---|---|---|
 | "There is no OWL 2 **DL** reasoner in Rust" (absolute existence claim) | 2026-08-18, iteration 25 | No Rust OWL 2 DL reasoner is *mature enough for us to depend on*. `rustdl` (Apache-2.0, MaastrichtU-IDS) exists and is active. **The practical conclusion is unchanged: EL + RL remains our target.** | 2026-08-19, iteration 27 — `README.md` §Standards, `CLAUDE.md` §3 candidate list, `crates/openbiz-owl/src/lib.rs` module docs and `Profile::Dl`. This file's own §"Rust ecosystem assessment" conclusion annotated in place. |
 | "`horned-owl` is our OWL 2 model/IO candidate" | 2026-08-18, iteration 25 | `horned-owl` is **LGPL-3.0**, forbidden in the core by `CLAUDE.md` §5. The replacement is an open commercial decision, recorded in `BLOCKED.md`, not a spike the loop may take. | 2026-08-19, iteration 27 — `CLAUDE.md` §3 crate map, §3 candidate list, and the §5 example that used it to illustrate a *merely unlisted* licence. |
+| "ISO 25964-2:2013 was confirmed in 2023 and is **unchanged**" | 2026-08-19, iteration 50 | The 2023 confirmation is correct, but **revision work on Part 2 has now recently started** (Taxonomy Strategies, 2026-04-15). Part 2 is the vocabulary-*mapping* standard our mapping features implement against. | 2026-08-19, iteration 50 — this file's iteration-25 paragraph annotated in place; `docs/PROPOSED.md`'s ISO re-citation proposal updated. No other file asserted it. |
+| "ISO 25964-1's revision is **expected to publish in 2026**" (a forecast, repeated by us) | 2026-08-19, iteration 50 | It is at **FDIS** — `ISO/FDIS 25964-1`, Edition 2, the approval stage before publication — replacing ISO 25964-1:2011, and **the title changes** to "...for information retrieval, **management and use**". Not retired as wrong, retired as **too vague to act on**; the ISO stage code and publication date are still unverified behind a 403. | 2026-08-19, iteration 50 — `docs/UNTESTED.md`'s entry narrowed, `docs/PROPOSED.md`'s ISO proposal updated, this file annotated in place. Our citations still say "ISO 25964-1:2011", which remains **correct** and needed no change. |
 
 ---
 
@@ -229,6 +231,11 @@ serialisation is the difference between a vocabulary diff a reviewer can read an
 by blank-node and statement-order churn. Vocabulary-as-code is one of our seven wedge rows, and the
 capability is already in a dependency we ship. Proposal filed.
 
+> **Annotated 2026-08-19 (iteration 50): the paragraph below is superseded in two places — the
+> revision is at **FDIS**, which is sharper than "expected in 2026", and **ISO 25964-2's revision
+> has now started**, so "unchanged" no longer holds. See §"ISO 25964 — one finding sharpened, one
+> corrected" below. The rest of the paragraph stands.
+
 **ISO 25964-1 is being revised, with publication expected in 2026.** The revision went out for
 comment and vote on 2024-07-30; TC 46's work is reported complete. Announced changes include GUIDs,
 a list of connected standards, expanded non-Latin-script examples, DEI guideline references, the
@@ -320,3 +327,179 @@ enforce. Neither changes the ADR's decisions; both belong in the notes Phase 10 
 
 The dev shim (`adr/0002` §3) was not exercised this pass. Whether it still matches real provider
 semantics is unverified and is recorded in `docs/UNTESTED.md`, not asserted here.
+
+---
+
+# Product-owner pass — 2026-08-19 (iteration 50)
+
+Second scheduled pass, per `CLAUDE.md` §7 and the loop's every-25th-iteration rule.
+
+**Read the interval before reading the findings.** The previous pass was **2026-08-18 — one
+calendar day ago.** Twenty-five iterations of this loop cost the world about twenty-four hours, so
+almost nothing in the market *can* have moved, and a pass that reported a fresh crop of competitor
+news would be manufacturing it. This pass therefore does three things rather than re-running the
+survey: it **closes the gap iteration 25 recorded but did not fix**, it **sharpens one finding and
+corrects another** where a better source existed, and it says plainly which re-checks came back
+unchanged instead of re-narrating them.
+
+That interval is itself the most useful finding for whoever schedules these. The every-25th rule is
+indexed to iterations, and iterations are cheap; the things it asks us to review — ISO revisions,
+vendor roadmaps, crate maturity — move on a scale of months. Two passes a day apart is the rule
+firing on the wrong clock. Recorded as a proposal rather than acted on, because changing the loop's
+own cadence is not a change the loop should make for itself.
+
+## Closing the recorded gap: the catalog and glossary vendors
+
+Iteration 25 ended with *"Gap in our own file, recorded rather than fixed: we have no entry for the
+catalog vendors (Collibra, Alation, Microsoft Purview, data.world) whose business glossary modules
+are where a governance buyer's budget usually already sits."* The corresponding proposal scoped it
+as **a research task for a future product-owner pass**. This is that pass; here is the entry.
+
+### Why they belong in this file at all
+
+They are not semantic-web tools and they do not market themselves against PoolParty. They belong
+here because of where the money is: a data-governance function evaluating us usually **already owns
+one of these**, and the objection our positioning most has to answer is not "why not PoolParty" but
+*"we already have a glossary in Collibra."* An entry that only lists the tools we resemble leaves
+the loop building against the competitor we do not actually meet in the room.
+
+### Collibra
+
+The governance-orchestration incumbent, and the one whose glossary is most often already bought.
+
+**What its Business Glossary actually is, from Collibra's own current product documentation:** four
+core asset types — **Business Term**, **Acronym**, **Measure**, and **KPI** — organised through
+**Domains** (those whose domain type is `Glossary`) and **Communities**, with relations that run
+from a business term to a data attribute and from that attribute to a column.
+
+**The load-bearing observation is what the page does not contain.** That documentation page
+**mentions no W3C standard at all** — not SKOS, not RDF, not OWL, not SHACL. This matters because
+secondary comparison sites assert the opposite. A search summary consulted during this pass stated
+Collibra "may support standards such as SKOS, RDF, OWL, and SHACL"; that claim traces to aggregator
+listicles, not to Collibra, and this file's first rule is that vendor claims need a vendor source.
+**We should not repeat it, and we should not build a connector on it.**
+
+So the honest characterisation is: a proprietary asset-type model, bound to physical data assets,
+with governance workflow around it. There is no concept scheme, no `broader`/`narrower` semantics,
+no mapping relations, and no evidence of a standards-native export. That is a different artefact
+from a thesaurus — and *the difference is our argument*, provided we state it as a difference in
+purpose rather than as a deficiency, because on its own ground the model is well-matched to it.
+
+### Alation, Microsoft Purview, data.world
+
+Recorded more thinly and deliberately so, because this pass verified less about them.
+
+- **Alation** — positions on adoption and stewardship: search UI, active catalog, out-of-the-box
+  stewardship workflows. Its centre of gravity is analyst behaviour and self-service BI, not
+  vocabulary structure.
+- **Microsoft Purview** — ties glossary alignment to governed data assets and security controls.
+  The reported failure mode is fragmentation of taxonomy modelling across domains when access
+  controls are not aligned. Fastest to first value of the three (reported 2–4 weeks, against
+  Collibra's 3–6 months) — which is a **caution for us**, not a comfort: "one binary, no
+  consultants" competes with "already in the tenant", and the second is a very short install too.
+- **data.world** — the one whose model may genuinely overlap ours. A secondary source states its
+  catalog knowledge graph is built from **DCAT** (catalog), **Dublin Core** (metadata), **SKOS**
+  (glossaries and thesauri) and **PROV** (provenance and lineage) — which is, almost exactly,
+  `CLAUDE.md` §2's own standards surface. **This is flagged, not asserted.** Two attempts to
+  retrieve the primary post (Juan Sequeda, data.world Principal Scientist, 2022-02-04) returned the
+  page furniture without the article body, so the composition claim is **unverified at source** and
+  is recorded in `docs/UNTESTED.md`. If it holds, data.world is the catalog vendor least available
+  to us as a mere discovery source and most available as a competitor telling the same standards
+  story — and that is worth an hour of somebody's verified reading before Phase 12 designs a
+  connector around an assumption.
+
+### What this changes about our positioning
+
+It does not change the plan, and no item moved. It changes what the product has to prove, in one
+direction worth writing down: against PoolParty we argue deployment weight and price, but against
+an incumbent catalog we argue that **a glossary of business terms bound to columns is not a
+vocabulary** — no scheme, no hierarchy semantics, no mappings, no integrity conditions — and that
+the two should be **connected rather than one replacing the other**. That is the `adr/0003` posture
+already, and it is a stronger commercial position than displacement, because it does not ask the
+buyer to write off the system they already run.
+
+Sources: <https://productresources.collibra.com/docs/collibra/latest/Content/BusinessGlossary/to_business-glossary.htm>
+(fetched 2026-08-19), <https://promethium.ai/guides/data-governance-tools-comparison-collibra-alation-atlan-purview/>,
+<https://data.world/blog/3-ways-to-confirm-your-data-catalog-is-really-powered-by-a-knowledge-graph/>
+(body not retrievable 2026-08-19).
+
+## ISO 25964 — one finding sharpened, one corrected
+
+Iteration 25 reported that ISO 25964-1's revision was expected to publish in 2026 and could not
+verify it, because the ISO catalogue returns 403 to automated fetching. **It still does**, verified
+again this pass. But the catalogue entry is visible through search metadata, and it carries more
+than a date.
+
+**Sharpened: the revision is at FDIS, and the title has changed.** The entry is
+**`ISO/FDIS 25964-1`** — Final Draft International Standard, the approval stage, the last one before
+publication — for **Edition 2**, titled *"Information and documentation — Thesauri and
+interoperability with other vocabularies — Part 1: Thesauri for information retrieval, **management
+and use**"*, explicitly replacing ISO 25964-1:2011. The 2011 Part 1 is titled *"Thesauri for
+information retrieval"*; the added **"management and use"** is a scope change on the face of the
+title, in a standard whose §Guidelines-for-thesaurus-management-software clauses are exactly what a
+vocabulary tool gets measured against.
+
+"At FDIS" is materially more actionable than "expected in 2026": FDIS text is essentially final, and
+the remaining stages are ballot and publication. The deadline iteration 25 noted as "attached to
+somebody else's calendar" is nearer than it read.
+
+**Corrected: Part 2 is no longer static.** Iteration 25 recorded *"ISO 25964-2:2013 was reviewed and
+confirmed in 2023 and is unchanged."* The confirmation is right; the implication is now stale.
+**Revision work on Part 2 has recently started** (Taxonomy Strategies, presentation dated
+2026-04-15). Part 2 is the *mapping between vocabularies* standard — thesauri to classification
+schemes, taxonomies, subject headings, ontologies, name authority lists — which this file already
+identifies as "exactly the 'centralise and govern many vocabularies' problem our buyer has", and
+which our mapping features implement against. A revision starting there is worth watching, though
+starting is early enough that nothing is actionable yet.
+
+**Still unverified, and stated as such:** the exact ISO stage code (50.00 vs 50.20 vs 60.00) and any
+publication date. Both sit behind the 403. The FDIS designation comes from the catalogue entry's own
+title as surfaced in search metadata, not from the page. `docs/UNTESTED.md` carries the gap.
+
+No repository text changed as a result. Our citations still say ISO 25964-1:2011, which remains the
+published edition and therefore remains **correct** — the open proposal to make every citation name
+the edition explicitly is unaffected and is now better motivated, since an Edition 2 with a different
+title is precisely the situation in which a bare "ISO 25964" citation becomes ambiguous.
+
+Sources: <https://www.iso.org/standard/86713.html> (403 to automated fetch; title and scope read
+from search metadata, 2026-08-19), <https://taxonomystrategies.com/thesaurus-standards-for-taxonomies/>
+(presentation dated 2026-04-15).
+
+## Re-checked and unchanged — stated briefly, on purpose
+
+Each of these was checked this pass and found where iteration 25 left it. They are one line each
+because one line is all a one-day interval earns.
+
+- **Oxigraph** — still `0.5.9`, last published 2026-06-18, read from the crates.io API. We remain
+  locked at the version iteration 25 measured. No action.
+- **`horned-owl` / LGPL-3.0** — unchanged, and still the right call. `BLOCKED.md`'s entry stands
+  untouched; nothing in the tree depends on it and Phase 9 is still six phases out.
+- **ANSI/NISO Z39.19** — no revision found in progress; Z39.19-2005 (R2010) remains current, so the
+  `z39-19-taxonomy` pack's citation is still accurate.
+- **`adr/0002` (LLM providers)** — no re-verification attempted this pass. Iteration 25's notes on
+  the Anthropic request surface are one day old and there is no honest way to improve on them in
+  that time. The dev shim remains unexercised, which `docs/UNTESTED.md` already records.
+- **`adr/0003` (discovery sources)** — no connector is implemented, so there is still nothing that
+  can be silently broken. The AGROVOC/Skosmos finding and its proposal stand.
+- **Methodology packs** (`docs/METHODOLOGY.md`) — no cited methodology found revised beyond the
+  ISO 25964 movement recorded above.
+
+## Charter-drift audit
+
+Folded in because iteration 50 is also a blind-spot boundary. Mechanical checks, not impressions.
+
+- **No new dependency and no new required external service.** The workspace dependency list is
+  unchanged, and Oxigraph is still built `default-features = false` with only `rocksdb`, which keeps
+  the `http-client` feature family out of the tree — the thing that makes `CLAUDE.md` §1.1's
+  air-gapped commitment true by construction rather than by intent.
+- **No forbidden licence.** `cargo deny check licenses` passes, `rc=0`.
+- **`unwrap()`/`expect()` outside tests and startup** (§6): a raw grep reports 975 hits, which is
+  the wrong number — it counts inline `#[cfg(test)]` modules. Parsing test modules out leaves
+  **seven**, all in `crates/openbiz-store/src/scale.rs`, which is the scale harness. That harness
+  having no scheduled runner is already an open proposal; its `expect()`s are test-shaped code in a
+  non-test file, which is a known and recorded consequence of that, not new drift.
+- **Nothing found that requires an LLM**, and `NullProvider` remains the default.
+
+The audit found no drift. Per the loop's own rule that a blind-spot pass finding nothing must say so
+rather than report a comfortable green: **this one found nothing, and the checks above are what it
+ran** — a reader can judge whether they were the right checks, which is the point of listing them.

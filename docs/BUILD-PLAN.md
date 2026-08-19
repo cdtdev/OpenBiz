@@ -10,12 +10,12 @@ derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what 
 product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records how the
 denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **25 of 28**. Iterations 48 and 49 took no
-code item: 48 acted on product-owner feedback that these two fields had become a changelog and moved
-the capability narrative to `docs/CAPABILITIES.md`, then exited without committing; 49 verified
-those claims against the files and landed them. Of the three items left in the phase, one — the
-candidate seam over HTTP and in the interface — is **blocked on authentication** (`BLOCKED.md`); the
-next unblocked item is asking a read command for current concepts only.
+**Current position:** Phase 2 (SKOS authoring model), **25 of 28**. Iteration 50 took no code item
+either: it was the scheduled every-25th **product-owner pass**, which closed the catalog-vendor gap
+in `docs/COMPETITIVE.md` and sharpened the ISO 25964 findings. Of the three items left in the phase,
+one — the candidate seam over HTTP and in the interface — is **blocked on authentication**
+(`BLOCKED.md`); the next unblocked item is asking a read command for current concepts only, and it
+is what the next iteration should take.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
