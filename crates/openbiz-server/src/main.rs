@@ -179,6 +179,22 @@ async fn main() -> anyhow::Result<()> {
                 pattern.as_deref(),
             )
         }),
+        Command::Deprecate {
+            graph,
+            concept,
+            replaced_by,
+            note,
+            language,
+        } => one_shot(store, |store| {
+            openbiz_server::deprecate(
+                store,
+                &graph,
+                &concept,
+                replaced_by.as_deref(),
+                note.as_deref(),
+                language.as_deref(),
+            )
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

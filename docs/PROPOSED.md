@@ -1550,3 +1550,54 @@ has. `README.md` is the right home for it and a human wrote it._
 - **Suggested phase:** (c) in Phase 2, alongside the "check every writing path" item above, which it
   belongs with. (a) in Phase 4, where SHACL and the rule packs raise the same question about what a
   rule that cannot be evaluated should say.
+
+### Repoint every reference at a replacement without making the retired IRI stop existing
+- **Status:** proposed.
+- **Gap:** there are two operations and neither is the one a curator usually wants. `openbiz merge`
+  repoints every reference in the vocabulary and the duplicate stops existing. `openbiz deprecate`
+  keeps the concept and repoints nothing — `dcterms:isReplacedBy` is a signpost, so after a
+  retirement every `skos:broader`, `skos:related` and collection membership still points at the
+  retired concept (`adr/0040` decision 3). The realistic editorial act is **both**: the term is
+  obsolete, the IRI must keep resolving for everything outside this system, and everything *inside*
+  the vocabulary should now go through the replacement.
+- **Why load-bearing:** without it, the second half of a retirement is manual and unbounded — one
+  `openbiz move` per child, and nothing at all for a `skos:related` link. The report names the work
+  precisely and then leaves an operator to do it a statement at a time, which is exactly the "the
+  tool assumes you already know how to build an ontology" complaint `CLAUDE.md` makes about the
+  incumbents. It is also the third item to arrive at the same missing primitive: `openbiz split`
+  leaves narrower concepts unapportioned and points at `openbiz move`; a merge leaves other
+  vocabularies' references and points at nothing.
+- **Options:** (a) a `--repoint` flag on `openbiz deprecate`, staging one candidate that both adds
+  the retirement and rewrites the internal references — one decision, one review, and the diff is
+  large in exactly the cases where it should be. (b) A separate `openbiz supersede` that assumes the
+  retirement has already happened and reads `dcterms:isReplacedBy` to know where to point, which
+  composes better and is one more command to discover. (c) Leave it manual and improve the report,
+  which is today's behaviour. (b) keeps each command's claim about what it removes intact, which is
+  the property `adr/0040` leans on hardest; (a) is fewer steps for the operator.
+- **Cost & impact:** moderate. Most of the machinery exists — `MergeScan` already computes exactly
+  this rewrite — but the decision about *which* references should move is not obvious: a
+  `skos:historyNote` mentioning the retired concept should stay, and a `prov:wasDerivedFrom`
+  pointing at it certainly should.
+- **Suggested phase:** Phase 2, with the deprecation-lifecycle item, which asks the same question
+  from the read side.
+
+### Measure the bulk operations at scale, once, rather than recording an eighth unmeasured cost
+- **Status:** proposed.
+- **Gap:** `docs/UNTESTED.md` now holds eight entries that say the same thing about a different
+  command: correctness proven on fixtures of a handful of concepts, cost unmeasured. Move, merge,
+  split and deprecate are each four passes over the vocabulary, and three of them additionally scan
+  **every** vocabulary in the store. The generators `adr/0013` and `adr/0024` already build 100k and
+  1M-concept vocabularies, so the missing thing is not a harness — it is one task that uses it.
+- **Why load-bearing:** `CLAUDE.md` §1.5 makes lightweight a non-negotiable, and Oxigraph's own
+  documentation warns that query evaluation is not yet optimised. Four passes over a 1M-concept
+  vocabulary to retire one term is either fine or a product defect, and eight ledger entries in a
+  row have declined to find out. The `adr/0024` measurement, when it was finally taken, moved a
+  decision; these might too.
+- **Options:** (a) one benchmark task covering all four operations against the existing generated
+  vocabularies, recording wall-clock and peak memory per command and per pass, and closing all eight
+  entries or replacing them with numbers. (b) Instrument each command to report its own pass count
+  and elapsed time, which turns the question into something a customer can answer on their own data.
+  (a) first; (b) is worth doing anyway and is nearly free once `tracing` spans are in place.
+- **Cost & impact:** (a) is a day's work at most and needs no new dependency. The 1M runs are
+  `#[ignore]`d, as the existing scale tests are, so CI is unaffected.
+- **Suggested phase:** Phase 2, after the last bulk operation lands, so it measures a settled set.

@@ -44,8 +44,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use openbiz_skos::{
-    LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, MergeError, MintError,
-    NoConvention, PatternError, Placement, RelocationError, SearchBound, SplitError,
+    DeprecationError, LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, MergeError,
+    MintError, NoConvention, PatternError, Placement, RelocationError, SearchBound, SplitError,
 };
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
@@ -164,6 +164,19 @@ pub enum Command {
         /// The pattern to mint the parts' IRIs under, overriding the vocabulary's.
         pattern: Option<String>,
     },
+    /// Propose retiring a concept in place, without deleting it or anything that points at it.
+    Deprecate {
+        /// The IRI of the vocabulary the concept is in.
+        graph: String,
+        /// The IRI of the concept to retire.
+        concept: String,
+        /// The IRI of what supersedes it, if anything does.
+        replaced_by: Option<String>,
+        /// The operator's own sentence about why, written as a `skos:changeNote`.
+        note: Option<String>,
+        /// The language the note is in. Without it, the concept's own, or untagged.
+        language: Option<String>,
+    },
     /// Show, or record, the IRI-minting pattern a vocabulary's new concepts are given.
     Policy {
         /// The IRI of the vocabulary the policy belongs to.
@@ -238,6 +251,8 @@ Usage:
                              propose merging <duplicate> into <survivor>, references and all
   openbiz split <graph> <concept> --place beside|below --into <label> --into <label>
                              propose dividing <concept> into one new concept per --into
+  openbiz deprecate <graph> <concept> [--replaced-by <iri>] [--note <text>]
+                             propose retiring <concept> in place, without deleting anything
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -340,6 +355,21 @@ related links and notes belongs to — that is the editorial judgement the split
 person make. So it does not guess: the report ends with everything still hanging off the original
 and the command that apportions each kind. Retiring the original is a deprecation, which keeps the
 trail an auditor needs, and is a different change.
+
+Deprecate writes nothing either, and removes nothing at all. It retires a concept in place: the
+IRI keeps resolving, the labels stay, and every system that stored it keeps working — which is
+what a merge cannot offer, because a merge makes the IRI stop existing. SKOS has no term for
+this, so the marker is OWL 2's owl:deprecated and the replacement is dcterms:isReplacedBy, which
+is what published SKOS vocabularies do. --note records why, as a skos:changeNote. Who retired it
+and when is in the candidate rather than in the vocabulary, so a vocabulary export carries the
+fact and not its date.
+
+A replacement is a signpost and not a rewrite: nothing is repointed at it. Neither are the
+concepts below the retired one moved, its links retracted, nor the mappings other vocabularies
+made to it — every one of those is a decision only a person can make, so the report counts and
+names them before it prints the diff. Retiring a concept that is already retired is refused; so
+is a second, different replacement, because changing one means retracting a statement and this
+adds only.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -567,6 +597,16 @@ impl Command {
                 let graph = Self::text("split", "the IRI of the vocabulary to change", &mut args)?;
                 let concept = Self::text("split", "the IRI of the concept to divide", &mut args)?;
                 return Self::split_command(graph, concept, args);
+            }
+            "deprecate" => {
+                let graph = Self::text(
+                    "deprecate",
+                    "the IRI of the vocabulary to change",
+                    &mut args,
+                )?;
+                let concept =
+                    Self::text("deprecate", "the IRI of the concept to retire", &mut args)?;
+                return Self::deprecate_command(graph, concept, args);
             }
             "merge" => (
                 "merge",
@@ -856,6 +896,50 @@ impl Command {
         })
     }
 
+    /// Read the options `openbiz deprecate` accepts, refusing anything it does not.
+    ///
+    /// Every one of them is optional, which is the difference from a split's required `--place`.
+    /// Retiring a concept has one meaning; what replaces it, and why, are things the operator may
+    /// not know yet, and a term going out of use with nothing taking its place is ordinary.
+    fn deprecate_command(
+        graph: String,
+        concept: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut replaced_by: Option<String> = None;
+        let mut note: Option<String> = None;
+        let mut language: Option<String> = None;
+        let mut args = args.map(|arg| arg.into_string());
+
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            let mut value = |option: &'static str| {
+                args.next()
+                    .ok_or(ArgsError::MissingOptionValue { option })?
+                    .map_err(|_| ArgsError::NotUnicode)
+            };
+            match arg.as_str() {
+                "--replaced-by" => set(&mut replaced_by, value("--replaced-by")?, "--replaced-by")?,
+                "--note" => set(&mut note, value("--note")?, "--note")?,
+                "--language" => set(&mut language, value("--language")?, "--language")?,
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "deprecate",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        Ok(Self::Deprecate {
+            graph,
+            concept,
+            replaced_by,
+            note,
+            language,
+        })
+    }
+
     /// Read the options `openbiz search` accepts, refusing anything it does not.
     ///
     /// Every option that narrows the search is refused twice over rather than taken last-wins: a
@@ -1114,6 +1198,11 @@ pub enum CommandError {
     /// Wrapped without `#[from]` for the same reason as [`CommandError::Merge`].
     #[error("that split is refused: {0}")]
     Split(SplitError),
+    /// A deprecation could not be computed. The reason is the operator's to resolve.
+    ///
+    /// Wrapped without `#[from]` for the same reason as [`CommandError::Merge`].
+    #[error("that deprecation is refused: {0}")]
+    Deprecate(DeprecationError),
     /// A part of a split could not be given an IRI.
     ///
     /// `openbiz mint` *reports* a failed mint, because reporting is all it does. A split has to
@@ -1568,6 +1657,94 @@ mod tests {
                 pattern: None,
             })
         );
+    }
+
+    /// Every option a deprecation takes is optional, which is the difference from a split's
+    /// required `--place`: retiring a concept has one meaning, and a term going out of use with
+    /// nothing recorded as replacing it is ordinary rather than an omission.
+    #[test]
+    fn deprecate_needs_only_a_vocabulary_and_a_concept() {
+        assert_eq!(
+            parse(&["deprecate", "http://e.org/v", "http://e.org/v/wireless"]),
+            Ok(Command::Deprecate {
+                graph: "http://e.org/v".to_owned(),
+                concept: "http://e.org/v/wireless".to_owned(),
+                replaced_by: None,
+                note: None,
+                language: None,
+            })
+        );
+
+        assert_eq!(
+            parse(&[
+                "deprecate",
+                "http://e.org/v",
+                "http://e.org/v/wireless",
+                "--replaced-by",
+                "http://e.org/v/radio",
+                "--note",
+                "Superseded.",
+                "--language",
+                "en",
+            ]),
+            Ok(Command::Deprecate {
+                graph: "http://e.org/v".to_owned(),
+                concept: "http://e.org/v/wireless".to_owned(),
+                replaced_by: Some("http://e.org/v/radio".to_owned()),
+                note: Some("Superseded.".to_owned()),
+                language: Some("en".to_owned()),
+            })
+        );
+    }
+
+    /// Both positionals are required: a deprecation with only a vocabulary named would otherwise
+    /// have to guess which concept, and there is no sensible guess.
+    #[test]
+    fn deprecate_needs_a_vocabulary_and_a_concept() {
+        assert!(matches!(
+            parse(&["deprecate", "http://e.org/v"]),
+            Err(ArgsError::MissingArgument {
+                command: "deprecate",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(&["deprecate"]),
+            Err(ArgsError::MissingArgument {
+                command: "deprecate",
+                ..
+            })
+        ));
+    }
+
+    /// Two replacements on one command line is a typed-it-twice, and taking the second silently
+    /// records a decision the operator did not make.
+    #[test]
+    fn deprecate_refuses_a_repeated_option_rather_than_taking_the_last() {
+        assert!(parse(&[
+            "deprecate",
+            "http://e.org/v",
+            "http://e.org/v/wireless",
+            "--replaced-by",
+            "http://e.org/v/radio",
+            "--replaced-by",
+            "http://e.org/v/broadcasting",
+        ])
+        .is_err());
+
+        assert!(matches!(
+            parse(&[
+                "deprecate",
+                "http://e.org/v",
+                "http://e.org/v/wireless",
+                "--because",
+                "obsolete",
+            ]),
+            Err(ArgsError::UnknownOption {
+                command: "deprecate",
+                ..
+            })
+        ));
     }
 
     /// `--place` has no default, and the refusal says what the two words mean: choosing wrongly

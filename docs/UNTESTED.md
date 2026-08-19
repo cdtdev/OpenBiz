@@ -2426,3 +2426,82 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** the split run against the 100k and 1M generated vocabularies `adr/0013`
   and `adr/0024` already build, with wall-clock and peak memory recorded.
 - **Opened:** iteration 44
+
+### A retired concept reads exactly like a current one in every command that browses
+- **Kind:** partial-coverage
+- **What is proven:** `openbiz deprecate` writes `owl:deprecated`, `dcterms:isReplacedBy` and a
+  `skos:changeNote`, and the concept survives with its type, labels, notes and place, verified
+  against a real store by reading the graph off disk before and after.
+- **What is not:** that anything *reads* the marker. `openbiz tree`, `openbiz search`,
+  `openbiz ancestors`, `openbiz paths` and `openbiz inspect` have never heard of `owl:deprecated`:
+  a retired concept appears in a browse tree, in search results, and as a top concept exactly as it
+  did before. That is the single most likely thing to surprise an operator who has just run the
+  command — they have marked a term obsolete and the tool still offers it — and it is why the
+  report names what it stranded rather than implying the job is finished.
+- **Note:** this is the *deprecation lifecycle* plan item, immediately below the one that opened
+  this. It is recorded as a gap and not as a defect because `adr/0040` decided deliberately that a
+  deprecation retracts nothing at write time, and making retired concepts recede belongs in the
+  read paths.
+- **What would close it:** a status the read commands carry, and a decision per command about
+  whether the default is to show, to mark, or to hide.
+- **Opened:** iteration 45
+
+### A deprecation's date and author live in the candidate and do not survive a vocabulary export
+- **Kind:** partial-coverage
+- **What is proven:** the candidate records who proposed the retirement, who approved it, and when,
+  in `xsd:dateTime`. `openbiz backup` carries all of it.
+- **What is not:** anything at the vocabulary level. Export one vocabulary as Turtle and it says the
+  concept is deprecated and what replaces it, and nothing about when or by whom. An auditor handed
+  the exported file — which is how a vocabulary usually leaves this system — cannot date the
+  retirement. `adr/0040` chose this over inventing a date predicate (`prov:invalidatedAtTime` says
+  the entity ceased to exist, which is false of a retired concept), but choosing it does not make
+  the gap smaller.
+- **Note:** the same shape as the recorded-minting-policy entry from iteration 41. Two features now
+  keep governance facts in OpenBiz's graphs that a standards-compliant reader of the exported
+  vocabulary cannot see; that recurrence is itself the finding.
+- **What would close it:** a decision about whether provenance belongs in the vocabulary or in an
+  export sidecar, taken once for both.
+- **Opened:** iteration 45
+
+### `openbiz split` counts mapping statements where it means mapped resources, and reports one link as two
+- **Kind:** defect, in an item already checked off
+- **What is proven:** `openbiz deprecate` counts the distinct resources a concept is mapped to,
+  because a test written against all five mapping properties failed and was right to: SKOS §10.2
+  (S42) makes `skos:exactMatch` a sub-property of `skos:closeMatch`, so the model holds two links
+  for one stated `skos:exactMatch`.
+- **What is not:** the same fix in `openbiz split`, whose `Unapportioned::mappings` still sums
+  `BTreeMap::len` over the properties. A concept with one `skos:exactMatch` and nothing else is
+  reported by a split as carrying "2 mapping links into other vocabularies". Reproduced by
+  inspection of `crates/openbiz-skos/src/split.rs`, not yet by a test.
+- **What would close it:** the two-line change `deprecate` already carries, plus the failing test
+  first. It is not folded in here because fixing an already-checked item while passing through is
+  what the one-item rule refuses.
+- **Opened:** iteration 45
+
+### `StatusBound::DEFAULT` is the sixth unmeasured constant in this crate
+- **Kind:** unmeasured judgement
+- **What is proven:** the bound stops an unbounded set, and hitting it produces a refusal rather
+  than a wrong answer — a truncated scan cannot establish that a concept is *not* already retired,
+  and every refusal in `CoreModel::deprecate` rests on that absence. Tested by driving the bound to
+  one.
+- **What is not:** that 1 000 is a number about anything. The reasoning in the doc comment is
+  honest and thin: a concept superseded by a thousand others is a corrupt graph, and the constant
+  exists to stop one exhausting memory rather than to describe a real vocabulary.
+- **Note:** `WalkBound`, `PathBound`, `SearchBound`, `SlugBound`, `ReferenceBound`, and now this.
+  Six constants, one measured (`PathBound`, iteration 40). The recurrence is the finding.
+- **Opened:** iteration 45
+
+### Nothing about `openbiz deprecate` is measured on a large vocabulary
+- **Kind:** partial-coverage
+- **What is proven:** correctness on fixtures of a handful of concepts, in-process and against the
+  real binary on disk.
+- **What is not:** cost. A deprecation reads the vocabulary once for the model, once more for the
+  status scan, and twice more for `newly_broken` — four passes — and then walks every collection in
+  the model looking for one that lists the concept, which is linear in collections and in their
+  members. It also runs `elsewhere` across every vocabulary in the store, twice when the
+  replacement is external.
+- **Note:** the eighth unmeasured cost in this crate. Recorded again rather than merged into the
+  others because each command's shape differs; the *pattern* is proposed as one measurement task.
+- **What would close it:** the command run against the 100k and 1M generated vocabularies
+  `adr/0013` and `adr/0024` already build, with wall-clock and peak memory recorded.
+- **Opened:** iteration 45

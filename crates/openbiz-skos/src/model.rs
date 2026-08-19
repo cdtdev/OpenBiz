@@ -605,6 +605,13 @@ fn curie(iri: &str) -> String {
         ("skosxl", ns::SKOSXL),
         ("rdf", ns::RDF),
         ("rdfs", ns::RDFS),
+        // The three a vocabulary gains from an operation here rather than from being SKOS: PROV-O
+        // when a split records where a part came from, and OWL 2 and Dublin Core when a
+        // deprecation records that a concept is retired and what replaces it. Without them one
+        // diff prints `skos:changeNote` beside a forty-character IRI for the statement next to it.
+        ("prov", ns::PROV),
+        ("owl", ns::OWL),
+        ("dcterms", ns::DCTERMS),
     ] {
         if let Some(local) = iri.strip_prefix(namespace) {
             return format!("{prefix}:{local}");

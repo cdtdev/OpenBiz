@@ -11,6 +11,7 @@ mod accept;
 mod ancestors;
 mod cli;
 mod config;
+mod deprecate;
 mod export;
 mod graphs;
 mod inspect;
@@ -36,6 +37,7 @@ pub use cli::{
     ACTOR_VARIABLE, USAGE,
 };
 pub use config::{Config, ConfigError, Setting, Source};
+pub use deprecate::deprecate;
 pub use graphs::AppState;
 pub use inspect::inspect;
 pub use integrity::integrity;
