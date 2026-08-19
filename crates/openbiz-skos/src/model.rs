@@ -882,6 +882,22 @@ pub enum Finding {
         /// How many links had been followed when it stopped.
         links_walked: usize,
     },
+    /// §8.4's check ran out of budget with concepts left to walk, so S27 is unchecked for those.
+    ///
+    /// [`Severity::Unchecked`], and distinct from [`Finding::AncestryBoundReached`] because they
+    /// are different failures. That one says *one* concept sits under a hierarchy too deep to
+    /// walk; this one says the **check itself stopped**, and the concepts it never reached are
+    /// unchecked without anything having gone wrong with them individually. Reporting the second
+    /// as the first would name one concept and stay silent about the rest, which reads exactly
+    /// like "the others were checked and were fine".
+    DisjointnessSweepExhausted {
+        /// How many concepts with a `skos:related` the check got through.
+        checked: usize,
+        /// How many it did not reach. S27 says nothing about these either way.
+        unchecked: usize,
+        /// Links followed across every walk the check made, which is the budget it spent.
+        links_walked: usize,
+    },
 }
 
 impl Finding {
@@ -909,7 +925,9 @@ impl Finding {
             | Finding::NonPlainLiteralLabel { .. }
             | Finding::NoLiteralForm { .. }
             | Finding::NonPlainLiteralForm { .. } => Severity::IllFormed,
-            Finding::AncestryBoundReached { .. } => Severity::Unchecked,
+            Finding::AncestryBoundReached { .. } | Finding::DisjointnessSweepExhausted { .. } => {
+                Severity::Unchecked
+            }
         }
     }
 }
@@ -1069,6 +1087,17 @@ impl fmt::Display for Finding {
                 "the walk up from {concept} stopped after {reached} ancestor(s) and \
                  {links_walked} link(s) without reaching the top, so S27 was **not** checked for \
                  it\n    and {}\n    this says nothing about whether the graph violates it",
+                SkosRule::S27,
+            ),
+            Finding::DisjointnessSweepExhausted {
+                checked,
+                unchecked,
+                links_walked,
+            } => write!(
+                f,
+                "the disjointness check stopped after {checked} concept(s) and {links_walked} \
+                 link(s), leaving {unchecked} concept(s) unwalked\n    and {}\n    S27 was **not** \
+                 checked for those, and this says nothing about whether they violate it",
                 SkosRule::S27,
             ),
         }
@@ -1461,7 +1490,9 @@ impl CoreModel {
 
     /// Whether every condition this build implements was actually evaluated over the whole graph.
     ///
-    /// `false` when a bounded walk was abandoned — see [`Finding::AncestryBoundReached`]. A
+    /// `false` when a bounded walk was abandoned ([`Finding::AncestryBoundReached`]) or when the
+    /// §8.4 sweep ran out of budget before it reached every concept
+    /// ([`Finding::DisjointnessSweepExhausted`]). A
     /// report that prints [`CoreModel::is_consistent`] without this one is claiming a check it
     /// may not have finished, which is the failure `docs/UNTESTED.md` recorded against the
     /// closing sentence of `openbiz inspect` while S27 was unimplemented.
@@ -1801,26 +1832,69 @@ impl CoreModelBuilder {
     /// twice, because it is two violating pairs and not one seen twice.
     fn check_semantic_relation_disjointness(model: &mut CoreModel, bound: AncestryBound) {
         let mut found: Vec<Finding> = Vec::new();
-        for (node, resource) in model.resources() {
-            let Some(associates) = resource.relations(SemanticRelation::Related) else {
-                continue;
-            };
-            let above = model.ancestry(node, bound);
-            if !above.is_complete() {
+        {
+            // The concepts the check owes an answer for, counted before it starts, so a sweep that
+            // runs out can say how many it never reached. One pass holding a reference each.
+            let owed: Vec<&Node> = model
+                .resources()
+                .filter(|(_, resource)| resource.relations(SemanticRelation::Related).is_some())
+                .map(|(node, _)| node)
+                .collect();
+
+            // `bound.max_links` is the budget for the **whole check**, not for one walk. See the
+            // type's own documentation: a per-walk budget multiplied by one walk per concept is
+            // not a bound at all, and `docs/adr/0027` has the 30-second measurement that says so.
+            let mut remaining = bound.max_links;
+            let mut checked = 0usize;
+
+            for node in &owed {
+                let above =
+                    model.ancestry(node, AncestryBound::new(bound.max_ancestors, remaining));
+                // `ancestry` never follows more links than the bound it was handed, so this
+                // cannot go below zero. Written as a saturating subtraction rather than resting a
+                // panic in a library on that invariant holding for ever.
+                remaining = remaining.saturating_sub(above.links_walked());
+                checked += 1;
+
+                // Whatever the walk did reach is a real answer, so a clash found on the way out is
+                // reported even when the budget then runs out. It is the *absence* that an
+                // abandoned check may not be read from.
+                if let Some(associates) = model
+                    .resource(node)
+                    .and_then(|resource| resource.relations(SemanticRelation::Related))
+                {
+                    for related in associates.keys() {
+                        let Some(path) = above.path_to(related) else {
+                            continue;
+                        };
+                        found.push(Finding::RelatedAndBroaderTransitive {
+                            concept: (*node).clone(),
+                            related: related.clone(),
+                            path,
+                        });
+                    }
+                }
+
+                if above.is_complete() {
+                    continue;
+                }
+                if remaining == 0 {
+                    // The sweep, not this concept. A walk stops on `max_links` with exactly that
+                    // many links followed, so an empty remainder is the sweep's budget and nothing
+                    // about the concept it happened to be on.
+                    found.push(Finding::DisjointnessSweepExhausted {
+                        checked,
+                        unchecked: owed.len() - checked,
+                        links_walked: bound.max_links,
+                    });
+                    break;
+                }
+                // Budget left, so it was `max_ancestors`: this one concept sits under more
+                // hierarchy than a single walk may cover, and the rest of the sweep continues.
                 found.push(Finding::AncestryBoundReached {
-                    concept: node.clone(),
+                    concept: (*node).clone(),
                     reached: above.len(),
                     links_walked: above.links_walked(),
-                });
-            }
-            for related in associates.keys() {
-                let Some(path) = above.path_to(related) else {
-                    continue;
-                };
-                found.push(Finding::RelatedAndBroaderTransitive {
-                    concept: node.clone(),
-                    related: related.clone(),
-                    path,
                 });
             }
         }
@@ -5472,6 +5546,118 @@ mod tests {
 
         assert!(model.is_consistent(), "{:?}", model.findings());
         assert!(model.checks_are_complete());
+    }
+
+    /// **The bound on one walk is not a bound on the check.** §8.4's pass makes one walk per
+    /// concept that has a `skos:related`, so a per-walk budget of *n* permits a pass of *n* times
+    /// the number of associated concepts — and in a deep hierarchy that product is quadratic in
+    /// the vocabulary.
+    ///
+    /// This is not hypothetical. `scale.rs` measured a legal 10 001-concept chain with one
+    /// `skos:related` on each concept at **30.6 seconds**, against 62 ms for the same vocabulary
+    /// with no associative links: the pass was 490 times the whole rest of the build, and
+    /// [`AncestryBound::DEFAULT`]'s million-link ceiling never fired once, because no *single*
+    /// walk came near it. The report said the check had finished. See `docs/adr/0027`.
+    ///
+    /// So the budget is shared across the sweep, and this is the assertion that keeps it shared:
+    /// the links the whole pass follows must not exceed what one walk was allowed. A chain of 400
+    /// concepts with an associate on each would otherwise follow about 79 800.
+    #[test]
+    fn the_disjointness_sweep_shares_one_budget_across_every_walk_it_makes() {
+        const CONCEPTS: usize = 400;
+        const BUDGET: usize = 2_000;
+
+        let mut builder =
+            CoreModel::builder().with_ancestry_bound(crate::AncestryBound::new(usize::MAX, BUDGET));
+        for index in 1..CONCEPTS {
+            builder.push(s(
+                &ex(&index.to_string()),
+                &skos("broader"),
+                &ex(&(index - 1).to_string()),
+            ));
+        }
+        // An associate outside the hierarchy on every concept: nothing to find, so every walk runs
+        // to the top. That is the shape that makes the pass expensive, and it is legal SKOS.
+        for index in 0..CONCEPTS {
+            builder.push(s(
+                &ex(&index.to_string()),
+                &skos("related"),
+                &ex(&format!("associate-{index}")),
+            ));
+        }
+        let model = builder.build();
+
+        // The discriminating assertion, and the reason it is this one: the chain is 399 deep, so
+        // **no single walk comes near 2 000 links**. A per-walk budget is therefore never hit, the
+        // pass reports itself finished, and the 79 800 links it followed are invisible. Reporting
+        // the check as complete here is the false green, not the time.
+        assert!(
+            !model.checks_are_complete(),
+            "the sweep spent about {} links on a budget of {BUDGET} and reported itself finished, \
+             because no one walk hit the bound: {:?}",
+            CONCEPTS * (CONCEPTS - 1) / 2,
+            model.findings()
+        );
+
+        let walked: usize = model
+            .findings()
+            .iter()
+            .filter_map(|finding| match finding {
+                Finding::AncestryBoundReached { links_walked, .. } => Some(*links_walked),
+                Finding::DisjointnessSweepExhausted { links_walked, .. } => Some(*links_walked),
+                _ => None,
+            })
+            .sum();
+        assert!(walked > 0, "it stopped, so it spent something");
+        assert!(
+            walked <= BUDGET,
+            "the sweep followed {walked} links on a budget of {BUDGET}"
+        );
+
+        // Giving up is not a violation, and must not be reported as one.
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// An exhausted sweep must say **how many concepts it never reached**, not merely that it
+    /// stopped. One `AncestryBoundReached` for the concept it happened to be walking would report
+    /// a single abandoned walk and stay silent about the other 399, which reads as "we checked
+    /// those and they were fine" — the exact false green `Severity::Unchecked` exists to prevent.
+    #[test]
+    fn an_exhausted_sweep_names_the_concepts_it_never_checked() {
+        let mut builder =
+            CoreModel::builder().with_ancestry_bound(crate::AncestryBound::new(usize::MAX, 4));
+        for index in 1..40 {
+            builder.push(s(
+                &ex(&index.to_string()),
+                &skos("broader"),
+                &ex(&(index - 1).to_string()),
+            ));
+        }
+        for index in 0..40 {
+            builder.push(s(
+                &ex(&index.to_string()),
+                &skos("related"),
+                &ex(&format!("associate-{index}")),
+            ));
+        }
+        let model = builder.build();
+
+        let exhausted = model
+            .findings()
+            .iter()
+            .find_map(|finding| match finding {
+                Finding::DisjointnessSweepExhausted {
+                    checked, unchecked, ..
+                } => Some((*checked, *unchecked)),
+                _ => None,
+            })
+            .expect("the sweep ran out of budget and must say so");
+        let (checked, unchecked) = exhausted;
+        assert!(unchecked > 0, "it stopped, so something was left");
+        // 40 concepts plus 40 detached associates, and S23 puts the associative link at both ends,
+        // so every one of the 80 resources has a `skos:related` and is a concept the check owes an
+        // answer for.
+        assert_eq!(checked + unchecked, 80);
     }
 
     /// A walk that hit its bound is reported as **unchecked**, not as consistent. This is the

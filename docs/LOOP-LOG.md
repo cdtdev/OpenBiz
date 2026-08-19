@@ -2217,3 +2217,74 @@ look competent disables the one signal that catches a stuck loop.
   table should probably stop carrying the disclaimer and start linking to the pack — and if that
   turns out to be the right shape, then today's version is a placeholder rather than the answer,
   and this entry is the record that it was known to be one.
+
+## Iteration 30 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `bcdb865`.** Iteration 30, so a **blind-spot
+  pass**: no plan item. The target was chosen for me — iteration 28 closed with "what would settle
+  it is a second pass over `ancestry.rs` by an iteration with no memory of having read it … it
+  should treat this file as inherited-and-unaudited rather than as landed-and-green." So that is
+  what this did, and the pass found something.
+- **The bound protecting §8.4 bounded nothing.** `ancestry.rs`'s module documentation states the
+  problem exactly — "asking §8.4's question of every concept in a million-link vocabulary is a
+  million traversals of the whole hierarchy, and the honest failure mode of an unbounded walk is a
+  server that stops answering rather than one that says it does not know" — and then bounds the
+  wrong thing. `AncestryBound::max_links` was **per walk**, and the disjointness check makes one
+  walk per concept that has a `skos:related`. A per-walk budget times one walk per concept is not a
+  bound. The prose and the code disagreed, and the prose was right.
+- **It is not theoretical and it needs no hostile input.** Measured in release: a legal
+  10 001-concept chain with one `skos:related` on each concept builds in **30.63 s**, against
+  **62 ms** for the identical vocabulary with the associative links removed — the pass is 490× the
+  whole rest of the model build. `AncestryBound::DEFAULT`'s million-link ceiling never fired once,
+  because no *single* walk came within two orders of magnitude of it, so the report said the check
+  had **finished**. Quadratic, so 100k is tens of minutes and 1M is days. The fixture is 20 001
+  triples with no labels in it.
+- **Why nothing caught it, which is the transferable part.** `scale.rs` measures four hierarchy
+  shapes at three sizes and **has never stated a single `skos:related`**. It was measuring the data
+  structure the pass reads and never the pass. A harness can be thorough about the wrong noun and
+  look like coverage; every row it printed was true and none of them ran the code that was broken.
+- **Fixed, and the fix is honest about what it costs.** The budget is shared across the sweep:
+  **30.63 s → 530 ms**, star and tree unchanged (130 → 138 ms, 131 → 134 ms), so realistic shapes
+  pay nothing. A new `Finding::DisjointnessSweepExhausted` at `Severity::Unchecked` names how many
+  concepts were **never reached** — reusing `AncestryBoundReached` would have named one concept and
+  been silent about the thousands behind it, which reads as "those were fine". But the trade is
+  real and `adr/0027` states it rather than burying it: a 10 001-chain with a violation on every
+  concept now reports **1 413 of 9 999** where before it reported all of them, slowly. A million
+  links has stopped being a backstop and become a product-visible limit, which is two proposals and
+  not a solved problem.
+- **Four tests, each proven to fail on the old code before it was fixed.** Two in the model (the
+  sweep shares its budget; an exhausted sweep names what it skipped) and one end to end through the
+  binary — a 1 500-deep chain is 3 000 triples and owes 1 124 250 links, so `openbiz inspect` hits
+  the real default on a file an operator could plausibly import, and the report says the check was
+  abandoned. The mutation run is the reason I trust them: the first version of the budget test
+  passed vacuously against the mutant (`walked` summed to 0 because no finding was produced at
+  all), which is exactly the false green the fix is about, so the assertion order was changed to
+  put `!checks_are_complete()` first.
+- **Two `UNTESTED.md` entries closed, two opened.** Closed: the walk's cost is now measured, and
+  `AncestryBound::DEFAULT` is now hit for real in release *and* through the binary rather than only
+  by a test that lowered it — which also says what the number means, since a chain 1 000 deep is
+  checked completely and one 1 500 deep is not. Opened: the budget is now a product limit nobody
+  has sized against a real thesaurus, and a *long* violation path is still unmeasured because
+  `path_to` is breadth-first and the harness's grandparent clash carries three nodes however deep
+  the hierarchy is — so the finding-memory question is untouched and I said so rather than letting
+  the new shape imply it was covered.
+- **One doc correction found while working**, the fourth iteration in a row: `checks_are_complete`'s
+  own doc comment named only `AncestryBoundReached` as the reason it returns `false`.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **531 Rust tests, up from 527.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it.
+- **Recorded:** `adr/0027`. Two proposals, neither promoted.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T02:33Z.
+- **Still uncertain:** whether the other passes have the same defect and I only checked the one I
+  was pointed at. The bug is not really "a bound was per-walk"; it is "a per-item budget was
+  applied to a sweep over items", and `openbiz inspect` runs a dozen passes over `model.resources()`
+  of which this is the only one I read with that question in mind. I did then go and check: the
+  only other full sweeps over `model.resources` are `check_label_conditions` and `label_coverage`,
+  and both do work proportional to the resource's *own* labels rather than a traversal, so they are
+  linear and the answer for those two is no — but
+  that is the same class of reasoning that produced the sentence in `ancestry.rs` which was right
+  in prose and wrong in code, and I have no measurement for any of them, because `scale.rs` still
+  generates no labels, no notes, no collections and no mapping properties. The honest position is
+  that the harness now exercises exactly one pass more than it did this morning, and that the next
+  blind-spot pass should extend the generator along a different axis rather than re-reading this
+  one.

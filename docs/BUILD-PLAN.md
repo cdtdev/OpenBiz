@@ -86,6 +86,19 @@ a stated link costs **3.9 KiB of resident memory**, 43× the size of the fact, a
 vocabulary with no labels at all held **4.4 GiB**. That is about what is already shipped, it is
 recorded rather than fixed, and it is in `UNTESTED.md` and three proposals awaiting a human.
 
+**Iteration 30 was a blind-spot pass, so no plan item moved and the count above is unchanged.** It
+audited `ancestry.rs`, which iteration 28 had asked the next blind-spot pass to treat as
+inherited-and-unaudited, and found that **the bound protecting §8.4's disjointness check bounded
+nothing**. `AncestryBound::max_links` was per *walk*; the check makes one walk per concept with a
+`skos:related`, so its cost is concepts × depth and the ceiling was never consulted at that level.
+A legal 10 001-concept chain with one associative link per concept built in **30.63 seconds against
+62 ms** without them — 490× the whole rest of the model — and the report said the check had
+**finished**. Nothing caught it because no fixture in the repository stated a `skos:related` at
+scale: `scale.rs` had been measuring the data the pass reads and never the pass. The budget is now
+shared across the sweep (**530 ms**, abandonment reported and counted), and the trade it makes —
+a partial answer where there was a slow complete one — is in `adr/0027` and `UNTESTED.md` with two
+proposals for the real fix.
+
 **Iteration 25 was the product-owner pass, so no plan item moved and the count above is unchanged.**
 It landed one thing that changes the shape of a later phase: **`horned-owl` is LGPL-3.0**, which
 `CLAUDE.md` §5 forbids, so the first Phase 9 item is now blocked on a licence decision a human has
