@@ -146,6 +146,14 @@ async fn main() -> anyhow::Result<()> {
         Command::Policy { graph, pattern } => one_shot(store, |store| {
             openbiz_server::policy(store, &graph, pattern.as_deref())
         }),
+        Command::Move {
+            graph,
+            concept,
+            to,
+            from,
+        } => one_shot(store, |store| {
+            openbiz_server::relocate(store, &graph, &concept, &to, from.as_deref())
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

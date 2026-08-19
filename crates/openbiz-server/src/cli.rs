@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 
 use openbiz_skos::{
     LabelKind, LabelQuery, LanguageFilter, LanguageRange, MatchMode, NoConvention, PatternError,
-    SearchBound,
+    RelocationError, SearchBound,
 };
 use openbiz_store::{
     Candidate, CandidateId, CandidateIdError, CandidatePart, CandidateSource, CandidateState,
@@ -129,6 +129,17 @@ pub enum Command {
         /// The pattern to mint under, overriding the one the vocabulary suggests.
         pattern: Option<String>,
     },
+    /// Propose moving a concept, and everything below it, under a different broader concept.
+    Move {
+        /// The IRI of the vocabulary the concept is in.
+        graph: String,
+        /// The IRI of the concept to move.
+        concept: String,
+        /// The IRI of the broader concept to move it under.
+        to: String,
+        /// The broader concept being left. Required when the concept has more than one.
+        from: Option<String>,
+    },
     /// Show, or record, the IRI-minting pattern a vocabulary's new concepts are given.
     Policy {
         /// The IRI of the vocabulary the policy belongs to.
@@ -197,6 +208,8 @@ Usage:
                              report the IRI a new concept in <graph> would be given
   openbiz policy <graph> [--pattern <p>]
                              show, or record, the pattern <graph> mints new IRIs under
+  openbiz move <graph> <concept> <to> [--from <parent>]
+                             propose moving <concept> and everything below it under <to>
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
   openbiz mappings <graph> <resource>
@@ -263,6 +276,15 @@ another vocabulary, a curator here — so the same vocabulary cannot be given IR
 one, mint infers a pattern from the vocabulary's own concepts, which is a reading of them as they
 stand and therefore moves as they grow. Nothing already minted changes either way: a policy governs
 the next mint. Recording one needs a name, from the same place approving does.
+
+Move writes nothing to the vocabulary either: it computes the change and stages it as one
+candidate that both removes and adds, because one link going and another arriving is a single
+decision, and approving half of it would leave a branch hanging off nothing. The concepts below
+the one being moved are not rewritten — they are below it by their own links — so a two-statement
+diff can move forty thousand concepts, and the report says how many before it says anything else.
+It refuses a move into the concept itself or into anything below it, which SKOS calls consistent
+and which leaves a branch with no route to a root. A concept with more than one broader concept
+needs --from to say which link is being replaced.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -476,6 +498,16 @@ impl Command {
                 let graph = Self::text("policy", "the IRI of a vocabulary", &mut args)?;
                 return Self::policy_command(graph, args);
             }
+            "move" => {
+                let graph = Self::text("move", "the IRI of the vocabulary to change", &mut args)?;
+                let concept = Self::text("move", "the IRI of the concept to move", &mut args)?;
+                let to = Self::text(
+                    "move",
+                    "the IRI of the broader concept to move it under",
+                    &mut args,
+                )?;
+                return Self::move_command(graph, concept, to, args);
+            }
             "integrity" => (
                 "integrity",
                 Self::Integrity {
@@ -640,6 +672,47 @@ impl Command {
         }
 
         Ok(Self::Policy { graph, pattern })
+    }
+
+    /// `openbiz move <graph> <concept> <to> [--from <parent>]`, after the three positionals.
+    ///
+    /// `--from` is an option rather than a fourth positional because it is needed only by a
+    /// polyhierarchic concept, which is the minority case; making every operator type the parent
+    /// they are leaving would be four IRIs on a command line to express "move this under that".
+    fn move_command(
+        graph: String,
+        concept: String,
+        to: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut from: Option<String> = None;
+        let mut args = args.map(|arg| arg.into_string());
+
+        while let Some(arg) = args.next() {
+            let arg = arg.map_err(|_| ArgsError::NotUnicode)?;
+            match arg.as_str() {
+                "--from" => {
+                    let given = args
+                        .next()
+                        .ok_or(ArgsError::MissingOptionValue { option: "--from" })?
+                        .map_err(|_| ArgsError::NotUnicode)?;
+                    set(&mut from, given, "--from")?;
+                }
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "move",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+
+        Ok(Self::Move {
+            graph,
+            concept,
+            to,
+            from,
+        })
     }
 
     /// Read the options `openbiz search` accepts, refusing anything it does not.
@@ -878,6 +951,14 @@ pub enum CommandError {
         /// What would have been minted.
         iri: String,
     },
+    /// A move could not be computed. The reason is the operator's to resolve.
+    ///
+    /// Wrapped rather than sourced — a `#[from]` here makes the inner error `source()`, and the
+    /// binary's `anyhow` chain then prints the same sentence twice, once as the message and once
+    /// as its own cause. Found by running the command.
+    #[error("that move is refused: {0}")]
+    Relocation(RelocationError),
+
     /// The vocabulary says nothing in SKOS terms about the resource that was asked about.
     ///
     /// Distinct from [`CommandError::NoSuchConcept`] because the question is different: `openbiz
@@ -1311,6 +1392,77 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: Some("--peculiar".to_owned()),
                 pattern: None,
+            })
+        );
+    }
+
+    /// Three positionals, and `--from` only where a polyhierarchy makes it necessary.
+    #[test]
+    fn move_takes_three_iris_and_an_optional_parent_to_leave() {
+        assert_eq!(
+            parse(&[
+                "move",
+                "http://e.org/v",
+                "http://e.org/v/c1",
+                "http://e.org/v/c2"
+            ]),
+            Ok(Command::Move {
+                graph: "http://e.org/v".to_owned(),
+                concept: "http://e.org/v/c1".to_owned(),
+                to: "http://e.org/v/c2".to_owned(),
+                from: None,
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "move",
+                "http://e.org/v",
+                "http://e.org/v/c1",
+                "http://e.org/v/c2",
+                "--from",
+                "http://e.org/v/c3",
+            ]),
+            Ok(Command::Move {
+                graph: "http://e.org/v".to_owned(),
+                concept: "http://e.org/v/c1".to_owned(),
+                to: "http://e.org/v/c2".to_owned(),
+                from: Some("http://e.org/v/c3".to_owned()),
+            })
+        );
+    }
+
+    /// A move with two of its three IRIs is refused, rather than moving something unnamed.
+    #[test]
+    fn move_needs_all_three_of_its_positionals() {
+        assert_eq!(
+            parse(&["move", "http://e.org/v", "http://e.org/v/c1"]),
+            Err(ArgsError::MissingArgument {
+                command: "move",
+                what: "the IRI of the broader concept to move it under",
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "move",
+                "http://e.org/v",
+                "http://e.org/v/c1",
+                "http://e.org/v/c2",
+                "--from",
+            ]),
+            Err(ArgsError::MissingOptionValue { option: "--from" })
+        );
+        assert_eq!(
+            parse(&[
+                "move",
+                "http://e.org/v",
+                "http://e.org/v/c1",
+                "http://e.org/v/c2",
+                "--under",
+                "x",
+            ]),
+            Err(ArgsError::UnknownOption {
+                command: "move",
+                option: "--under".to_owned(),
             })
         );
     }
