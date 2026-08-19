@@ -2003,3 +2003,66 @@ look competent disables the one signal that catches a stuck loop.
   first caller that asks the question a million times. **2b should extend this harness to the
   traversal it builds, not merely pass §8.6**, or the next measurement will again arrive after the
   thing it should have shaped.
+
+## Iteration 27 — 2026-08-19
+- **Took the inbox, not the plan.** `feedback.md` held a product-owner correction: `README.md`
+  still printed "there is no OWL 2 **DL** reasoner in the Rust ecosystem", a claim iteration 25's
+  own research had retired. Drained the inbox to `FEEDBACK-LOG.md` and truncated it *before*
+  starting, per the standing rule. Started clean — `main` green on `c5487f2`, tree clean,
+  promote-queue `[]`. Phase 2 item 2b (S24/S27, five worked examples from §8.6) is untouched and
+  is next.
+- **Why this outranked the plan item.** It is a false claim standing in public, on a repository
+  whose whole pitch is that its gaps are visible. `CLAUDE.md` §4 says misreporting is worse than
+  lacking; there is no version of that which excludes the README.
+- **The correction.** The README now says **no Rust OWL 2 DL reasoner is mature enough for us to
+  depend on**, names `rustdl` (Apache-2.0) as the work that does exist, and keeps EL + RL and the
+  Protégé-with-HermiT gap exactly as unsoftened as before. The instruction was explicit that the
+  practical conclusion must not move, only the absolute existence claim, and it has not.
+- **The half the feedback said mattered more.** "A correction recorded in a research document is
+  not applied until every place that repeats the claim is updated." Grepped `no OWL 2 DL reasoner`,
+  `no DL reasoner`, `DL reasoner`, `HermiT`, `horned-owl` across `.md`, `.rs`, `.ts`, `.tsx`. Five
+  live places said it. The one I would have missed by only reading prose was
+  `Profile::Dl`'s doc comment — "**Not currently supported by any Rust reasoner**" — the strongest
+  phrasing anywhere in the repo, sitting in a Rust enum where nobody grepping the README would look.
+  A retired claim hides in source doc comments better than it hides in documentation.
+- **`horned-owl` in §5, which was the subtler ask.** The charter offered it as the example of a
+  dependency whose licence is *merely unlisted*; it is on the forbidden list. Rather than delete the
+  example I moved it: §5's unlisted branch now cites Oxigraph and its transitive tree, and
+  `horned-owl` appears as the **worked example of the other branch** — copyleft, therefore
+  `BLOCKED.md`, therefore a human's decision. The section now teaches both outcomes with a real
+  case instead of one outcome with a wrong case. §3's crate map no longer names it; §3's candidate
+  list strikes it through with the reason. The decision itself stays blocked and I did not touch it.
+- **What I wrote down so the mechanism survives me.** `COMPETITIVE.md` gained a second file rule —
+  retiring a claim there retires it *nowhere else*, so grep and fix in the same iteration — and a
+  **retired-claims table** naming each retired claim, what is true instead, and the files corrected.
+  Two rows. Append-only records (`LOOP-LOG`, `FEEDBACK-LOG`, dated ADRs, this file's own superseded
+  paragraphs) are annotated in place, never edited, and the rule says so explicitly.
+- **What I deliberately did not build.** A CI check enforcing that rule. It is the obviously correct
+  engineering answer and I wrote the whole design out — machine-readable ledger, live-vs-history
+  file split, exemptions listed in the ledger rather than buried in a script — into `PROPOSED.md`
+  rather than building it. The human asked the loop to *follow* the mechanism; turning a
+  one-paragraph correction into a new repo-wide CI gate is the scope creep `PROPOSED.md` exists to
+  catch, and I would have found my own reasoning for it entirely convincing, which is the tell.
+- **The uncomfortable entry.** `UNTESTED.md` records that this sweep was manual and its completeness
+  rests on the five phrasings I happened to think of. A paraphrase sharing no distinctive substring
+  would have been missed, and a grep that finds nothing is indistinguishable from a repository that
+  says nothing wrong. Today the guarantee against recurrence is the next iteration's memory — which
+  is precisely what failed to produce it the first time.
+- **Verification.** No behaviour changed; the diff is documentation and doc comments. `fmt`,
+  `clippy -D warnings`, `cargo deny check licenses` green, **478 Rust tests** unchanged from
+  iteration 26. UI untouched, so its suite was not run.
+- **The date agrees again.** `currentDate` 2026-08-19, `date -u` 2026-08-19T00:16Z.
+- **Still uncertain:** whether the *rest* of iteration 25's research has been applied, or only the
+  part a human happened to read. That pass produced eight proposals, one `BLOCKED.md` entry, three
+  `UNTESTED.md` entries and two corrections — and the corrections were the items with no owner,
+  because a proposal waits visibly in a queue and a blocker announces itself, while a correction
+  just sits in a research file looking like it has already been dealt with. This iteration fixed the
+  one correction that was reported to me. The `whelk-rs` finding is the same shape and I did not
+  check it: `COMPETITIVE.md` says it is not on crates.io and `deny.toml` refuses git dependencies,
+  `BUILD-PLAN.md`'s Phase 5 line carries that note — but `CLAUDE.md` §3 still lists `whelk-rs`
+  flatly as a candidate, and I only added the crates.io caveat there because it sat on the line I
+  was already editing for the DL claim, not because I audited it. So I have a sample of one on the
+  question "does a recorded correction reach the places that publish it", and the answer was no. I
+  do not know how many others are outstanding, and the honest way to find out is to re-read
+  iteration 25's output against the live documents once, deliberately — which is a smaller job than
+  the CI check and would tell you whether the CI check is worth building.

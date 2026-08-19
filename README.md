@@ -55,10 +55,14 @@ RDF 1.1 · SPARQL 1.1 (Query, Update, Federated, Graph Store Protocol) · SKOS �
 
 Serialisations: Turtle · N-Triples · N-Quads · TriG · RDF/XML · JSON-LD
 
-**Stated plainly:** there is no OWL 2 **DL** reasoner in the Rust ecosystem. Our reasoning target is
-EL and RL, which covers the large majority of enterprise ontologies — SNOMED CT and the Gene
-Ontology are both EL — but is a real gap against Protégé with HermiT for expressively DL
-ontologies. We would rather say so here than have you discover it during an evaluation.
+**Stated plainly:** no Rust OWL 2 **DL** reasoner is mature enough for us to depend on. Work does
+exist — `rustdl` (Apache-2.0, MaastrichtU-IDS) is actively developed — but nothing in that space is
+near the adoption, age, or stability at which we would make it load-bearing, so our reasoning target
+is **EL and RL**. That covers the large majority of enterprise ontologies — SNOMED CT and the Gene
+Ontology are both EL — but it is a real gap against Protégé with HermiT for expressively DL
+ontologies. We would rather say so here than have you discover it during an evaluation. The survey
+behind this, with versions and download counts, is in
+[`docs/COMPETITIVE.md`](docs/COMPETITIVE.md).
 
 **Also stated plainly:** SPARQL **Federated Query** (`SERVICE`) is listed above as a conformance
 target and is **deliberately not compiled in today**. The store is built with the embedded engine's
