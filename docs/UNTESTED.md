@@ -2427,24 +2427,19 @@ module's own tests and end to end against the real binary reading a store off di
   and `adr/0024` already build, with wall-clock and peak memory recorded.
 - **Opened:** iteration 44
 
-### A retired concept reads exactly like a current one in every command that browses
+### ~~A retired concept reads exactly like a current one in every command that browses~~ — CLOSED, iteration 46
 - **Kind:** partial-coverage
-- **What is proven:** `openbiz deprecate` writes `owl:deprecated`, `dcterms:isReplacedBy` and a
-  `skos:changeNote`, and the concept survives with its type, labels, notes and place, verified
-  against a real store by reading the graph off disk before and after.
-- **What is not:** that anything *reads* the marker. `openbiz tree`, `openbiz search`,
-  `openbiz ancestors`, `openbiz paths` and `openbiz inspect` have never heard of `owl:deprecated`:
-  a retired concept appears in a browse tree, in search results, and as a top concept exactly as it
-  did before. That is the single most likely thing to surprise an operator who has just run the
-  command — they have marked a term obsolete and the tool still offers it — and it is why the
-  report names what it stranded rather than implying the job is finished.
-- **Note:** this is the *deprecation lifecycle* plan item, immediately below the one that opened
-  this. It is recorded as a gap and not as a defect because `adr/0040` decided deliberately that a
-  deprecation retracts nothing at write time, and making retired concepts recede belongs in the
-  read paths.
-- **What would close it:** a status the read commands carry, and a decision per command about
-  whether the default is to show, to mark, or to hide.
-- **Opened:** iteration 45
+- **Closed by:** `openbiz_skos::Retirements`, read beside `CoreModel` in the pass
+  `inspect::read_with_retirements` already makes, and consulted by `openbiz tree`,
+  `openbiz ancestors`, `openbiz paths`, `openbiz search` and `openbiz inspect` — the five commands
+  this entry named. The decision is show and mark, never hide, per `adr/0041`, and each report also
+  states what its marks add up to rather than leaving that to the reader. Proven by five tests
+  against the real binary in separate processes: retire a term through `openbiz deprecate` and
+  `openbiz approve`, then read it back through each of the five commands.
+- **What is still not proven**, and is recorded separately below rather than left inside a closed
+  entry: `openbiz notes` and `openbiz mappings` do not carry the mark, there is no way to ask for
+  current concepts only, there is no way to un-retire, and none of this is measured at scale.
+- **Opened:** iteration 45 · **Closed:** iteration 46
 
 ### A deprecation's date and author live in the candidate and do not survive a vocabulary export
 - **Kind:** partial-coverage
@@ -2505,3 +2500,73 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** the command run against the 100k and 1M generated vocabularies
   `adr/0013` and `adr/0024` already build, with wall-clock and peak memory recorded.
 - **Opened:** iteration 45
+
+### `openbiz notes` and `openbiz mappings` do not say a resource is retired
+- **Kind:** partial-coverage
+- **What is proven:** the five commands that browse or search a vocabulary — `tree`, `ancestors`,
+  `paths`, `search`, `inspect` — all read `owl:deprecated` and mark what they print, each with a
+  test against the real binary.
+- **What is not:** the two commands that report one named resource. `openbiz notes <graph>
+  <resource>` prints a retired concept's documentation, and `openbiz mappings <graph> <resource>`
+  prints what it is joined to, with nothing to say either resource is obsolete. `openbiz mappings`
+  is the sharper of the two: it is the command that answers "what does this concept correspond to
+  elsewhere", and a mapping *to* a retired concept in another vocabulary is exactly the thing a
+  governance function needs told.
+- **Note:** not an oversight of principle — both go through `crate::inspect::read`, and the seam
+  that carries the index is `read_with_retirements` beside it. Switching them is small. It was left
+  out because `adr/0041`'s decision was taken for *browse* paths, and what a per-resource report
+  should say about a retired resource it was asked about directly is a slightly different question
+  from what a list should say about one it happens to contain.
+- **What would close it:** both commands on the shared seam, with the full account at the top —
+  they are per-resource reports, so the focus rule in `adr/0041` §4 applies rather than the list one.
+- **Opened:** iteration 46
+
+### No read command can be asked for current concepts only
+- **Kind:** partial-coverage
+- **What is proven:** every read command shows a retired concept and marks it, and a test asserts
+  that a vocabulary retiring nothing reads exactly as it did.
+- **What is not:** the other half of the need. `adr/0041` argues at length that hiding must not be
+  the *default*; it does not argue that hiding should be impossible, and a curator building a new
+  branch of a large thesaurus has a real reason to want a tree or a search with the obsolete terms
+  out of the way. Today the only way to get one is to read past the marks.
+- **Note:** it is the plan item below the one this iteration closed, so this entry exists to keep
+  the gap visible rather than to add work. The hard part is not the flag: it is what a *tree* does
+  when a retired concept has current concepts below it, where dropping the branch would lose them
+  and keeping the node contradicts the flag.
+- **What would close it:** the plan item, with the tree case decided explicitly rather than by
+  whatever falls out of a filter.
+- **Opened:** iteration 46
+
+### Nothing reads the retirement marker at scale, and `inspect`'s section walks the hierarchy again
+- **Kind:** partial-coverage
+- **What is proven:** correctness on fixtures of a handful of concepts, in-process and against the
+  real binary on disk. The index itself is cheap by construction: one `BTreeMap` insertion per
+  `owl:deprecated` or `dcterms:isReplacedBy` statement, in a pass over the store that already ran.
+- **What is not:** cost, in two places. `openbiz inspect`'s retirements section calls
+  `CoreModel::children` once per retired concept, so a vocabulary that has retired a large fraction
+  of itself — a migration is exactly that — pays a walk per retired concept on every inspect. And
+  `openbiz search` now calls `status::explain` per hit, which follows every recorded replacement.
+  Both are bounded by the model, and neither has a number against it.
+- **Note:** the ninth unmeasured cost in this crate, and the second one in a *read* path rather
+  than a write. The proposal to replace the whole run of them with measurements is in
+  `docs/PROPOSED.md` from iteration 45 and is unpromoted.
+- **What would close it:** `openbiz inspect` and `openbiz search` run against the 100k and 1M
+  generated vocabularies `adr/0013` and `adr/0024` already build, with a large fraction of the
+  concepts retired, and wall-clock recorded.
+- **Opened:** iteration 46
+
+### A retired concept is still a scheme's top concept and this build only counts it
+- **Kind:** partial-coverage
+- **What is proven:** `openbiz inspect` counts how many retired concepts are still a scheme's top
+  concept, and the count is tested end to end against the real binary.
+- **What is not:** anything a browse would do about it. A `skos:hasTopConcept` from a live scheme to
+  a retired concept means the scheme's entry point — the first thing a user of that vocabulary
+  sees — is a term nobody should use. `openbiz tree` marks it if you ask about it; nothing walks
+  *down from a scheme*, because this build has no "show me the scheme" command at all, so the case
+  is counted where it can be counted and displayed nowhere.
+- **Note:** it is the same shape as the entry from iteration 45 about `skos:topConceptOf` being
+  propagated in a direction chosen rather than read: both are the absence of a command that starts
+  at a scheme. One gap, arrived at from a third side.
+- **What would close it:** a scheme-level read path, which Phase 3's concept tree needs anyway.
+- **Opened:** iteration 46
+

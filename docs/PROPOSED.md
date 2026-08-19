@@ -1601,3 +1601,32 @@ has. `README.md` is the right home for it and a human wrote it._
 - **Cost & impact:** (a) is a day's work at most and needs no new dependency. The 1M runs are
   `#[ignore]`d, as the existing scale tests are, so CI is unaffected.
 - **Suggested phase:** Phase 2, after the last bulk operation lands, so it measures a settled set.
+
+### Tell an author when a concept they are *mapped to* has been retired elsewhere
+- **Status:** proposed.
+- **Gap:** `adr/0041` makes a retired concept visible in the vocabulary it lives in. It says nothing
+  about the direction that matters most for a federated estate: this vocabulary's
+  `skos:exactMatch` to a concept in the corporate vocabulary next door, which that vocabulary
+  retired last month. Nothing here reads it, nothing warns, and the mapping goes on looking correct.
+  `openbiz deprecate` already draws the distinction from the other side — it warns when a
+  replacement is an IRI *nothing in the store* describes — so the store-wide read exists; what does
+  not exist is anything that runs it over a vocabulary's mapping links.
+- **Why load-bearing:** `CLAUDE.md` §1.7 makes reuse outrank creation, and a mapping is the cheapest
+  form of reuse there is. A tool that encourages mapping and then never tells you a mapping has gone
+  stale is quietly making reuse more expensive than duplication, which is the failure mode the whole
+  anti-silo commitment exists to avoid. It is also the sharpest version of a complaint
+  `docs/COMPETITIVE.md` records against the incumbents: a vocabulary looks healthy right up until an
+  auditor follows a link.
+- **Options:** (a) a section in `openbiz inspect` that resolves every mapping target against the
+  other vocabularies in the store and names the retired ones — cheap, local, and bounded by what one
+  deployment holds. (b) The same check at write time, warning when a *new* mapping targets something
+  already retired, which is the version that prevents rather than reports. (c) Both, with (a) as the
+  sweep and (b) as the guard. It is deliberately **not** proposed as anything that reaches outside
+  the store: a mapping to a resource on the public web is Phase 12's discovery problem and carries a
+  data-egress question this does not.
+- **Cost & impact:** small for (a) — it is `openbiz mappings` crossed with `Retirements`, both of
+  which now exist. (b) needs a decision about whether a mapping to a retired concept is a warning or
+  a refusal; it should be a warning, because mapping to a superseded term is sometimes exactly what
+  a historical dataset needs.
+- **Suggested phase:** Phase 2 for (a) if it is judged part of the lifecycle; otherwise Phase 12,
+  where cross-vocabulary awareness lives.

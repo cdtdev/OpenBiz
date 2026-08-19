@@ -3427,3 +3427,91 @@ look competent disables the one signal that catches a stuck loop.
   whether a curator would rather have a retirement nothing displays than no retirement at all; I
   cannot get one, and I picked the reading that lands a working, honest, reversible-by-addition
   operation over the one that lands nothing.
+
+## Iteration 46 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `f11e72c`, tree clean, and the CI run for
+  that commit `success` — read from `gh run list` rather than from iteration 45's report of it. Both
+  human inboxes empty (`promote-queue.json` is `[]`, `feedback.md` zero bytes). Nothing to drain, so
+  nothing truncated.
+- **Took the next unblocked item, and split it before starting.** The candidate seam over HTTP is
+  above it in Phase 2, recorded in `BLOCKED.md` on authentication, and not re-attempted. The next is
+  the **deprecation lifecycle**, which iteration 45 had already narrowed to "the read half". Reading
+  it properly, it held three separable pieces — the read paths, an opt-in filter, and un-retiring —
+  so it is now three plan lines and this iteration did the first. Phase 2 is 24 of 28, recounted
+  from the boxes.
+- **What shipped.** `openbiz_skos::Retirements`, and the five commands that browse or search a
+  vocabulary consulting it: `openbiz tree`, `ancestors`, `paths`, `search`, `inspect`. See
+  `adr/0041`. This closes the largest of the five gaps iteration 45 opened.
+- **The decision the item turns on is show and mark, never hide — the same one in every command.**
+  Each read path admitted three options and the uniformity is deliberate: a retired concept that
+  vanishes from one command and appears in the next teaches an operator the tool is unreliable
+  rather than that the concept is. Hiding breaks the hierarchy, because a retired concept with
+  **current** children is the commonest outcome of a retirement — `openbiz deprecate` deliberately
+  does not touch them — and dropping it from a tree leaves them hanging off nothing. Hiding a search
+  hit is worse: it reports a term this vocabulary *holds* as one it has never heard of, which is
+  precisely how a duplicate gets created (`CLAUDE.md` §1.7, and `openbiz search`'s own module
+  documentation, which has said so since iteration 34).
+- **The index is built beside the model and not inside it, and that boundary is the whole design.**
+  `owl:deprecated` is not SKOS — SKOS 2009 has no status vocabulary, which is why `adr/0040` had to
+  borrow from OWL 2 and Dublin Core — and `CoreModel` reads a graph *as SKOS*. So `Retirements` is a
+  second index over the same statement stream, exactly as `DeprecationScan` already is for one named
+  concept. One seam carries both: `inspect::read_with_retirements` makes the two passes `read`
+  already made and returns the pair, so marking costs **no extra scan of the store** and a read path
+  added later cannot silently forget the marker exists.
+- **Nothing here is bounded, and that is an argument rather than an omission.** Every other
+  enumeration in this crate carries a constant and six of them are `UNTESTED.md` entries saying the
+  constant was measured against nothing. The retired resources are a strict subset of the resources
+  `CoreModel` already holds unbounded; a caller that can hold the model can hold this. A seventh
+  constant guarding something smaller than an unguarded thing would be a ritual, so there is none.
+- **A marker alone moves the work to the reader, so each command states what its marks add up to.**
+  `tree` counts the concepts below a retired one that are **not** retired and says the decision is a
+  person's; `ancestors` tells a current concept that it sits under retired ones and that the
+  hierarchy did not change; `paths` lifts the retired concepts out of the arrow chains and names
+  them once, because a breadcrumb built from one would offer a reader an obsolete term; `inspect`
+  reports the whole-vocabulary backlog. **`search` is the deliberate exception to "marked in a list,
+  explained at the focus"** — every hit gets the full account and the successor, because search is
+  where a term is chosen for reuse and `[retired]` with no successor named is a dead end.
+- **`inspect`'s section is counts and never findings, and a test asserts `findings: 0`.** Leaving
+  live children under a retired parent is `adr/0040`'s deliberate decision. A vocabulary mid-
+  retirement must not be reported as broken, or the report becomes something people stop reading.
+- **Two things the read half can see that the write half cannot**, and both are reported: a
+  replacement that is **itself** retired — a trail `openbiz deprecate` refuses to create and cannot
+  refuse to find, because the replacement may have been retired long after it was named — and a
+  resource carrying `dcterms:isReplacedBy` with **no** `owl:deprecated`, which `openbiz deprecate`
+  cannot produce at all, so it arrived by import or by hand and reads as perfectly current
+  everywhere.
+- **A test failed and was right to, again.** A fixture wrote `owl:deprecated "true"@en` and the
+  index read the concept as current. Correct: a language-tagged literal is neither the
+  `"true"^^xsd:boolean` OWL 2 §5.5 requires nor the untyped `"true"` the documented leniency admits.
+  The fixture was wrong, not the rule, and the test's tiny N-Triples reader learned the typed form so
+  it tests the rule rather than the leniency.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **1028 Rust tests, up from 985**: 12 in `openbiz-skos` for the index,
+  including a round trip asserting that what `CoreModel::deprecate` writes is exactly what this
+  reads back, 26 in the server across the five commands and the shared rendering, and 5 against the
+  real binary on disk in separate processes. No new dependency. UI untouched: Phase 2 is the model
+  and the command line, which is the basis every item in this phase was closed on.
+- **Recorded:** `adr/0041`. `UNTESTED.md` — **one entry closed, four opened.** The closed one is
+  iteration 45's "a retired concept reads exactly like a current one in every command that browses",
+  and it is closed against the five commands it named. The four opened are `openbiz notes` and
+  `openbiz mappings` still not carrying the mark, no way to ask for current concepts only, a ninth
+  unmeasured cost — and the second one in a *read* path — and a retired concept still heading a
+  scheme with nothing that walks down from a scheme to show it. One proposal: warn when a concept
+  this vocabulary is **mapped to** has been retired elsewhere in the store, which is the direction
+  `adr/0041` does not cover and the one an anti-silo product cannot afford to miss. Iteration 37's
+  LCGFT fixture is unpromoted for the tenth iteration.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T10:24Z at branch creation.
+- **Still uncertain:** whether "show and mark" survives contact with a vocabulary that has retired
+  most of itself. Every argument in `adr/0041` is drawn from the case where retirement is rare — a
+  handful of obsolete terms in a live thesaurus — and there every mark is signal. A migration
+  inverts that: import a legacy scheme, retire two thirds of it in favour of the new one, and every
+  tree, every search and every route is now dense with `[retired]`, at which point the mark stops
+  distinguishing anything and the reader starts filtering it out by eye. That is exactly when a
+  default of hiding would be right, and I have written an ADR arguing it is never right. I do not
+  know where the crossover is, and I did not look, because both the fixtures and the reasoning I
+  used are drawn from the sparse case. It is possible the honest shape is not one default but a
+  default that reads the vocabulary — mark when retirements are rare, summarise when they are not —
+  which is a heuristic, and I have no measurement that would tell me where to put its threshold. The
+  filter item below this one will make the question urgent rather than answering it: a flag lets a
+  user opt out of a default, and does not tell me whether the default is right.

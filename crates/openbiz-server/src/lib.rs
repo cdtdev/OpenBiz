@@ -28,6 +28,7 @@ mod shutdown;
 mod sparql;
 mod split;
 mod staging;
+mod status;
 mod tree;
 mod ui;
 

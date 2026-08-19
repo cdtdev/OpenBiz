@@ -34,11 +34,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use openbiz_skos::{
-    CoreModel, Descent, Node, RelationOrigin, Resource, SemanticRelation, Siblings, WalkBound,
+    CoreModel, Descent, Node, RelationOrigin, Resource, Retirements, SemanticRelation, Siblings,
+    WalkBound,
 };
 use openbiz_store::Store;
 
 use crate::cli::CommandError;
+use crate::status;
 
 /// Report what is below `concept` in the vocabulary at `graph`, what is beside it, and why.
 ///
@@ -48,7 +50,7 @@ use crate::cli::CommandError;
 /// one. A leaf and a typo produce the same empty answer and mean opposite things, and at a
 /// command line the typo is the likelier of the two.
 pub fn tree(store: &Store, graph: &str, concept: &str) -> Result<String, CommandError> {
-    let model = crate::inspect::read(store, graph)?;
+    let (model, retirements) = crate::inspect::read_with_retirements(store, graph)?;
 
     let node = Node::iri(concept);
     if model.resource(&node).is_none() {
@@ -60,7 +62,7 @@ pub fn tree(store: &Store, graph: &str, concept: &str) -> Result<String, Command
 
     let below = model.descent(&node, WalkBound::DEFAULT);
     let beside = model.siblings(&node, WalkBound::DEFAULT);
-    Ok(report(graph, &node, &model, &below, &beside))
+    Ok(report(graph, &node, &model, &retirements, &below, &beside))
 }
 
 /// The report itself, kept apart from the store so it can be tested against a model in hand.
@@ -68,22 +70,71 @@ fn report(
     graph: &str,
     concept: &Node,
     model: &CoreModel,
+    retirements: &Retirements,
     below: &Descent,
     beside: &Siblings,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{concept}{}\n", named_in(model, concept)));
+    out.push_str(&format!(
+        "{concept}{}{}\n",
+        named_in(model, concept),
+        status::mark(retirements, concept)
+    ));
     out.push_str(&format!("in {graph}\n"));
+    status::explain(&mut out, "", retirements, model, concept);
+    retirement_below(&mut out, retirements, concept, below);
 
-    children_section(&mut out, model, concept, below);
-    siblings_section(&mut out, model, beside);
-    descent_section(&mut out, model, concept, below);
+    children_section(&mut out, model, retirements, concept, below);
+    siblings_section(&mut out, model, retirements, beside);
+    descent_section(&mut out, model, retirements, concept, below);
 
     out
 }
 
+/// What a retirement left standing underneath it, said before the tree rather than after.
+///
+/// `openbiz deprecate` retires a concept and deliberately does not touch what is below it — the
+/// children may want re-parenting under the replacement, or retiring too, and nothing in the graph
+/// says which (`docs/adr/0040`). That decision leaves the vocabulary in a state a tree view is the
+/// first place anyone would notice and the last place anyone would look: current concepts hanging
+/// under an obsolete parent. So it is counted here, at the top, and not left for the reader to
+/// work out by scanning a subtree for the absence of a marker.
+///
+/// The count is of concepts **not** retired, because a retired branch retired all the way down is
+/// a finished job and saying nothing about it is right.
+fn retirement_below(out: &mut String, retirements: &Retirements, concept: &Node, below: &Descent) {
+    if !retirements.is_retired(concept) || below.is_empty() {
+        return;
+    }
+
+    let current = below
+        .steps()
+        .filter(|(node, _)| !retirements.is_retired(node))
+        .count();
+    if current == 0 {
+        out.push_str(&format!(
+            "every one of the {} concept(s) below it is retired too.\n",
+            below.len()
+        ));
+        return;
+    }
+
+    out.push_str(&format!(
+        "{current} of the {} concept(s) below it are not retired, and are now under a concept \
+         that is. Retiring a concept moves nothing: whether each of them should move under the \
+         replacement, be retired too, or stay is a decision only a person can take.\n",
+        below.len()
+    ));
+}
+
 /// What the graph states is directly below — and what is below it that this is *not*.
-fn children_section(out: &mut String, model: &CoreModel, concept: &Node, below: &Descent) {
+fn children_section(
+    out: &mut String,
+    model: &CoreModel,
+    retirements: &Retirements,
+    concept: &Node,
+    below: &Descent,
+) {
     let children: Vec<_> = model.children(concept).collect();
     if children.is_empty() {
         out.push_str(
@@ -96,7 +147,11 @@ fn children_section(out: &mut String, model: &CoreModel, concept: &Node, below: 
             children.len()
         ));
         for (child, origin) in &children {
-            out.push_str(&format!("  {child}{}\n", named_in(model, child)));
+            out.push_str(&format!(
+                "  {child}{}{}\n",
+                named_in(model, child),
+                status::mark(retirements, child)
+            ));
             // Only an entailed link explains itself; the graph speaks for the ones it states, and
             // a line of "asserted" against every child would bury the ones it did not.
             if let RelationOrigin::Entailed(rule) = origin {
@@ -125,7 +180,11 @@ fn children_section(out: &mut String, model: &CoreModel, concept: &Node, below: 
             unstated.len()
         ));
         for node in unstated {
-            out.push_str(&format!("  {node}{}\n", named_in(model, node)));
+            out.push_str(&format!(
+                "  {node}{}{}\n",
+                named_in(model, node),
+                status::mark(retirements, node)
+            ));
         }
         out.push_str(
             "  S22 makes skos:narrower a sub-property of skos:narrowerTransitive and not the \
@@ -136,7 +195,12 @@ fn children_section(out: &mut String, model: &CoreModel, concept: &Node, below: 
 }
 
 /// What sits beside it — our query, labelled as ours.
-fn siblings_section(out: &mut String, model: &CoreModel, beside: &Siblings) {
+fn siblings_section(
+    out: &mut String,
+    model: &CoreModel,
+    retirements: &Retirements,
+    beside: &Siblings,
+) {
     if beside.is_empty() {
         out.push_str(if beside.parents() == 0 {
             "\nit has no broader concept, so it has no siblings: a sibling here means a concept \
@@ -151,7 +215,11 @@ fn siblings_section(out: &mut String, model: &CoreModel, beside: &Siblings) {
             beside.len()
         ));
         for sibling in beside.siblings() {
-            out.push_str(&format!("  {sibling}{}\n", named_in(model, sibling)));
+            out.push_str(&format!(
+                "  {sibling}{}{}\n",
+                named_in(model, sibling),
+                status::mark(retirements, sibling)
+            ));
             if let Some(shared) = beside.through(sibling) {
                 for parent in shared {
                     out.push_str(&format!("    both are under {parent}\n"));
@@ -169,7 +237,13 @@ fn siblings_section(out: &mut String, model: &CoreModel, beside: &Siblings) {
 }
 
 /// Everything below, as the indented tree the walk already produced.
-fn descent_section(out: &mut String, model: &CoreModel, concept: &Node, below: &Descent) {
+fn descent_section(
+    out: &mut String,
+    model: &CoreModel,
+    retirements: &Retirements,
+    concept: &Node,
+    below: &Descent,
+) {
     if below.is_empty() {
         out.push_str(if below.is_complete() {
             "\nnothing is below it: it has no narrower concept, directly or transitively.\n"
@@ -208,15 +282,17 @@ fn descent_section(out: &mut String, model: &CoreModel, concept: &Node, below: &
             // consistent. Printed rather than skipped: a tree that silently stopped there would
             // hide the one structural fact an author most needs to see.
             out.push_str(&format!(
-                "{indent}{node}{} — the hierarchy comes back round to the concept asked about\n",
-                named_in(model, node)
+                "{indent}{node}{}{} — the hierarchy comes back round to the concept asked about\n",
+                named_in(model, node),
+                status::mark(retirements, node)
             ));
             continue;
         }
         transitive |= depth > 1;
         out.push_str(&format!(
-            "{indent}{node}{}{}\n",
+            "{indent}{node}{}{}{}\n",
             named_in(model, node),
+            status::mark(retirements, node),
             if depth > 1 { "  [S24]" } else { "" }
         ));
         push_branch(&mut stack, branches.get(node), depth + 1);
@@ -583,5 +659,111 @@ mod tests {
             tree(&store, VOCABULARY, "http://example.org/typo"),
             Err(CommandError::NoSuchConcept { .. })
         ));
+    }
+
+    /// `Mammals` retired, with `Cats` still under it — the ordinary aftermath of a retirement,
+    /// because `openbiz deprecate` deliberately moves nothing.
+    const RETIRED_MAMMALS: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix dcterms: <http://purl.org/dc/terms/> .
+        @prefix ex: <http://example.org/> .
+        ex:animals a skos:Concept ; skos:prefLabel "Animals"@en .
+        ex:mammals a skos:Concept ; skos:prefLabel "Mammals"@en ; skos:broader ex:animals ;
+            owl:deprecated true ; dcterms:isReplacedBy ex:vertebrates .
+        ex:vertebrates a skos:Concept ; skos:prefLabel "Vertebrates"@en ; skos:broader ex:animals .
+        ex:cats a skos:Concept ; skos:prefLabel "Cats"@en ; skos:broader ex:mammals .
+    "#;
+
+    /// The concept the tree is *about*, marked and explained rather than merely marked. Before
+    /// this, `openbiz deprecate` could retire a concept and `openbiz tree` would show it exactly
+    /// as it showed it the day before.
+    #[test]
+    fn a_retired_concept_asked_about_is_marked_and_explained() {
+        let (_directory, store) = store_with(RETIRED_MAMMALS);
+        let report =
+            tree(&store, VOCABULARY, "http://example.org/mammals").expect("mammals is a concept");
+
+        assert!(report.contains("[retired]"), "{report}");
+        assert!(
+            report.contains("the vocabulary marks it owl:deprecated"),
+            "{report}"
+        );
+        assert!(
+            report.contains("a deprecation removes nothing"),
+            "the reader has to be told the concept is still there: {report}"
+        );
+        assert!(
+            report.contains("<http://example.org/vertebrates>  (\"Vertebrates\"@en)"),
+            "the signpost is followed for them: {report}"
+        );
+    }
+
+    /// The count that makes the retirement's outstanding work visible from the tree, which is the
+    /// first place anyone would notice it and the last place anyone would look.
+    #[test]
+    fn a_retired_concept_says_how_many_current_concepts_are_below_it() {
+        let (_directory, store) = store_with(RETIRED_MAMMALS);
+        let report =
+            tree(&store, VOCABULARY, "http://example.org/mammals").expect("mammals is a concept");
+
+        assert!(
+            report.contains("1 of the 1 concept(s) below it are not retired"),
+            "{report}"
+        );
+        assert!(
+            report.contains("only a person can take"),
+            "the decision is named as a person's, not implied to be automatic: {report}"
+        );
+    }
+
+    /// A retired concept in a *list* carries the marker and nothing more — the tree stays a tree.
+    #[test]
+    fn a_retired_child_is_marked_in_the_list_and_not_explained_there() {
+        let (_directory, store) = store_with(RETIRED_MAMMALS);
+        let report =
+            tree(&store, VOCABULARY, "http://example.org/animals").expect("animals is a concept");
+
+        assert!(
+            report.contains("  <http://example.org/mammals>  (\"Mammals\"@en)  [retired]\n"),
+            "{report}"
+        );
+        assert!(
+            !report.contains("a deprecation removes nothing"),
+            "the explanation belongs to the concept asked about, not to every line: {report}"
+        );
+        // And the current concepts around it are not marked, which is what makes the mark mean
+        // something.
+        assert!(
+            report.contains("  <http://example.org/vertebrates>  (\"Vertebrates\"@en)\n"),
+            "{report}"
+        );
+    }
+
+    /// Nothing is hidden. The retired concept is still in the subtree, in its place, because
+    /// dropping it would leave `Cats` hanging off nothing and misreport the vocabulary's shape.
+    #[test]
+    fn a_retired_concept_is_still_in_the_subtree_below_a_current_one() {
+        let (_directory, store) = store_with(RETIRED_MAMMALS);
+        let report =
+            tree(&store, VOCABULARY, "http://example.org/animals").expect("animals is a concept");
+
+        assert!(report.contains("3 concept(s) are below it"), "{report}");
+        assert!(
+            report.contains("    <http://example.org/cats>  (\"Cats\"@en)  [S24]"),
+            "the concept under the retired one is still reached: {report}"
+        );
+    }
+
+    /// A vocabulary that retires nothing reads exactly as it did, which is what stops this feature
+    /// from being a tax on every other report.
+    #[test]
+    fn a_vocabulary_with_no_retirements_says_nothing_about_them() {
+        let (_directory, store) = store_with(ANIMALS);
+        let report =
+            tree(&store, VOCABULARY, "http://example.org/animals").expect("animals is a concept");
+
+        assert!(!report.contains("retired"), "{report}");
+        assert!(!report.contains("owl:deprecated"), "{report}");
     }
 }

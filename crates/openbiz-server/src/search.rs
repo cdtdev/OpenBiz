@@ -25,26 +25,40 @@
 
 use openbiz_skos::{
     CoreModel, LabelKind, LabelOrigin, LabelQuery, LabelSearch, MatchMode, Node, Resource,
-    SkosClass,
+    Retirements, SkosClass,
 };
 use openbiz_store::Store;
 
 use crate::cli::CommandError;
 use crate::inspect::convert;
+use crate::status;
 
 /// Report every label in the vocabulary at `graph` that `query` matches.
 ///
 /// Reads and nothing else.
 pub fn search(store: &Store, graph: &str, query: &LabelQuery) -> Result<String, CommandError> {
     let mut builder = CoreModel::builder();
-    store.for_each_statement(graph, |statement| builder.push(convert(statement)))?;
+    let mut retirements = Retirements::builder();
+    store.for_each_statement(graph, |statement| {
+        let statement = convert(statement);
+        retirements.push(statement.clone());
+        builder.push(statement);
+    })?;
     let model = builder.build();
+    let retirements = retirements.build();
 
-    Ok(report(graph, query, &model, model.search(query)))
+    let found = model.search(query);
+    Ok(report(graph, query, &model, &retirements, found))
 }
 
 /// The report itself, kept apart from the store so it can be tested against a model in hand.
-fn report(graph: &str, query: &LabelQuery, model: &CoreModel, found: LabelSearch) -> String {
+fn report(
+    graph: &str,
+    query: &LabelQuery,
+    model: &CoreModel,
+    retirements: &Retirements,
+    found: LabelSearch,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("{:?} in {graph}\n", query.text()));
     out.push_str(&format!(
@@ -99,12 +113,23 @@ fn report(graph: &str, query: &LabelQuery, model: &CoreModel, found: LabelSearch
         return out;
     }
 
+    let mut retired = 0usize;
     for hit in found.hits() {
         out.push_str(&format!(
-            "\n  {}{}\n",
+            "\n  {}{}{}\n",
             hit.resource,
-            named(model, &hit.resource)
+            named(model, &hit.resource),
+            status::mark(retirements, &hit.resource)
         ));
+        // The full account and not just the marker, which is a departure from every other read
+        // command and is the point of this one. Search is where a term is chosen for reuse: a
+        // person who has found the right concept and is not told it is obsolete will use it, and a
+        // person told only "[retired]" with no successor named will conclude the vocabulary has
+        // nothing and create the duplicate this command exists to prevent (`CLAUDE.md` §1.7).
+        status::explain(&mut out, "    ", retirements, model, &hit.resource);
+        if retirements.is_retired(&hit.resource) {
+            retired += 1;
+        }
         out.push_str(&format!("    {}  {}\n", hit.label, hit.quality));
         for (kind, origin) in &hit.kinds {
             out.push_str(&format!("    under {}", property(*kind)));
@@ -128,6 +153,15 @@ fn report(graph: &str, query: &LabelQuery, model: &CoreModel, found: LabelSearch
         if let Some(what) = not_a_concept(model, &hit.resource) {
             out.push_str(&format!("    {what}\n"));
         }
+    }
+
+    if retired > 0 {
+        out.push_str(&format!(
+            "\n{retired} of the {} concept(s) shown are retired. They are shown rather than \
+             hidden: a search that omitted them would report a term this vocabulary holds as one \
+             it has never heard of, which is how a duplicate gets created.\n",
+            found.len()
+        ));
     }
 
     if found.is_complete() {
@@ -449,5 +483,85 @@ mod tests {
             error.to_string().contains("no graph is registered"),
             "{error}"
         );
+    }
+
+    /// A retired concept with a successor, and a retired concept with none — the two states a
+    /// searcher has to be able to tell apart, because only the first gives them somewhere to go.
+    const RETIRED_BAGS: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix dcterms: <http://purl.org/dc/terms/> .
+        @prefix ex: <http://example.org/> .
+
+        ex:bag a skos:Concept ; skos:prefLabel "Carrier bag"@en ;
+            owl:deprecated true ; dcterms:isReplacedBy ex:reusable .
+        ex:reusable a skos:Concept ; skos:prefLabel "Reusable bag"@en .
+        ex:sack a skos:Concept ; skos:prefLabel "Paper bag"@en ; owl:deprecated true .
+    "#;
+
+    /// The command this matters most in, and the one place a marker alone is not enough. Someone
+    /// searching for a term is choosing one to use: told only "[retired]" with no successor named
+    /// they conclude the vocabulary has nothing, and create the duplicate §1.7 exists to prevent.
+    #[test]
+    fn a_retired_hit_carries_the_full_account_and_the_successor() {
+        let (_directory, store) = store_with(RETIRED_BAGS);
+        let report = search(&store, VOCABULARY, &query("carrier")).expect("a readable vocabulary");
+
+        assert!(report.contains("<http://example.org/bag>"), "{report}");
+        assert!(report.contains("[retired]"), "{report}");
+        assert!(
+            report.contains("use instead, by dcterms:isReplacedBy"),
+            "{report}"
+        );
+        assert!(
+            report.contains("<http://example.org/reusable>  (\"Reusable bag\"@en)"),
+            "the successor is named, not merely said to exist: {report}"
+        );
+    }
+
+    /// Nothing is hidden, and the report says why rather than leaving it as an unexplained choice.
+    #[test]
+    fn retired_hits_are_counted_and_shown_rather_than_omitted() {
+        let (_directory, store) = store_with(RETIRED_BAGS);
+        let report = search(&store, VOCABULARY, &query("bag")).expect("a readable vocabulary");
+
+        assert!(report.contains("3 label(s) matched"), "{report}");
+        assert!(
+            report.contains("2 of the 3 concept(s) shown are retired"),
+            "{report}"
+        );
+        assert!(
+            report.contains("which is how a duplicate gets created"),
+            "{report}"
+        );
+        // The current concept is still there and still unmarked.
+        assert!(
+            report.contains("<http://example.org/reusable>  (\"Reusable bag\"@en)\n"),
+            "{report}"
+        );
+    }
+
+    /// A term gone out of use with no successor is an ordinary editorial act, and the searcher is
+    /// told that the absence is the vocabulary's answer rather than this report's omission.
+    #[test]
+    fn a_retired_hit_with_no_successor_says_so_plainly() {
+        let (_directory, store) = store_with(RETIRED_BAGS);
+        let report = search(&store, VOCABULARY, &query("paper")).expect("a readable vocabulary");
+
+        assert!(report.contains("<http://example.org/sack>"), "{report}");
+        assert!(
+            report.contains("nothing is recorded as replacing it"),
+            "{report}"
+        );
+        assert!(!report.contains("use instead"), "{report}");
+    }
+
+    /// A vocabulary that retires nothing reads exactly as it did.
+    #[test]
+    fn a_vocabulary_with_no_retirements_says_nothing_about_them() {
+        let (_directory, store) = store_with(PACKAGING);
+        let report = search(&store, VOCABULARY, &query("bag")).expect("a readable vocabulary");
+
+        assert!(!report.contains("retired"), "{report}");
     }
 }

@@ -35,10 +35,13 @@
 //! objection: this only reads. The interface's breadcrumb is Phase 3's item, and an endpoint now
 //! would be a caller with nothing behind it.
 
-use openbiz_skos::{CoreModel, Node, PathBound, Resource, RootPath, RootPaths, SkosRule};
+use openbiz_skos::{
+    CoreModel, Node, PathBound, Resource, Retirements, RootPath, RootPaths, RouteStep, SkosRule,
+};
 use openbiz_store::Store;
 
 use crate::cli::CommandError;
+use crate::status;
 
 /// Report every route from `concept` up to a summit in the vocabulary at `graph`, and why.
 ///
@@ -49,7 +52,7 @@ use crate::cli::CommandError;
 /// the graph has never heard of has no broader concept, so it would otherwise be reported as its
 /// own root — a confident answer about a typo.
 pub fn paths(store: &Store, graph: &str, concept: &str) -> Result<String, CommandError> {
-    let model = crate::inspect::read(store, graph)?;
+    let (model, retirements) = crate::inspect::read_with_retirements(store, graph)?;
 
     let node = Node::iri(concept);
     if model.resource(&node).is_none() {
@@ -60,17 +63,29 @@ pub fn paths(store: &Store, graph: &str, concept: &str) -> Result<String, Comman
     }
 
     let found = model.paths_to_root(&node, PathBound::DEFAULT);
-    Ok(report(graph, &node, &model, &found))
+    Ok(report(graph, &node, &model, &retirements, &found))
 }
 
 /// The report itself, kept apart from the store so it can be tested against a model in hand.
-fn report(graph: &str, concept: &Node, model: &CoreModel, found: &RootPaths) -> String {
+fn report(
+    graph: &str,
+    concept: &Node,
+    model: &CoreModel,
+    retirements: &Retirements,
+    found: &RootPaths,
+) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{concept}{}\n", named_in(model, concept)));
+    out.push_str(&format!(
+        "{concept}{}{}\n",
+        named_in(model, concept),
+        status::mark(retirements, concept)
+    ));
     out.push_str(&format!("in {graph}\n"));
+    status::explain(&mut out, "", retirements, model, concept);
 
     routes_section(&mut out, model, found);
-    summits_section(&mut out, model, found);
+    retired_on_routes(&mut out, model, retirements, found);
+    summits_section(&mut out, model, retirements, found);
     cycles_section(&mut out, model, found);
 
     if !found.is_complete() {
@@ -135,6 +150,50 @@ fn routes_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
     }
 }
 
+/// The retired concepts the routes pass through, listed once rather than marked in every chain.
+///
+/// A route is printed as one arrow chain on one line, and hanging `[retired]` off each concept in
+/// it would make the chain — the thing the report exists to show — unreadable. So the marker is
+/// lifted out: the routes stay legible, and the fact that a breadcrumb trail runs through obsolete
+/// concepts is stated once, in full, with each of them named.
+///
+/// It is stated at all because a route through a retired concept is still a true route. Nothing
+/// was removed when the concept was retired, so the hierarchy is exactly as it was, and a reader
+/// given the chain alone would have no way to tell the difference.
+fn retired_on_routes(
+    out: &mut String,
+    model: &CoreModel,
+    retirements: &Retirements,
+    found: &RootPaths,
+) {
+    let mut retired: Vec<&Node> = Vec::new();
+    for route in found.paths() {
+        for node in
+            std::iter::once(route.origin()).chain(route.steps().iter().map(RouteStep::concept))
+        {
+            if retirements.is_retired(node) && !retired.contains(&node) {
+                retired.push(node);
+            }
+        }
+    }
+    if retired.is_empty() {
+        return;
+    }
+
+    out.push_str(&format!(
+        "\n{} concept(s) on these routes are retired:\n",
+        retired.len()
+    ));
+    for node in retired {
+        out.push_str(&format!("  {node}{}\n", named_in(model, node)));
+    }
+    out.push_str(
+        "  the routes above still hold: retiring a concept removes nothing, so every link they \
+         follow is still stated. A breadcrumb built from one of them would show a reader a term \
+         the vocabulary no longer wants used.\n",
+    );
+}
+
 /// One route as `A → B ⇢ C`, with each concept's label and the arrow that says what licensed it.
 fn chain(model: &CoreModel, route: &RootPath) -> String {
     let mut out = format!("{}{}", route.origin(), named_in(model, route.origin()));
@@ -151,7 +210,12 @@ fn chain(model: &CoreModel, route: &RootPath) -> String {
 
 /// Where the routes stop, and where they pass a scheme's declared entry point — kept apart,
 /// because SKOS relates neither to the other.
-fn summits_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
+fn summits_section(
+    out: &mut String,
+    model: &CoreModel,
+    retirements: &Retirements,
+    found: &RootPaths,
+) {
     let summits = found.summits();
     if summits.is_empty() {
         return;
@@ -162,7 +226,11 @@ fn summits_section(out: &mut String, model: &CoreModel, found: &RootPaths) {
         summits.len()
     ));
     for summit in &summits {
-        out.push_str(&format!("  {summit}{}\n", named_in(model, summit)));
+        out.push_str(&format!(
+            "  {summit}{}{}\n",
+            named_in(model, summit),
+            status::mark(retirements, summit)
+        ));
         match model.resource(summit).map(Resource::top_concept_of) {
             Some(schemes) if !schemes.is_empty() => {
                 for scheme in schemes {
@@ -538,5 +606,75 @@ mod tests {
             report.contains("<http://example.org/above>"),
             "the route still stops where the hierarchy does: {report}"
         );
+    }
+
+    /// The same diamond with `Dogs` retired, so one of the two routes runs through an obsolete
+    /// concept and the other does not.
+    const RETIRED_ROUTE: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix ex: <http://example.org/> .
+        ex:scheme a skos:ConceptScheme ; skos:hasTopConcept ex:animals .
+        ex:poodles a skos:Concept ; skos:prefLabel "Poodles"@en ;
+            skos:broader ex:dogs, ex:pets .
+        ex:dogs a skos:Concept ; skos:prefLabel "Dogs"@en ; skos:broader ex:animals ;
+            owl:deprecated true .
+        ex:pets a skos:Concept ; skos:prefLabel "Pets"@en ; skos:broader ex:animals .
+        ex:animals a skos:Concept ; skos:prefLabel "Animals"@en .
+    "#;
+
+    /// Lifted out of the chains rather than hung off every concept in them: a route is one line
+    /// and it is the thing this report exists to show.
+    #[test]
+    fn a_retired_concept_on_a_route_is_named_once_and_not_marked_in_the_chain() {
+        let (_directory, store) = store_with(RETIRED_ROUTE);
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles")
+            .expect("poodles is in the vocabulary");
+
+        assert!(report.contains("2 route(s) up to a concept"), "{report}");
+        assert!(
+            report.contains("1 concept(s) on these routes are retired:"),
+            "{report}"
+        );
+        assert!(
+            report.contains("  <http://example.org/dogs>  (\"Dogs\"@en)\n"),
+            "{report}"
+        );
+        assert!(
+            report.contains("the routes above still hold"),
+            "a route through a retired concept is still a true route: {report}"
+        );
+        // The chain itself is untouched, so it stays readable.
+        assert!(
+            report.contains(
+                "<http://example.org/poodles>  (\"Poodles\"@en) → <http://example.org/dogs>  \
+                 (\"Dogs\"@en) → <http://example.org/animals>  (\"Animals\"@en)"
+            ),
+            "{report}"
+        );
+    }
+
+    /// A retired concept asked about directly gets the full account at the top.
+    #[test]
+    fn a_retired_concept_asked_about_is_marked_and_explained() {
+        let (_directory, store) = store_with(RETIRED_ROUTE);
+        let report = paths(&store, VOCABULARY, "http://example.org/dogs")
+            .expect("dogs is in the vocabulary");
+
+        assert!(report.contains("[retired]"), "{report}");
+        assert!(
+            report.contains("the vocabulary marks it owl:deprecated"),
+            "{report}"
+        );
+    }
+
+    /// A vocabulary that retires nothing reads exactly as it did.
+    #[test]
+    fn a_vocabulary_with_no_retirements_says_nothing_about_them() {
+        let (_directory, store) = store_with(DIAMOND);
+        let report = paths(&store, VOCABULARY, "http://example.org/poodles")
+            .expect("poodles is in the vocabulary");
+
+        assert!(!report.contains("retired"), "{report}");
     }
 }

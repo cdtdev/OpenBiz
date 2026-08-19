@@ -22,6 +22,7 @@ mod relations;
 mod relocate;
 mod search;
 mod split;
+mod status;
 mod tree;
 mod xl;
 
@@ -85,6 +86,7 @@ pub use search::{
 pub use split::{
     Part, PartRequest, Placement, Split, SplitError, Unapportioned, PROV_WAS_DERIVED_FROM,
 };
+pub use status::{Retirement, Retirements, RetirementsBuilder};
 pub use tree::{Descent, Siblings};
 pub use xl::{
     LabelOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL, SKOSXL_LABEL_RELATION,
