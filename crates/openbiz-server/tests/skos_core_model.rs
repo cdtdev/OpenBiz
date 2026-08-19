@@ -728,6 +728,142 @@ fn ancestors_walks_a_chain_off_disk_and_names_s24_for_the_step_nobody_stated() {
     assert!(top.contains("nothing is above it"), "{top}");
 }
 
+/// §7 end to end: the definition an author wrote, and the `skos:note` S17 entailed from it,
+/// printed by the real binary against a store on disk with the premise and the quoted rule.
+///
+/// The entailed note is the whole reason this command exists. A Turtle export of this vocabulary
+/// shows the `skos:definition` and never shows the `skos:note`, so an operator who read
+/// "4 note(s)" in `openbiz inspect` after writing three definitions has nowhere else to look.
+#[test]
+fn notes_prints_the_documentation_off_disk_and_names_s17_for_the_note_nobody_stated() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "documented.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:apac skos:definition \"The Asia-Pacific region.\"@en ;\n\
+             skos:scopeNote \"Excludes Central Asia.\"@en .\n",
+    );
+
+    let output = run(
+        dir.path(),
+        &["notes", REGIONS, "https://example.org/regions/apac"],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(report.contains("(\"Asia-Pacific\"@en)"), "{report}");
+    assert!(
+        report.contains("skos:definition") && report.contains("\"The Asia-Pacific region.\"@en"),
+        "{report}"
+    );
+    assert!(
+        report.contains("skos:scopeNote") && report.contains("\"Excludes Central Asia.\"@en"),
+        "{report}"
+    );
+    assert!(
+        report.contains("inferred, not stated under skos:note"),
+        "the entailed note is what an export cannot show: {report}"
+    );
+    assert!(
+        report.contains("because skos:definition \"The Asia-Pacific region.\"@en"),
+        "the premise must name the statement it came from: {report}"
+    );
+    assert!(
+        report.contains(
+            "S17: skos:changeNote, skos:definition, skos:editorialNote, skos:example, \
+             skos:historyNote and skos:scopeNote are each sub-properties of skos:note."
+        ),
+        "the report must quote the statement, not merely cite it: {report}"
+    );
+}
+
+/// A concept nobody has documented is reported as such and exits 0, and the report says the
+/// specification asks for no documentation — so an operator does not read legal SKOS as broken.
+///
+/// §7 has no "Integrity Conditions" subsection at all, unlike §5.4. Every incumbent flags a
+/// missing definition; that check is ANSI/NISO Z39.19 and ISO 25964, which are rule packs we have
+/// not built, and reporting it as a SKOS finding would be citing a statement the specification
+/// never made.
+#[test]
+fn notes_reports_an_undocumented_concept_without_calling_it_a_defect() {
+    let dir = authored();
+
+    let output = run(
+        dir.path(),
+        &["notes", REGIONS, "https://example.org/regions/emea"],
+    );
+    let report = stdout(&output);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        report.contains("no SKOS documentation property carries anything for it"),
+        "{report}"
+    );
+    assert!(
+        report.contains("SKOS states no condition requiring one"),
+        "{report}"
+    );
+}
+
+/// A resource the vocabulary says nothing about in SKOS terms must not read as an undocumented
+/// one, and must not exit 0. The two reports are opposite in meaning and a mistyped IRI is the
+/// likelier of the two at a command line.
+#[test]
+fn notes_refuses_a_resource_the_vocabulary_does_not_hold() {
+    let dir = authored();
+
+    let output = run(
+        dir.path(),
+        &["notes", REGIONS, "https://example.org/regions/atlantis"],
+    );
+
+    assert!(
+        !output.status.success(),
+        "a resource that is not there must fail: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).contains("atlantis"), "{}", stderr(&output));
+}
+
+/// `openbiz inspect` counts the documentation, including what S17 supplied, and says in the same
+/// breath that a zero is not a verdict.
+#[test]
+fn inspect_reports_documentation_coverage_and_who_would_ask_for_more() {
+    let dir = authored();
+
+    let bare = stdout(&run(dir.path(), &["inspect", REGIONS]));
+    assert!(bare.contains("documentation:"), "{bare}");
+    assert!(
+        bare.contains("skos:definition") && bare.contains("0 concept(s), 0 note(s)"),
+        "a zero is an answer and must be printed: {bare}"
+    );
+    assert!(
+        bare.contains("§7 states no integrity condition")
+            && bare.contains("Z39.19 / ISO 25964 rule pack"),
+        "the report must name who would ask for a definition, since SKOS does not: {bare}"
+    );
+
+    import_and_approve(
+        dir.path(),
+        "documented.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:apac skos:definition \"The Asia-Pacific region.\"@en .\n",
+    );
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+    assert!(
+        report.contains("skos:definition           1 concept(s), 1 note(s)"),
+        "{report}"
+    );
+    assert!(
+        report.contains("1 inferred under S17"),
+        "the note S17 supplied has to be distinguishable from one the author wrote: {report}"
+    );
+}
+
 /// A concept the vocabulary does not hold must not read as a root concept, and must not exit 0.
 #[test]
 fn ancestors_refuses_a_concept_the_vocabulary_does_not_hold() {

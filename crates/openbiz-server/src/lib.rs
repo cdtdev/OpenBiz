@@ -14,6 +14,7 @@ mod config;
 mod export;
 mod graphs;
 mod inspect;
+mod notes;
 mod shutdown;
 mod sparql;
 mod ui;
@@ -26,6 +27,7 @@ pub use cli::{
 pub use config::{Config, ConfigError, Setting, Source};
 pub use graphs::AppState;
 pub use inspect::inspect;
+pub use notes::notes;
 pub use shutdown::StopSignals;
 
 /// Build the application router.

@@ -2141,3 +2141,79 @@ look competent disables the one signal that catches a stuck loop.
   pass over `ancestry.rs` by an iteration with no memory of having read it — which is what the
   next blind-spot pass is for, and it should treat this file as inherited-and-unaudited rather
   than as landed-and-green.
+
+## Iteration 29 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `0a14012`.** Took the next unchecked Phase 2
+  item — documentation properties — and **split it in place** before building, because the item as
+  written named five properties and SKOS §7 has seven plus an extension point. Part 1 (the seven
+  and S17) is done and checked off; part 2 (a vocabulary's own `rdfs:subPropertyOf` refinements)
+  is a new unchecked item, split out because it needs a second pass over a stream the builder
+  reads once — an architectural change, not a continuation.
+- **The item's hardest decision was to build nothing.** §5.4 has a heading called "Integrity
+  Conditions" and states two; **§7 has no such subsection at all**, so this whole section raises no
+  `Finding` of any severity. That is not leniency. A concept with no `skos:definition` is
+  consistent SKOS; every incumbent flags it; the check they are running is ANSI/NISO Z39.19's or
+  ISO 25964's, which is a rule pack in `openbiz-validate` where it can be cited and switched off,
+  not a SKOS finding citing a statement nobody made. `openbiz inspect` prints the count **and** the
+  sentence naming who would ask, so a zero is not read as our verdict, and a test
+  (`section_7_states_no_integrity_condition_and_this_build_invents_none`) asserts the absence so a
+  later iteration cannot add one without deleting the reason it is wrong.
+- **S17 is materialised where S24 is walked, and the ADR states the arithmetic rather than the
+  taste.** `adr/0025` walks the transitive closure because it is unbounded and graph-controlled and
+  its derivation *is* a path. S17's lift is one step deep by the specification's own list, cannot
+  chain, adds at most one entry per stated note, and its derivation is one premise and one rule.
+  So it is a table, with no bound and no cycle guard, and `adr/0026` says why the two opposite
+  answers are the same reasoning.
+- **A note's value is a bare `Term`, deliberately.** S16 makes all seven `owl:AnnotationProperty`
+  with no domain and no range; Example 22 is a literal and Example 23 an IRI, both marked
+  consistent. §7.1's three usage patterns collapse into two term shapes and the last two are
+  **indistinguishable from the statement alone**, so we do not guess. And the object of a note is
+  typed by nothing — §7 has no range, unlike S19/S20 — so Example 23's `<MyNote>` joins no
+  vocabulary and `openbiz notes` on it is refused rather than answered with an empty report.
+- **Two production callers.** `openbiz notes <graph> <resource>` prints what a vocabulary
+  documents one resource with, and beside each entailed note the statement it came from and the
+  quoted rule — which exists for one reason: **a Turtle export shows the `skos:definition` and
+  never shows the `skos:note` it entails**, so an operator who read "4 notes" after writing three
+  definitions had nowhere to look. It takes a *resource*, not a concept, because Example 24
+  documents an `owl:Class`. `openbiz inspect` gains a coverage table — counts, not content, for
+  the reason the languages section is counts. Both proven against the binary on disk.
+- **Two stale claims found and corrected while working, which is the third data point in a row.**
+  (1) `CoreModelBuilder`'s doc comment said "a vocabulary's notes and its non-SKOS statements …
+  are counted and dropped" — made false by this item, corrected in the same commit with a note
+  saying it *was* corrected, exactly as `adr/0020` did when the labels landed. (2)
+  `the_usage_names_every_command_it_can_parse` had **drifted**: its hand-maintained list omitted
+  `inspect` and `ancestors`, so the test's own name had been untrue for two iterations. A
+  completeness test that is quietly incomplete is worse than none, because it reports coverage it
+  does not have. Both are the shape iterations 27 and 28 worried about, and neither was reported —
+  both were found by reading the thing I was about to change.
+- **Scope, honestly.** The seven properties are read; a vocabulary's own refinement of one
+  (`ex:usageNote rdfs:subPropertyOf skos:scopeNote`) reaches nothing at all, so an extended
+  thesaurus reads as less documented than it is and the report gives no hint it is looking past
+  something. That is part 2, in the plan, and in `UNTESTED.md`. And **nothing measures what a note
+  costs**: `adr/0024` has a hard number per semantic relation and there is none per note, which
+  matters more here than it looks because notes are the *longest* text a vocabulary holds and the
+  model now keeps all of them.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **527 Rust tests, up from 502.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it. The S17 lift was mutated deliberately and
+  `s17_lifts_each_specific_note_onto_skos_note_with_its_derivation` failed on it, so the new tests
+  are load-bearing rather than merely green.
+- **Recorded:** `adr/0026`. Two `UNTESTED.md` entries opened, none closed. Two `PROPOSED.md`
+  entries, neither promoted — one of them is that **SKOS §6 (`skos:notation`, S15) has no
+  build-plan item anywhere**, which I noticed because the model's own test names `skos:notation` as
+  its example of a dropped statement. A notation is the classification code the rest of an
+  enterprise joins on, and it is missing from the plan rather than from the build.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T02:12Z.
+- **Still uncertain:** whether "SKOS states no condition, so we raise no finding" survives contact
+  with a customer. It is right by the specification and I am confident in it — but the coverage
+  table now prints seven numbers a governance team will read as a scorecard, and the sentence
+  disclaiming it is one line under them. The failure mode is not that we flagged something we
+  should not have; it is that we printed a number that *reads* as a complaint while formally
+  refusing to make one, and a report that hedges in prose while implying in layout is a worse kind
+  of dishonest than one that just states its judgement. I cannot tell from here which way it lands,
+  because nobody outside this loop has read the report. The nearest thing to evidence available is
+  the Phase 4 rule pack: once "which concepts lack a definition" has a citable home, the coverage
+  table should probably stop carrying the disclaimer and start linking to the pack — and if that
+  turns out to be the right shape, then today's version is a placeholder rather than the answer,
+  and this entry is the record that it was known to be one.

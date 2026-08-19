@@ -124,6 +124,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Ancestors { graph, concept } => one_shot(store, |store| {
             openbiz_server::ancestors(store, &graph, &concept)
         }),
+        Command::Notes { graph, resource } => one_shot(store, |store| {
+            openbiz_server::notes(store, &graph, &resource)
+        }),
         Command::Candidates => one_shot(store, openbiz_server::candidates),
         Command::Show { id } => one_shot(store, |store| openbiz_server::show(store, &id)),
         Command::Approve { id } => one_shot(store, |store| {
