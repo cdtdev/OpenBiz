@@ -1382,8 +1382,8 @@ mod tests {
 
     // --- The roll-call over a real model -----------------------------------------------------
 
-    use crate::ancestry::AncestryBound;
     use crate::equivalence::EquivalenceBound;
+    use crate::hierarchy::WalkBound;
     use crate::model::{CoreModel, Statement};
 
     fn node(local: &str) -> Node {
@@ -1530,8 +1530,8 @@ mod tests {
     /// condition were in doubt, when what the bound cost is §8.4's check and only that.
     #[test]
     fn a_bounded_ancestry_walk_leaves_s27_unchecked_and_nothing_else() {
-        let mut builder = CoreModel::builder().with_ancestry_bound(AncestryBound {
-            max_ancestors: 1,
+        let mut builder = CoreModel::builder().with_ancestry_bound(WalkBound {
+            max_nodes: 1,
             max_links: 1,
         });
         for statement in [
@@ -1643,8 +1643,8 @@ mod tests {
     /// "violated, and there may be more" is the honest sentence.
     #[test]
     fn a_violation_outranks_a_caveat_and_the_caveat_survives() {
-        let mut builder = CoreModel::builder().with_ancestry_bound(AncestryBound {
-            max_ancestors: 1,
+        let mut builder = CoreModel::builder().with_ancestry_bound(WalkBound {
+            max_nodes: 1,
             max_links: 2,
         });
         for statement in [

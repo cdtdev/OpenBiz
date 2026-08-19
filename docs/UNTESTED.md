@@ -1830,3 +1830,54 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** parsing the command words out of `USAGE` itself, or dispatching the
   parser through a table both it and the test read, so neither side can be extended alone.
 - **Opened:** iteration 34
+
+### The downward walk's cost has never been measured, and the generator makes it look cheap
+- **Kind:** partial-coverage
+- **What is proven:** the walk is bounded on both axes and an abandoned walk is distinguishable from
+  a finished one, going down as well as up — pinned by a test that hits each bound separately. The
+  two directions agree over every ordered pair of a four-concept polyhierarchy with a cycle in it,
+  so a defect in one cannot survive in the other.
+- **What is not:** any number. `adr/0024` measured the *upward* walk at 10k, 100k and 1M links, and
+  the downward one has never been run at any size. The two are not symmetric in cost even though
+  they are symmetric in code: the concepts above a leaf are a handful, and the concepts below a top
+  concept are most of the vocabulary. `openbiz tree` on the root of a large thesaurus is therefore
+  the first path in this build whose *ordinary* answer is the size of the vocabulary, and its
+  rendering allocates one line per descendant.
+- **And the same generator gap as the last four iterations:** `crates/openbiz-skos/src/scale.rs`
+  builds a **chain**, which is the shape in which a subtree is small at every concept but the top.
+  A broad shallow thesaurus — the ordinary shape — is the one that makes `tree` expensive, and no
+  fixture here has one.
+- **What would close it:** a breadth row in the scale harness (N concepts, branching factor B,
+  depth D) measured for `descent` from the root and for the rendered report's size, at the sizes
+  `adr/0024` used.
+- **Opened:** iteration 35
+
+### `WalkBound::DEFAULT` going down is a ceiling an ordinary vocabulary reaches, and nobody here has reached it
+- **Kind:** untested-boundary
+- **What is proven:** hitting either bound is reported rather than silently truncated, with a
+  closing sentence that differs from the complete one, and the tests hit both bounds with a custom
+  `WalkBound`.
+- **What is not:** the default. 100 000 nodes was chosen in `adr/0024` as a backstop for the *upward*
+  walk, where an ordinary vocabulary is nowhere near it. Downwards, a walk from a top concept covers
+  most of the vocabulary, so a thesaurus larger than the bound reaches it **because it is large** —
+  and what that report looks like, how long it takes to produce, and whether a customer reads
+  "this tree is a lower bound and not the answer" as an honest limit or as a defect in us, are all
+  unknown. It is deliberately not raised without a measurement.
+- **What would close it:** running `openbiz tree` from the root of a generated 150 000-concept
+  vocabulary and recording the time, the memory and the output size, then deciding the default
+  against numbers rather than against `adr/0024`'s upward reasoning.
+- **Opened:** iteration 35
+
+### Paths to a root, and naming a cycle, are not implemented
+- **Kind:** not-built
+- **What is proven:** nothing, and this entry exists so that the backlog item's own wording does not
+  read as done. `openbiz tree` shows *one* route to each descendant — the breadth-first shortest —
+  and names the routes it could not show, but it does not enumerate every path, and it detects a
+  cycle only in the one case where the cycle runs through the concept asked about.
+- **What is not:** every path from a concept to a top concept, which is what a breadcrumb needs and
+  what part 2 of the split item covers. It is not a trivial extension of the walk: the number of
+  ancestors is linear in the hierarchy and the number of *paths* is not, so it needs a bound of its
+  own with a different failure mode — and a cycle makes the number of paths infinite rather than
+  merely large.
+- **What would close it:** part 2 of the concept tree item.
+- **Opened:** iteration 35

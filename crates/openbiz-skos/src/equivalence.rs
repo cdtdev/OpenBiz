@@ -57,7 +57,7 @@ use crate::model::{CoreModel, Derivation, Node, SkosRule};
 /// How much of an exact-match cluster one walk may cover before it gives up and says so.
 ///
 /// Two numbers rather than one, because they fail differently — the split
-/// [`AncestryBound`](crate::AncestryBound) documents, with the sizes reasoned from §10 rather than
+/// [`WalkBound`](crate::WalkBound) documents, with the sizes reasoned from §10 rather than
 /// from §8. `max_members` bounds a *long* chain of hub mappings; `max_links` bounds a *dense*
 /// cluster, where a hub concept carrying a thousand exact matches costs a thousand steps to leave
 /// however few distinct concepts are behind them.
@@ -67,7 +67,7 @@ pub struct EquivalenceBound {
     pub max_members: usize,
     /// The most links **one check** may follow, reached or not.
     ///
-    /// As with [`AncestryBound::max_links`](crate::AncestryBound::max_links), one check is one
+    /// As with [`WalkBound::max_links`](crate::WalkBound::max_links), one check is one
     /// walk when a caller asks about one concept — `openbiz mappings` — and it is the *whole
     /// sweep* when S46 walks once per concept holding an exact match. The sweep hands each walk
     /// what is **left** of this budget rather than a fresh copy of it, because a per-walk budget
@@ -79,14 +79,14 @@ pub struct EquivalenceBound {
 impl EquivalenceBound {
     /// The bound every caller in this build uses unless it says otherwise.
     ///
-    /// 100 000 members and 1 000 000 links, which are [`AncestryBound::DEFAULT`]'s numbers and
+    /// 100 000 members and 1 000 000 links, which are [`WalkBound::DEFAULT`]'s numbers and
     /// are chosen the same way: far above any cluster a real mapping produces, far below the
     /// point where the walk is the reason a report is slow. A backstop against a pathological
     /// graph rather than a product limit — a vocabulary that hits it has a problem the report
     /// should name, which is why hitting it is a [`Finding`](crate::Finding) and never a silent
     /// truncation.
     ///
-    /// [`AncestryBound::DEFAULT`]: crate::AncestryBound::DEFAULT
+    /// [`WalkBound::DEFAULT`]: crate::WalkBound::DEFAULT
     pub const DEFAULT: EquivalenceBound = EquivalenceBound {
         max_members: 100_000,
         max_links: 1_000_000,

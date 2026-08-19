@@ -7,6 +7,7 @@
 
 mod ancestry;
 mod equivalence;
+mod hierarchy;
 mod integrity;
 mod labels;
 mod mapping;
@@ -14,6 +15,7 @@ mod model;
 mod notes;
 mod refinement;
 mod relations;
+mod tree;
 mod xl;
 
 /// What the semantic relation model costs at 10k, 100k and 1M links, and what S24's transitive
@@ -23,8 +25,9 @@ mod xl;
 #[cfg(test)]
 mod scale;
 
-pub use ancestry::{Ancestry, AncestryBound};
+pub use ancestry::Ancestry;
 pub use equivalence::{EquivalenceBound, ExactMatchCluster};
+pub use hierarchy::WalkBound;
 pub use integrity::{
     Authority, Caveat, ConditionOutcome, Declaration, DeclaredRefinements, IntegrityCondition,
     RefinementScan, RefinementScanBound, UnreadRefinement, Verdict, CONDITIONS, RDFS_SUB_CLASS_OF,
@@ -55,6 +58,7 @@ pub use relations::{
     RelationOrigin, SemanticRelation, SKOS_BROADER, SKOS_BROADER_TRANSITIVE, SKOS_NARROWER,
     SKOS_NARROWER_TRANSITIVE, SKOS_RELATED, SKOS_SEMANTIC_RELATION,
 };
+pub use tree::{Descent, Siblings};
 pub use xl::{
     LabelOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL, SKOSXL_LABEL_RELATION,
     SKOSXL_LITERAL_FORM, SKOSXL_PREF_LABEL,

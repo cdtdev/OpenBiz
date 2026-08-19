@@ -929,7 +929,7 @@ fn inspect_reports_the_indirect_s27_clash_of_example_27() {
 /// This is the end-to-end half of `docs/adr/0027`. The disjointness check makes one walk per
 /// concept that has a `skos:related`, so its cost is the number of associated concepts times the
 /// depth of the hierarchy — and a 1 500-deep chain with one associative link on each concept owes
-/// 1 124 250 links, past `AncestryBound::DEFAULT`'s million, in a file an operator could plausibly
+/// 1 124 250 links, past `WalkBound::DEFAULT`'s million, in a file an operator could plausibly
 /// import. Before iteration 30 the budget was per walk: no single walk came within three orders of
 /// magnitude of it, so nothing stopped and the report said the check had **finished**.
 ///

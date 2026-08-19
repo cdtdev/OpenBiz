@@ -2584,3 +2584,90 @@ look competent disables the one signal that catches a stuck loop.
   and each iteration has closed the rule and left the generator alone. The next blind-spot pass
   should widen the generator and nothing else; deepening a fifth rule would be the fifth iteration
   in a row measuring one dimension of a model that now has five.
+
+## Iteration 35 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `e5901d2`.** Took the next unchecked,
+  unblocked Phase 2 item: **the concept tree query API — children, ancestors, siblings,
+  paths-to-root, with cycle detection**.
+- **Split in place, and the split is the judgement rather than a convenience.** Ancestors was
+  already done at iteration 28. What was left is two problems: reaching the *nodes* below and
+  beside a concept, which is the existing walk run over the inverse property, and enumerating the
+  *routes* to a root, whose count is exponential in a polyhierarchy where the count of ancestors is
+  linear — and which a cycle makes infinite rather than merely large. Bundling them would have
+  meant one bound with two incompatible failure modes. Part 1 landed; part 2 is in the plan with
+  the reasoning on it, including that "root" needs deciding (a concept with no broader concept is
+  not the same set as a scheme's `skos:hasTopConcept`, and §8 relates neither to the other).
+- **One walk, two directions, and a test that says so.** `hierarchy.rs` now holds the breadth-first
+  traversal, the bound and the predecessor map; `Ancestry` and `Descent` are readings of it that
+  know which property they walked, which is what lets each cite the statement behind its
+  conclusions. Asserted over every ordered pair of a four-concept polyhierarchy with a cycle in it:
+  what one direction reaches, the other reaches from the far end. A defect in one cannot survive in
+  the other.
+- **`AncestryBound` is now `WalkBound` and `max_ancestors` is `max_nodes`** — mechanical, but for a
+  substantive reason: the same bound now governs a walk with no ancestors in it. **And its numbers
+  mean different things in the two directions.** 100 000 nodes was chosen in `adr/0024` for the
+  upward walk, where an ISO 25964 thesaurus is nowhere near it. Downwards, everything below a top
+  concept is most of the vocabulary, so a large thesaurus reaches the ceiling *because it is large*.
+  Not raised: raising a bound without a measurement is how a limit becomes a surprise. It is in
+  `UNTESTED.md` with the measurement that would settle it.
+- **The substance of the item is one asymmetry.** S22 makes `skos:narrower` a sub-property of
+  `skos:narrowerTransitive`, and entailment runs from sub-property to super-property and not back.
+  So `<A> skos:narrowerTransitive <B>` makes B a **descendant and not a child**, and leaves A with
+  no children at all — legal SKOS, and what a vocabulary states when it knows one concept is under
+  another without claiming the levels between. `children` reads `skos:narrower`, `descent` walks
+  the transitive property, and `openbiz tree` names S22 when a vocabulary actually shows the
+  difference rather than letting two counts disagree in silence. Collapsing them would have been
+  less code and would have put statements in the graph's mouth.
+- **"Sibling" is our word and is labelled as ours in the report.** SKOS has no sibling property and
+  ISO 25964's relationships are BT, NT and RT, so the definition is written down rather than cited:
+  another concept sharing at least one `skos:broader` concept. Not transitive (a concept under the
+  grandparent is not a sibling); never reflexive, even where §8.6.7's Example 36 makes a concept its
+  own parent and its own child; and **not** a relation between two top concepts, because what makes
+  those belong together is `skos:hasTopConcept` and inventing a relation out of the *absence* of a
+  link would claim something the graph does not say. It emits no `Derivation` — a fabricated rule
+  number is worse than no citation — and returns the shared concept instead.
+- **Running the product changed the output twice, for the eighth iteration running.** Against a
+  store on disk, `openbiz tree` on a diamond printed Buildings under Property and nowhere else: the
+  tree gives each concept one parent, so a second route is silently dropped and a reader concludes
+  it is not also under Vehicles. That is the one place this report's *shape* says something the
+  graph does not, so the routes the tree cannot show are now counted and named after it — not as a
+  finding, because polyhierarchy is ordinary and §8 states nothing against it. The second was
+  smaller: the `[S24]` legend printed on subtrees one level deep, where nothing carries the mark,
+  which reads as though the reader had missed one.
+- **A cycle prints rather than being cut.** §8.6.8 says a cycle is consistent, and it puts the
+  origin back among its own descendants; the renderer marks what it has printed and shows the
+  return as *the hierarchy comes back round to the concept asked about*. Rendering uses an explicit
+  stack and not recursion: a 100 000-link chain is legal SKOS, and recursing down one turns the
+  bound's honest incomplete answer into a crash.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **690 Rust tests, up from 661.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it.
+- **Six mutants, and the one that survived is the entry worth keeping.** Making `children` read the
+  transitive property fails three tests; dropping the sibling self-exclusion fails two; stepping
+  *down* transitively in the sibling search fails one; marking `[S24]` at every depth fails two;
+  keeping the shown route in the polyhierarchy note fails one. Stepping **up** transitively —
+  `skos:broader` swapped for `skos:broaderTransitive` in the sibling search — **survived**, because
+  S22 fills the transitive property from `skos:broader` on every ordinary vocabulary, so the two
+  are indistinguishable on every fixture that does not state a bare transitive link upwards. It is
+  the same asymmetry as the item's own headline, one level up, and I had tested it downwards and
+  not upwards. The test that now kills it asserts a concept whose only upward link is a stated
+  `skos:broaderTransitive` has **no** siblings and no parents to share.
+- **Corrected in passing:** the plan's own position line said Phase 2 was "14 of 24" when the phase
+  held 21 items. The numerator was right; the denominator had been carried forward by memory across
+  a split instead of recounted — which is the exact failure the iteration-4 product-owner
+  correction warned about, in the line that records that correction. Now 15 of 22, counted.
+- **Recorded:** `adr/0032`. Three `UNTESTED.md` entries opened, none closed. No proposals.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T05:18Z.
+- **Still uncertain:** whether the downward walk is affordable on the vocabulary shape customers
+  actually have, and this time the doubt has a sharper edge than the last four. `openbiz tree` from
+  a root is the **first path in this build whose ordinary, correct answer is the size of the
+  vocabulary** — every other command's answer is bounded by what one concept holds. The four
+  previous iterations recorded the generator producing only the easy shape; here the generator
+  produces the shape that makes this specific command look cheapest, because `scale.rs` builds a
+  *chain*, in which every concept's subtree is small except the top one's. A broad shallow
+  thesaurus — the ordinary ISO 25964 shape, and the one this feature exists for — is exactly the
+  case with no fixture. I did not widen the generator, because the charter says one item and this
+  was already a split item with a rename in it; but that is now the fifth iteration deferring the
+  same work, and the next blind-spot pass should do the generator and nothing else. It should
+  generate **breadth**, not depth: depth is the shape every number so far has been measured on.

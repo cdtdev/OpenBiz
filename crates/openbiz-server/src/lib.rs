@@ -19,6 +19,7 @@ mod mappings;
 mod notes;
 mod shutdown;
 mod sparql;
+mod tree;
 mod ui;
 
 pub use ancestors::ancestors;
@@ -33,6 +34,7 @@ pub use integrity::integrity;
 pub use mappings::mappings;
 pub use notes::notes;
 pub use shutdown::StopSignals;
+pub use tree::tree;
 
 /// Build the application router.
 ///
