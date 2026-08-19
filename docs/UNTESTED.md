@@ -1830,6 +1830,31 @@ module's own tests and end to end against the real binary reading a store off di
   peak memory at the sizes the other rows use.
 - **Opened:** iteration 34
 
+### `CAPABILITIES.md` is hand-written prose with nothing checking it against the build
+- **Kind:** partial-coverage
+- **What is proven:** every claim in it at iteration 48 was written from a primary source in this
+  repository — the `USAGE` constant, the route table in `crates/openbiz-server/src/lib.rs`, the
+  checked boxes in `BUILD-PLAN.md`, and the ADR each paragraph cites. The counts (55 done, 166 open,
+  221 total) were derived by counting boxes, not remembered, and every `adr/` link was resolved
+  against `ls docs/adr/` after a first pass got **twenty of them wrong** by inventing plausible
+  filenames.
+- **What is not:** that it stays true. Nothing fails when a command is added, a bound changes, or a
+  phase completes — the file is prose and the build has no opinion about prose. **This has already
+  happened once in the file it replaces**: `README.md`'s capability sections stopped at
+  `adr/0026` and were missing `search`, `tree`, `paths`, `mint`, `policy`, `move`, `merge`, `split`,
+  `deprecate`, `reinstate`, `integrity` and `mappings` — twelve commands, roughly fifteen
+  iterations of drift, and nothing reported it. The surface that can now drift is larger than the
+  README's was, not smaller.
+- **What is worse:** a stale capability document is the specific failure `CLAUDE.md` §4 calls worse
+  than lacking the capability, and this one is written *for someone evaluating the product*. It is
+  the same defect as the CLI usage list below, one level up and with no test at all rather than a
+  one-directional one.
+- **What would close it:** a CI check that reads the command words out of `USAGE` and the phase
+  counts out of `BUILD-PLAN.md` and fails when `CAPABILITIES.md` does not mention one — the cheap
+  half of it, since prose about *behaviour* cannot be checked this way. Proposed rather than built,
+  because deciding what a docs check may fail on is a judgement the loop should not make alone.
+- **Opened:** iteration 48
+
 ### The CLI usage list is hand-maintained in one direction only
 - **Kind:** partial-coverage
 - **What is proven:** every command word the test names appears in `USAGE` **and** parses without

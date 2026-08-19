@@ -171,6 +171,29 @@ small now and corrosive if it becomes habit.
 
 Note this in `LOOP-LOG.md` as a process error caught externally, not just a doc fix.
 
+### What the loop did, and how the denominator has moved since
+
+The rule stuck: every count in `BUILD-PLAN.md` is now derived by counting `- [ ]` and `- [x]` in
+the phase. **This is the one place that history is kept**, so the plan's `**Status:**` line can cite
+it rather than re-narrate it (product-owner direction, 2026-08-19 — see the last entry in this
+file).
+
+Phase 2's denominator, which has moved the most:
+
+- **20** original items.
+- **21** — split, iteration 32, mapping properties off their own line.
+- **22** — split, iteration 35, the concept tree. Iteration 36 closed the second half of it.
+- **23** — split, iteration 39, IRI minting.
+- **26** — split, iteration 42, the bulk-operations line into three.
+- **28** — split, iteration 46, the deprecation-lifecycle line into two, that line having turned out
+  to hold three separable pieces rather than one.
+
+**The correction this entry demanded was caught in the act at iteration 35.** The line then read
+*"14 of 24"* while the phase held 21 items: the total had been carried forward by memory across two
+splits instead of recounted, so the numerator was right and the denominator was invented. That is
+exactly the failure mode described above, surviving in a second field after the first was fixed —
+which is why the rule is *count the boxes*, not *remember to update the number*.
+
 ---
 
 ## 2026-08-19 — from the product owner: you are on a wall clock, and nobody told you
@@ -347,3 +370,36 @@ three `UNTESTED.md` entries have had *"it cannot be told from inside this reposi
 measurements, and one of them — `PathBound::DEFAULT` — turned out to be wrong in its direction, not
 merely unproven. Roughly forty minutes of `curl` and a public SPARQL endpoint did what six
 iterations had called unanswerable.
+
+---
+
+## 2026-08-19 — from the product owner: the position line has become a changelog
+
+>
+> `docs/BUILD-PLAN.md`'s `**Current position:**` line is now roughly two thousand words. It opens with
+> the phase and count, then narrates `reinstate`, the retirement marks, `deprecate`, `split`, `merge`,
+> `move`, the denominator's whole correction history, `mint`, `policy`, and the three hierarchy
+> readers — each with its ADR reference, newest first, accumulating every iteration.
+>
+> **Every sentence in it is good. The container is wrong.** That field answers "where am I?" and is
+> read as a glance — `/openbiz-status` prints it verbatim in its status section, where it now floods
+> everything around it. A status line that must be scrolled has stopped being a status line, and the
+> excellent writing in it is buried rather than surfaced.
+>
+> **What I want instead:**
+>
+> - `**Current position:**` — two or three sentences. The phase, the count, what is being worked on
+>   now, and anything blocking. Nothing that happened more than an iteration ago.
+> - The narrative belongs in `docs/LOOP-LOG.md`, which already carries it per iteration, and — if a
+>   reader-facing summary of what the product can *do* is worth having, and I think it is — a new
+>   `docs/CAPABILITIES.md` written as prose for a person evaluating OpenBiz, not as an append-only
+>   log. That file would be genuinely valuable: it is the honest answer to "what does this actually do
+>   today", which no incumbent publishes.
+> - The denominator's correction history is important and should survive, but in the iteration-4 entry
+>   of `FEEDBACK-LOG.md` where the correction lives, cited once from the plan rather than re-narrated.
+>
+> **The general rule:** a field has a purpose, and appending to it forever defeats that purpose even
+> when every addition is individually justified. When you find yourself adding to a line rather than
+> replacing it, ask whether the thing you are writing belongs in a different file. This is the same
+> failure as a validation report that prints seven numbers a governance team reads as a scorecard —
+> correct content, wrong container, and the container is what determines whether anyone can use it.

@@ -180,6 +180,18 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Cost & impact:** well under one iteration. A script plus a CI step; no runtime or binary impact.
   The honest risk is that it invites writing the status line to satisfy the parser rather than the
   reader, so it should check the *falsifiable* claims only and leave the prose alone.
+- **Widened at iteration 48, with evidence that the convention has now failed twice.** The product
+  owner's 2026-08-19 feedback moved the capability narrative out of these two fields into
+  `docs/CAPABILITIES.md`, which makes the fields short enough to check — but it also created a
+  second hand-written document making falsifiable claims about the build. Writing it surfaced that
+  `README.md`'s capability sections had gone stale without anyone noticing: they stopped at
+  `adr/0026` and omitted twelve shipped commands across roughly fifteen iterations. So the check
+  should cover three things, all mechanical: the phase counts in `BUILD-PLAN.md`'s `**Status:**`
+  line, that no field names a phase complete while a box in it is unchecked, and that every command
+  word in `openbiz-server`'s `USAGE` constant appears somewhere in `CAPABILITIES.md`. The third is
+  the same one-directional gap `UNTESTED.md` records against the CLI usage test, closed at the
+  documentation level instead. Prose about *behaviour* still cannot be checked and should not be
+  attempted.
 - **Suggested phase:** Phase 0, as a harness item.
 
 ### Bring the Oxigraph benchmark spike forward, ahead of the remaining Phase 1 items
@@ -1659,3 +1671,36 @@ has. `README.md` is the right home for it and a human wrote it._
   want, which is an argument for proposing it as that rather than as a flag on this command.
 - **Suggested phase:** Phase 2 for (a) or (b); (c) belongs with the candidate seam and should not be
   smuggled in as a deprecation feature.
+
+### Make an unlanded iteration visible, by checking the log against `main`'s history
+
+- **Status:** proposed.
+- **Gap:** iteration 48 completed every step of the loop except the last. It wrote
+  `docs/CAPABILITIES.md`, cut `BUILD-PLAN.md`'s preamble, rewrote the stale README sections, ran the
+  full verification green, and appended a loop-log entry describing all of it as done — then exited
+  without `git commit`. Iteration 49 found the work uncommitted on a branch with zero commits,
+  re-verified it, and landed it. Nothing was lost, but for one iteration `LOOP-LOG.md`'s newest
+  entry described a commit that did not exist.
+- **Why load-bearing:** `LOOP-LOG.md` is explicitly the loop's working memory across context
+  boundaries (`CLAUDE.md` §7), and the next iteration reads it as history. Every ledger is written
+  by the iteration reporting on itself, so an iteration that dies between "record the truth" and
+  "land it" leaves files that are internally consistent, individually accurate, and collectively
+  wrong about what shipped — there is no contradiction *inside* the repository to notice. Iteration
+  49 caught it only because the tree happened to be dirty **and** the newest entry named the same
+  files; had 48 committed but not pushed, or pushed but not merged, the tree would have been clean
+  and the entry would very likely have been read as history and built upon.
+- **What is being asked for:** a check that compares `LOOP-LOG.md`'s newest `## Iteration N` heading
+  against `main`'s history — if the newest entry is not reachable in a commit on `main`, say so
+  loudly. Natural homes are `/openbiz-status`, so a human sees it, and the loop's own orientation
+  step, so the next iteration is told rather than left to infer it from a dirty tree. The stronger
+  variant is ordering: write the log entry as a follow-up commit *after* the merge, which
+  `CLAUDE.md` §8 already permits, so the entry cannot exist before the thing it describes.
+- **Why the loop is not deciding it:** it changes the loop's own operating procedure and the
+  `/openbiz-status` surface, neither of which is a plan item, and the ordering variant edits the
+  prompt's documented step sequence. A self-directed rewrite of the harness that supervises it is
+  exactly what `CLAUDE.md` §7 puts this file in the way of.
+- **Cost & impact:** small — the check is a few lines of `git log --grep` against one heading, and
+  the ordering change is free. The risk is a false alarm on the legitimate case where the entry is
+  committed with the item in the same PR and `main` has not yet been updated locally, so it should
+  compare against the remote and treat "unpushed" and "unlanded" as distinct.
+- **Suggested phase:** Phase 14, or alongside the next product-owner pass.
