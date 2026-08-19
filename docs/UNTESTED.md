@@ -90,7 +90,7 @@ Do not delete it — the record of what took how long to close is the signal.
   reads for every condition this build has not implemented at all.
 - **Opened:** iteration 24
 
-### The walk's cost is unmeasured, which is the other half of `adr/0024`'s question
+### ~~The walk's cost is unmeasured, which is the other half of `adr/0024`'s question~~
 - **Kind:** unproven-at-scale
 - **What is proven:** the walk is bounded and terminates on a cyclic hierarchy, and the bound is
   reported rather than silently truncating. Correctness is covered by §8.5's and §8.6's own
@@ -110,9 +110,16 @@ Do not delete it — the record of what took how long to close is the signal.
   iteration 26 established that measuring a traversal that does not exist yet produces a number
   that agrees with you, and the same argument says the measurement belongs in its own iteration
   rather than in the one that built the thing.
+- **Closed, iteration 30**, and it found a defect rather than a number. `scale.rs` gained an
+  associative dimension and the shape this entry asked for — a deep hierarchy with a `skos:related`
+  on every concept — and measured a legal 10 001-concept chain at **30.63 s against 62 ms** for the
+  same vocabulary without the associative links. The cause was that `AncestryBound::max_links`
+  bounded one walk while the pass makes one walk per concept, so the bound bounded nothing. Fixed
+  by sharing the budget across the sweep: **530 ms**, with the abandonment reported. See
+  `docs/adr/0027`. The 1M-concept row is still not run — see the entry that replaces this one below.
 - **Opened:** iteration 28
 
-### The default ancestry bound has never been hit outside a test that lowered it
+### ~~The default ancestry bound has never been hit outside a test that lowered it~~
 - **Kind:** partial-coverage
 - **What is proven:** that hitting a bound is reported as `Severity::Unchecked` rather than read as
   a pass, and that the same graph with room comes out inconsistent — so the difference is
@@ -124,7 +131,50 @@ Do not delete it — the record of what took how long to close is the signal.
   request hangs, which is what the bound exists to prevent.
 - **What would close it:** the scale measurement above, which would say what a walk of each size
   actually costs and turn the two numbers from a guess into a budget.
+- **Closed, iteration 30.** `AncestryBound::DEFAULT` is now hit for real, in release, by
+  `the_s27_pass_at_each_shape_with_an_associative_link_on_every_concept` — a 10 001-concept chain
+  with one `skos:related` per concept owes about 50 million links against a budget of one million —
+  and end to end through the binary by
+  `inspect_says_the_disjointness_check_was_abandoned_rather_than_claiming_it_passed`, on a
+  vocabulary of three thousand triples. What the numbers say about the *value*: a chain 1 000 deep
+  is checked completely and one 1 500 deep is not, so the million is roughly "any hierarchy under a
+  thousand levels, fully checked". `max_ancestors` (100 000) is still untouched by anything.
 - **Opened:** iteration 28
+
+### The disjointness sweep's budget is now a product limit, and nothing has been sized against a real thesaurus
+- **Kind:** measured-and-over-budget
+- **What is proven:** that the sweep stops rather than hanging, that it says how many concepts it
+  never reached, and that `openbiz inspect`'s closing sentence hedges accordingly — all end to end
+  through the binary. And the cost of stopping, measured: a 10 001-concept chain with a genuine S27
+  violation on every concept reports **1 413 of 9 999 violations** before the budget runs out,
+  against 999 of 999 at a thousand concepts.
+- **What is not:** that a million links is the right number for anyone. It was chosen in iteration
+  28 as a backstop against a pathological graph and `adr/0027` has now turned it into a limit an
+  ordinary customer can reach — the check is complete for a hierarchy about a thousand levels deep
+  and partial past that. No real thesaurus has been measured, so nobody knows whether real
+  vocabularies sit at ten levels (in which case this never fires) or whether some enterprise
+  hierarchy with a dense associative layer sits past it.
+- **The risk while it is open:** a governance team reads "1 413 violations, check abandoned" and
+  cannot tell whether the remaining 8 586 exist. That is honest and it is worse than an answer.
+- **What would close it:** either the algorithmic fix or the scaling budget in `docs/PROPOSED.md`,
+  or a measurement against a real published thesaurus (AGROVOC, EuroVoc, MeSH) — which needs a
+  licence check on the data before it can enter the repository, and so is a decision rather than a
+  task.
+- **Opened:** iteration 30
+
+### A long S27 violation path is unmeasured, because the harness only generates short ones
+- **Kind:** partial-coverage
+- **What is proven:** what a *short* violation costs. `Associativity::EveryConceptInHierarchy`
+  relates each concept to its grandparent, and `Ancestry::path_to` is breadth-first, so the path
+  carried by `Finding::RelatedAndBroaderTransitive` is three nodes however deep the hierarchy is.
+- **What is not:** the case that would hurt. A vocabulary relating every concept to its *root*
+  produces a path per finding proportional to the depth, so the findings alone hold memory
+  quadratic in the vocabulary — and unlike the walk, nothing bounds what a finding holds. The
+  sweep budget limits how many findings there can be, which caps it indirectly and by accident
+  rather than by design.
+- **What would close it:** a fourth associativity shape relating every concept to concept 0, run at
+  the same sizes, and a decision about whether a finding's path needs a bound of its own.
+- **Opened:** iteration 30
 
 ### ~~The semantic relation model holds four entries per stated link, and the ceiling is unmeasured~~
 - **Kind:** partial-coverage

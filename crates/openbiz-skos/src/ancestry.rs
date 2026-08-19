@@ -47,7 +47,16 @@ use crate::relations::SemanticRelation;
 pub struct AncestryBound {
     /// The most distinct ancestors a walk may reach.
     pub max_ancestors: usize,
-    /// The most links a walk may follow, reached or not.
+    /// The most links **one check** may follow, reached or not.
+    ///
+    /// One check is one walk when a caller asks about one concept — `openbiz ancestors` — and it
+    /// is the *whole sweep* when a caller walks once per concept, which is what §8.4's
+    /// disjointness pass does. A sweep hands each walk what is left of this budget rather than a
+    /// fresh copy of it, and that is not a refinement: **a per-walk budget times one walk per
+    /// concept is not a bound.** Iteration 30 measured a legal 10 001-concept chain with one
+    /// `skos:related` on each concept building in **30.6 seconds** against 62 ms for the same
+    /// vocabulary without them, with this ceiling at a million and no single walk coming within
+    /// two orders of magnitude of it. See `docs/adr/0027`.
     pub max_links: usize,
 }
 

@@ -1231,3 +1231,48 @@ has. `README.md` is the right home for it and a human wrote it._
   decision more than a work item: it should be one of the first rules the Z39.19 pack carries, and
   it should be listed on that pack's build-plan item so it is not rediscovered later.
 - **Suggested phase:** Phase 4.
+
+### Make §8.4's disjointness check cost less than concepts × depth
+- **Status:** proposed.
+- **Gap:** `adr/0027` stopped the S27 pass hanging on a legal vocabulary by sharing one link budget
+  across the whole sweep. That is a backstop, not an answer. The pass still walks the entire
+  ancestry of every concept that has a `skos:related`, so its cost is the number of associated
+  concepts times the depth of the hierarchy, and the budget converts "slow" into "partially
+  checked" rather than into "checked". Measured: a 10 001-concept chain with a genuine violation on
+  every concept reports 1 413 of 9 999 before it stops.
+- **Why load-bearing:** S27 is the **only** integrity condition §8 states, and it is the one a
+  thesaurus actually violates in practice — an editor writes `skos:related` between two concepts
+  that a third editor later puts in the same branch, and nothing shows it until a validator finds
+  it. A validator that checks the first 14% of a deep vocabulary is not the differentiator
+  `docs/COMPETITIVE.md` claims.
+- **Options, none costed:** (a) walk **down** from each associate instead of up from each concept
+  when the associate count is smaller — same answer, different multiplier, and free to choose per
+  concept; (b) order the sweep so a concept's walk reuses its parent's result, which is a partial
+  closure and needs `adr/0025`'s memory argument re-run against a *bounded* cache rather than the
+  full closure it rejected; (c) an interval or level labelling of the hierarchy, computed once per
+  build, that answers "is X above Y" in constant time for a DAG — the standard answer, and it needs
+  measuring against the polyhierarchy SKOS permits before anyone believes it.
+- **Cost & impact:** medium. (c) is the real fix and is a genuine piece of design work, including
+  what it does about the cycles §8.6.8 makes legal. It should not be started without the
+  measurement harness `scale.rs` now has, which is the thing that would say whether it worked.
+- **Suggested phase:** Phase 2, after the remaining §8 items.
+
+### Decide whether the sweep budget should scale with the vocabulary
+- **Status:** proposed.
+- **Gap:** `AncestryBound::DEFAULT`'s million links was chosen in iteration 28 as a backstop against
+  a pathological graph and `adr/0027` has made it a limit an ordinary customer can reach: a
+  hierarchy about a thousand levels deep is checked completely and a deeper one is not. A fixed
+  constant is the wrong shape for a limit whose right value depends on how much the operator is
+  willing to wait, and there is no way to raise it — `with_ancestry_bound` has no production caller
+  and no configuration path.
+- **Why load-bearing:** it is the difference between "OpenBiz cannot check my vocabulary" and
+  "OpenBiz asked me whether I wanted to wait". `CLAUDE.md` §1.5 wants a lightweight default; it does
+  not want a validator that silently declines on a vocabulary the customer considers ordinary.
+- **Options:** a budget derived from the graph size (so the pass is linear-ish in the vocabulary
+  rather than constant); a configuration key with the default documented; or a `--thorough` flag on
+  `openbiz inspect` that lifts it and says what it will cost. The third is the most honest and the
+  most work.
+- **Cost & impact:** small once the decision is made; the decision is the item. It interacts with
+  the proposal above — an algorithmic fix might remove the need entirely, so this should not be
+  built first.
+- **Suggested phase:** Phase 2.

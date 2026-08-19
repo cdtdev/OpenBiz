@@ -923,3 +923,64 @@ fn inspect_reports_the_indirect_s27_clash_of_example_27() {
         "the chain is what makes the clash actionable, because nobody wrote the link: {report}"
     );
 }
+
+/// **The §8.4 sweep's budget, hit through the binary on a vocabulary of three thousand triples.**
+///
+/// This is the end-to-end half of `docs/adr/0027`. The disjointness check makes one walk per
+/// concept that has a `skos:related`, so its cost is the number of associated concepts times the
+/// depth of the hierarchy — and a 1 500-deep chain with one associative link on each concept owes
+/// 1 124 250 links, past `AncestryBound::DEFAULT`'s million, in a file an operator could plausibly
+/// import. Before iteration 30 the budget was per walk: no single walk came within three orders of
+/// magnitude of it, so nothing stopped and the report said the check had **finished**.
+///
+/// What this asserts is the sentence an operator reads. Not that the check is fast — that it
+/// declines to claim a result it did not compute.
+#[test]
+fn inspect_says_the_disjointness_check_was_abandoned_rather_than_claiming_it_passed() {
+    const DEPTH: usize = 1_500;
+
+    let mut turtle = String::from(
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n",
+    );
+    for index in 0..DEPTH {
+        if index > 0 {
+            turtle.push_str(&format!(
+                "ex:c{index:04} skos:broader ex:c{:04} .\n",
+                index - 1
+            ));
+        }
+        // One associate, outside the hierarchy and the same one for every concept, so nothing here
+        // violates S27 and every walk runs all the way to the top. That is the expensive shape, and
+        // it is perfectly ordinary SKOS.
+        turtle.push_str(&format!("ex:c{index:04} skos:related ex:topic .\n"));
+    }
+
+    let dir = authored();
+    import_and_approve(dir.path(), "deep.ttl", &turtle);
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = stdout(&output);
+
+    assert!(
+        report.contains("the disjointness check stopped after"),
+        "the sweep ran out of budget and the report must say so: {report}"
+    );
+    assert!(
+        report.contains("concept(s) unwalked"),
+        "and must say how many it never reached: {report}"
+    );
+    assert!(
+        report.contains("[unchecked]"),
+        "abandoning a check is `Severity::Unchecked`, not a violation: {report}"
+    );
+    assert!(
+        report.contains(
+            "no SKOS integrity condition is violated by the part of this graph that was checked"
+        ),
+        "the closing sentence must be the hedged one, not the clean one: {report}"
+    );
+    // And the hedge must be earned: this vocabulary really does violate nothing.
+    assert!(!report.contains("is not a SKOS vocabulary"), "{report}");
+}
