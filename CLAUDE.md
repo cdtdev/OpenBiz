@@ -242,6 +242,13 @@ degrades silently; these are where inconvenient truths go.
 - **`LOOP-LOG.md`** — one entry per iteration: what changed, what you learned, and an explicit
   **"still uncertain"** line. That last line is not optional and must not be padding.
 
+**Date every ledger entry with an explicit offset**, e.g. `2026-08-20 (NZST, UTC+12)` or a plain
+UTC date said to be UTC. This loop runs across midnight in a UTC+12 zone, so a bare date is
+ambiguous by up to thirty-six hours between two entries labelled the same day — and an entry a
+reader must put in order is exactly the thing that must say which clock it means. Product-owner
+instruction, `FEEDBACK-LOG.md` 2026-08-20; the same rule binds provenance timestamps in the
+product, where `adr/0047` implements it.
+
 ---
 
 ## 8. Out of scope for the loop

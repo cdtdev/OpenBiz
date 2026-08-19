@@ -40,11 +40,10 @@
 use std::path::Path;
 
 use oxigraph::model::vocab::xsd;
-use oxigraph::model::{Literal, NamedNode};
-use oxsdatatypes::DateTime;
+use oxigraph::model::{Literal, NamedNode, Quad, Term};
 
 use crate::{
-    named_node, GraphId, RegistryReader, StoreError, Transaction, FORMAT_VERSION,
+    named_node, GraphId, RecordedAt, RegistryReader, StoreError, Transaction, FORMAT_VERSION,
     FORMAT_VERSION_IRI, STORE_IRI,
 };
 
@@ -117,6 +116,7 @@ static MIGRATIONS: &[&dyn Migration] = &[
     &RegisterSystemGraph,
     &AllowCandidateGraphs,
     &AllowCandidateRemovals,
+    &RetypeIriPolicyStamps,
 ];
 
 /// 1 → 2: the system graph is listed in the graph registry.
@@ -231,6 +231,89 @@ impl Migration for AllowCandidateRemovals {
 
     fn apply(&self, _transaction: &mut Transaction<'_>) -> Result<(), StoreError> {
         Ok(())
+    }
+}
+
+/// 4 → 5: a recorded IRI policy's timestamp is an `xsd:dateTime` rather than a plain string.
+///
+/// **The first migration in the chain that actually rewrites data**, and the defect it repairs is
+/// small to describe and awkward to live with. A candidate's `proposed_at` and a migration's own
+/// `migrationAt` were written as typed `xsd:dateTime` literals from the day each shipped. An IRI
+/// policy's `iriPatternRecordedAt` was written as a plain string, holding the identical lexical
+/// form, through an oversight nothing surfaced — the value looked right everywhere a person read
+/// it, because everywhere a person read it, it was being printed rather than compared.
+///
+/// It is not orderable. A plain literal is `xsd:string` to SPARQL, so `ORDER BY`, `FILTER (?at >
+/// …)`, and a comparison against any other timestamp in the trail all either sort it
+/// lexicographically by accident or fail to relate it at all. The one question the field exists to
+/// answer — *which convention was this vocabulary minting under when that concept was created* —
+/// is a comparison between a policy's stamp and a candidate's, and it silently could not be asked.
+/// `CLAUDE.md` §3 makes the audit trail ordinary RDF answerable by SPARQL precisely so an auditor
+/// does not have to take our word for it; a field that is only correct when a human reads it is
+/// not that.
+///
+/// **What it deliberately does not do is refuse.** A value it cannot parse as a date and time with
+/// an explicit timezone is left exactly as it was found, rather than retyped into an ill-typed
+/// literal or turned into a fatal error at open. Retyping garbage would mint a lie; refusing at
+/// open would turn one unreadable field in one vocabulary into a store that will not start, and
+/// send an operator to disaster recovery for a record they could have read the pattern out of by
+/// hand. [`crate::policy`] already refuses such a value at the read, naming the vocabulary — which
+/// is where a per-vocabulary problem belongs.
+struct RetypeIriPolicyStamps;
+
+/// The predicate [`RetypeIriPolicyStamps`] repairs. Kept here rather than imported so the
+/// migration still describes a shape the current code has since moved on from — a migration reads
+/// the store as it *was*, and coupling it to a constant later versions may rename is how a step
+/// stops meaning what it meant.
+const LEGACY_IRI_PATTERN_AT_IRI: &str = "urn:openbiz:iriPatternRecordedAt";
+
+impl Migration for RetypeIriPolicyStamps {
+    fn id(&self) -> &'static str {
+        "0005-retype-iri-policy-stamps"
+    }
+
+    fn applies_at(&self) -> u32 {
+        4
+    }
+
+    fn describe(&self) -> &'static str {
+        "retyped every recorded IRI-minting policy's timestamp from a plain string to an \
+         xsd:dateTime, so the trail can be ordered and compared in SPARQL rather than only read \
+         by eye; a value that is not a date and time with an explicit timezone was left as found, \
+         because retyping one would assert something the record does not say"
+    }
+
+    fn apply(&self, transaction: &mut Transaction<'_>) -> Result<(), StoreError> {
+        let predicate = named_node(LEGACY_IRI_PATTERN_AT_IRI);
+        let found = transaction.inner.system_quads(None, predicate)?;
+
+        let mut stale = Vec::new();
+        let mut fresh = Vec::new();
+        for quad in found {
+            let Term::Literal(literal) = &quad.object else {
+                // Not a literal at all. Out of this step's remit and refused at the read, which is
+                // where a record nobody can account for should surface.
+                continue;
+            };
+            if literal.datatype() == xsd::DATE_TIME {
+                // Already typed: either written by a build at version 5 or later, or repaired by
+                // an earlier run of this step. Idempotent, as the trait asks.
+                continue;
+            }
+            if RecordedAt::parse(literal.value()).is_err() {
+                continue;
+            }
+            fresh.push(Quad::new(
+                quad.subject.clone(),
+                quad.predicate.clone(),
+                Literal::new_typed_literal(literal.value(), xsd::DATE_TIME),
+                quad.graph_name.clone(),
+            ));
+            stale.push(quad);
+        }
+
+        transaction.remove_graph_quads(&GraphId::system(), &stale)?;
+        transaction.extend_graph(&GraphId::system(), &fresh)
     }
 }
 
@@ -400,7 +483,7 @@ fn migrate_from(
 
     // One timestamp for the whole chain, not one per step. They commit together, so they happened
     // together; giving them microsecond-apart times would imply an ordering that is not a fact.
-    let at = DateTime::now().to_string();
+    let at = RecordedAt::now();
 
     let mut steps = Vec::with_capacity(chain.len());
     for migration in chain {
@@ -429,7 +512,7 @@ fn migrate_from(
 fn record(
     transaction: &mut Transaction<'_>,
     step: &MigrationStep,
-    at: &str,
+    at: &RecordedAt,
 ) -> Result<(), StoreError> {
     // Unchecked because the identifier is a compile-time constant from this crate and the prefix
     // is ours; `expect` is barred outside tests (`CLAUDE.md` §6) and there is no runtime input
@@ -462,7 +545,7 @@ fn record(
             (
                 subject,
                 named_node(MIGRATION_AT_IRI).into_owned(),
-                Literal::new_typed_literal(at, xsd::DATE_TIME).into(),
+                Literal::new_typed_literal(at.as_str(), xsd::DATE_TIME).into(),
             ),
         ],
     )
@@ -526,6 +609,166 @@ mod tests {
                 .is_empty(),
             "a store already at the current version needs no steps"
         );
+    }
+
+    /// A store as format version 4 left it: the policy stamp holding the right lexical form in
+    /// the wrong datatype.
+    fn store_with_a_legacy_policy_stamp(lexical: &str) -> (tempfile::TempDir, crate::Store) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let store = crate::Store::open(dir.path()).expect("a fresh store opens");
+        let graph = GraphId::vocabulary("https://example.org/energy").expect("a vocabulary IRI");
+        store
+            .create_vocabulary_graph(&graph)
+            .expect("the vocabulary is created");
+        store
+            .record_iri_policy(&graph, "https://example.org/energy/c_{n}", "ada")
+            .expect("the policy is recorded");
+        put_stamp(&store, Literal::new_simple_literal(lexical));
+        (dir, store)
+    }
+
+    /// Replace whatever stamp is recorded with `object`, leaving exactly one.
+    fn put_stamp(store: &crate::Store, object: Literal) {
+        let system = GraphId::system();
+        let existing = store
+            .backend
+            .system_quads(None, named_node(LEGACY_IRI_PATTERN_AT_IRI))
+            .expect("the system graph is readable");
+        let subject = existing
+            .first()
+            .map(|quad| quad.subject.clone())
+            .expect("a policy was recorded, so a stamp exists");
+        store
+            .transaction(|txn| {
+                txn.remove_graph_quads(&system, &existing)?;
+                txn.extend_graph(
+                    &system,
+                    &[Quad::new(
+                        subject.clone(),
+                        named_node(LEGACY_IRI_PATTERN_AT_IRI).into_owned(),
+                        object.clone(),
+                        NamedNode::new_unchecked(system.iri()),
+                    )],
+                )
+            })
+            .expect("the stamp is written");
+    }
+
+    /// The one stamp recorded in the store, as it stands.
+    fn recorded_stamp(store: &crate::Store) -> Literal {
+        let found = store
+            .backend
+            .system_quads(None, named_node(LEGACY_IRI_PATTERN_AT_IRI))
+            .expect("the system graph is readable");
+        let [quad] = found.as_slice() else {
+            panic!("one policy records one stamp: {found:?}");
+        };
+        let Term::Literal(literal) = &quad.object else {
+            panic!("the stamp is a literal: {quad:?}");
+        };
+        literal.clone()
+    }
+
+    #[test]
+    fn a_legacy_policy_stamp_is_retyped_without_changing_what_it_says() {
+        let (_dir, store) = store_with_a_legacy_policy_stamp("2026-08-19T14:17:03Z");
+        assert_ne!(
+            recorded_stamp(&store).datatype(),
+            xsd::DATE_TIME,
+            "the fixture must start in the shape version 4 left"
+        );
+
+        store
+            .transaction(|txn| RetypeIriPolicyStamps.apply(txn))
+            .expect("the step runs");
+
+        let repaired = recorded_stamp(&store);
+        assert_eq!(repaired.datatype(), xsd::DATE_TIME);
+        assert_eq!(
+            repaired.value(),
+            "2026-08-19T14:17:03Z",
+            "the step changes the datatype and not the instant"
+        );
+    }
+
+    #[test]
+    fn retyping_twice_leaves_one_stamp() {
+        // The trait asks for idempotence where it is cheap, and it is cheap here. A step that
+        // inserted a second typed quad on a re-run would leave a policy recording two times, which
+        // `policy::read_policy` refuses as corrupt — a migration turning a good store bad.
+        let (_dir, store) = store_with_a_legacy_policy_stamp("2026-08-19T14:17:03Z");
+        for _ in 0..2 {
+            store
+                .transaction(|txn| RetypeIriPolicyStamps.apply(txn))
+                .expect("the step runs");
+        }
+        assert_eq!(recorded_stamp(&store).datatype(), xsd::DATE_TIME);
+    }
+
+    #[test]
+    fn a_stamp_the_step_cannot_read_is_left_exactly_as_found() {
+        // Deliberate: retyping it would assert it is a date and time, which it is not, and
+        // refusing here would turn one unreadable field in one vocabulary into a store that will
+        // not open. The read refuses it, naming the vocabulary, which is where it belongs.
+        for lexical in ["last Tuesday", "2026-08-19T14:17:03", "2026-08-19", ""] {
+            let (_dir, store) = store_with_a_legacy_policy_stamp(lexical);
+            store
+                .transaction(|txn| RetypeIriPolicyStamps.apply(txn))
+                .expect("the step runs");
+
+            let untouched = recorded_stamp(&store);
+            assert_ne!(
+                untouched.datatype(),
+                xsd::DATE_TIME,
+                "{lexical:?} is not a date and time and must not be labelled one"
+            );
+            assert_eq!(untouched.value(), lexical, "the record is left as found");
+        }
+    }
+
+    /// The whole thing through the only caller that matters: a store on disk stamped at the
+    /// previous format version, opened by this build.
+    ///
+    /// The other chain tests drive fixture migrations, which prove the machinery and not the step.
+    /// This one puts a real version-4 store in front of `Store::open` — the stamp rolled back, the
+    /// policy timestamp in the shape that build wrote — and asks what an operator upgrading would
+    /// actually get.
+    #[test]
+    fn opening_a_version_four_store_retypes_its_policy_stamp_and_records_that_it_did() {
+        let (dir, store) = store_with_a_legacy_policy_stamp("2026-08-19T14:17:03Z");
+        store
+            .transaction(|txn| stamp(txn, FORMAT_VERSION - 1))
+            .expect("roll the store back to the previous format version");
+        store.close().expect("the store closes cleanly");
+
+        let reopened = crate::Store::open(dir.path()).expect("an older store opens");
+
+        assert_eq!(reopened.format_version(), FORMAT_VERSION);
+        assert_eq!(
+            recorded_stamp(&reopened).datatype(),
+            xsd::DATE_TIME,
+            "opening it is what repairs it; nothing else runs on an operator's behalf"
+        );
+
+        let ran: Vec<&str> = reopened
+            .migrations()
+            .steps()
+            .iter()
+            .map(|step| step.id)
+            .collect();
+        assert_eq!(
+            ran,
+            ["0005-retype-iri-policy-stamps"],
+            "one step was owed and one ran: {ran:?}"
+        );
+
+        // And the policy still reads, which is the point of having repaired it.
+        let graph = GraphId::vocabulary("https://example.org/energy").expect("a vocabulary IRI");
+        let policy = reopened
+            .iri_policy(&graph)
+            .expect("readable")
+            .expect("a policy");
+        assert_eq!(policy.recorded_at(), "2026-08-19T14:17:03Z");
     }
 
     #[test]

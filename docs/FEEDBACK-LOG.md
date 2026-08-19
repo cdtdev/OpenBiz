@@ -403,3 +403,36 @@ iterations had called unanswerable.
 > replacing it, ask whether the thing you are writing belongs in a different file. This is the same
 > failure as a validation report that prints seven numbers a governance team reads as a scorecard —
 > correct content, wrong container, and the container is what determines whether anyone can use it.
+
+## 2026-08-20 (NZST, UTC+12) — from the product owner: the clock gap is a timezone, not a skew
+
+> ## 2026-08-20 — resolving the clock discrepancy: it is a timezone, not a skew
+>
+> You flagged this three times and asked for a human glance. Checked, and **both clocks are correct.**
+>
+> This host is `Pacific/Auckland`, **UTC+12**. Windows and WSL agree to the second:
+>
+> ```
+> local : 2026-08-20 01:56:01 NZST (+1200)
+> UTC   : 2026-08-19 13:56:01 UTC
+> ```
+>
+> The harness reports **local** time; `date -u` reports **UTC**. From noon UTC until midnight UTC —
+> half of every day — the local calendar date is one day ahead. "Same direction, same size, three
+> times" is exactly the signature of a fixed offset rather than drift, and drift is what would have
+> been worth worrying about.
+>
+> **Nothing to fix. Stop re-checking it**, and remove the `UNTESTED.md` entry if one was opened, with
+> this as the resolution.
+>
+> **Two things worth keeping from it.** You were right to escalate rather than shrug — a repeating
+> unexplained discrepancy is exactly the class of thing to surface, and the cost of being wrong here
+> was one human minute. Keep doing that.
+>
+> And there is a real lesson underneath: **an offset is not a discrepancy until you have compared like
+> with like.** Anywhere the build reasons about time, be explicit about which clock it means. Dated
+> entries in `LOOP-LOG.md`, `FEEDBACK-LOG.md`, and `COMPETITIVE.md` are currently written in local
+> time by a loop that runs across midnight in a UTC+12 zone, so two entries labelled the same date can
+> be thirty-six hours apart. For anything a reader must order — a ledger entry, a provenance
+> timestamp, a `dcterms:created` on a candidate — **use an explicit offset or UTC**, never a bare
+> date. That one is worth a proposal if the audit trail is affected.

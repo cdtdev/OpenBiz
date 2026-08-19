@@ -4090,3 +4090,96 @@ look competent disables the one signal that catches a stuck loop.
   command once. Nothing in this repository can do that, and I should stop re-deriving the question
   from each new command and let the human who reads this decide whether it is worth a usability
   session.
+
+## Iteration 55 — 2026-08-20 (NZST, UTC+12)
+- **Clean start, verified rather than assumed.** `main` at `f92446f`, tree clean, and the CI run for
+  that exact commit was `success` — read from `gh run list --branch main`. `promote-queue.json` is
+  `[]`; iteration 37's LCGFT fixture is unpromoted for the nineteenth iteration.
+- **`feedback.md` had 1691 bytes in it, drained before doing anything else** — copied into
+  `FEEDBACK-LOG.md` under a dated heading and truncated to zero before the work started, so anything
+  the human appends mid-iteration survives to the next one.
+- **The clock question is closed and it was never a defect.** The host is `Pacific/Auckland`, the
+  harness reports local time, `date -u` reports UTC, and for half of every day those differ by a
+  calendar date. Three iterations escalated it; the product owner checked and both clocks are right.
+  No `UNTESTED.md` entry existed to remove — the escalation had only ever been in "still uncertain"
+  lines — so there was nothing to close, and I am not to re-check it.
+- **The instruction underneath it was the real work, and it turned out the audit trail *was*
+  affected.** The rule: for anything a reader must order, an explicit offset or UTC, never a bare
+  date. Four things in this build write a wall-clock time, all in `openbiz-store`, all through
+  `oxsdatatypes::DateTime::now()`, which is UTC by construction. **The instants were right. Two
+  things around them were not.**
+- **A recorded IRI policy's stamp was a plain literal where the other two were typed.** Same lexical
+  form, `xsd:string` instead of `xsd:dateTime`, since the day it shipped. It read correctly
+  everywhere a person printed it and was invisible everywhere a machine compared it:
+  `FILTER (?at > "2000-01-01T00:00:00Z"^^xsd:dateTime)` over the system graph returned **zero** rows
+  for a policy plainly in range. Measured before and after — 0, then 1 — not inferred. The one
+  question the field exists to answer, *which minting convention was in force when that concept was
+  created*, is a comparison between a policy's stamp and a candidate's, and it silently could not be
+  asked.
+- **And the candidate stamps were the one field `read_record` did not re-validate.** That function
+  opens by saying every field is judged rather than trusted, and it means it for the target, both
+  payloads, the source token, the state, the counts and the decided-by pairing. `proposed_at` and
+  `decided_at` came back through the same reader that returns an agent's name, so a doctored store
+  saying a candidate was raised "last Tuesday" was read, kept, and printed to a reviewer as evidence.
+- **What shipped: one seam, `RecordedAt`** (`adr/0047`). UTC on write; on read, an explicit offset
+  required and *any* offset accepted, because a store may hold records this build did not write and
+  `+12:00` orders perfectly well. No comparison implemented in Rust — ordering is the datatype's own
+  semantics and SPARQL already answers it correctly, which is the entire reason the literal has to be
+  typed.
+- **Store format 5, and the chain's first migration that rewrites data.** A value it cannot read is
+  left exactly as found: retyping prose would assert something the record does not say, and refusing
+  at open would turn one bad field in one vocabulary into a store that will not start.
+- **The seam is tighter than the engine, and I checked rather than assumed — after guessing wrong.**
+  I wrote a test asserting `24:00:00Z` is accepted and *does not* compare, reading `adr/0014` as
+  saying so. It failed: `24:00:00` is in that ADR's **normalised** group, not its inert one. The two
+  genuinely inert forms are a leap second and a timezone past ±14:00, and `RecordedAt::parse` already
+  refuses both. So the true property is stronger than the one I set out to record — **everything this
+  build accepts is something the engine can order** — and the test now pins that from both sides.
+  A test written from a document I had misread would have shipped a false claim about our own store.
+- **Two bugs found by driving the binary, not by testing, both in this iteration's own code.**
+  (1) A refusal message printed with a 26-space run inside it — a Rust line continuation eaten by the
+  Python heredoc I wrote it through. **This is the identical defect iteration 54 recorded**, in the
+  same way, one iteration later. (2) Both new messages embedded the error mid-sentence and read
+  "records the pattern X for minting IRIs as having been recorded at "last Tuesday" is not a date and
+  time" — grammatical nonsense at the exact moment an operator needs to understand it.
+- **So the whitespace defect now has a test rather than a resolution.** Both message tests assert the
+  detail contains no double space. It has reached a user-facing string twice and is invisible to
+  every assertion that checks for a substring, which is why noticing it twice was luck.
+- **Mutation-checked, not just green.** Reverting `quads_of` to `new_simple_literal` — precisely the
+  defect this item repairs — fails the datatype test and the SPARQL one. Removing the timezone
+  requirement from `RecordedAt::parse` fails four tests across three modules. A real version-4 backup
+  restored through the built binary migrates, retypes, keeps pattern and attribution and instant, and
+  `openbiz policy` still reads it.
+- **The suite guarded the format bump against me, and I did what it asked.** Four `backup_restore`
+  tests failed with "the fixture is a version-4 backup; bumping the format means writing the fixture
+  for the new one and adding an older-format test beside it, not editing this number". So there is now
+  a `BACKUP_VERSION_4` fixture carrying a policy with a plain-string stamp — the first fixture whose
+  difference from the current format is in the *data* rather than only the stamp — and a test that
+  restores it through the real binary.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and never
+  through a pipe. **1154 Rust tests, 0 failed**, up from 1136: eighteen new — eight in `clock`, four
+  on the policy record, one on the candidate record, four on the migration, one end to end. UI
+  untouched, so no npm run. No new dependency, no new crate, no build artefact.
+- **Recorded:** `adr/0047`. Three `UNTESTED.md` entries, and they are the honest half: the seam is a
+  **convention, not an enforced rule** — a new `DateTime::now().to_string()` next phase compiles and
+  writes an unvalidated stamp, looking exactly like the code that was there before today; the trail
+  is orderable and **nothing in the product orders it**, which is the no-production-caller failure one
+  level up; and the migration reads every policy stamp at open with no measurement, an eighth entry in
+  the unmeasured-scale family and the first on the startup path. Two proposals, unpromoted: a
+  reader-facing timeline over the trail, and the same rule for the git and export paths, which raises
+  a workspace-shape question that is not mine to settle. `CLAUDE.md` §7 now requires an explicit
+  offset on every ledger entry, on product-owner instruction. `CAPABILITIES.md` and `BUILD-PLAN.md`
+  updated.
+- **Still uncertain:** whether closing the *type* of the defect is worth as much as closing the
+  instance, and I have two iterations of evidence pointing opposite ways. The policy stamp was wrong
+  for four format versions because one of four writers was written differently from the other three,
+  and nothing noticed — the seam removes today's four instances but the `UNTESTED.md` entry says
+  plainly that it does not stop the fifth. I know the guard that would (read the crate's own source
+  and assert `DateTime::now` appears only in `clock.rs`) and I did not build it, because a test that
+  greps its own source felt like a trick rather than engineering. Then the same iteration reproduced
+  iteration 54's whitespace bug *verbatim*, having read that entry an hour earlier, and the thing that
+  will actually stop the third occurrence is the crude mechanical assertion I did add. That is one
+  data point each way in a single iteration. What I cannot tell from here is whether "no unusual
+  tests" is a standard worth keeping or the reason this loop keeps rediscovering its own defects, and
+  it is not a question a fixture can answer.

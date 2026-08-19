@@ -297,6 +297,14 @@ The editorial operations all produce candidates:
 | `openbiz deprecate <graph> <concept> [--replaced-by …]` | Retires a term **in place**: marks it `owl:deprecated`, records the successor with `dcterms:isReplacedBy`, and **deletes nothing at all**, so the IRI keeps resolving — the one thing a merge cannot offer. SKOS has no deprecation term, so both come from OWL 2 and Dublin Core rather than from anything invented here ([`adr/0040`](adr/0040-a-deprecation-retires-a-concept-and-strands-what-it-cannot-decide.md)). |
 | `openbiz reinstate <graph> <resource>` | Takes a retirement back, removing the marker and the recorded successor **together** — a current concept that records a successor is a contradiction — and keeping every `skos:changeNote`, because the retirement happened and a history tidied until it never appears is the opaque change log this product exists to replace ([`adr/0042`](adr/0042-a-reinstatement-removes-the-status-and-keeps-the-history.md)). |
 
+**Every record in the trail says which clock it is on.** A candidate raised, a candidate decided,
+an IRI policy recorded and a migration applied are each stamped in **UTC**, as a typed
+`xsd:dateTime` — so the trail is not merely readable but *orderable*, by an ordinary SPARQL query
+over `<urn:openbiz:graph:system>` rather than by trusting our own rendering of it. A record whose
+timestamp names no timezone cannot be placed against any other record, so the store refuses one on
+the way back in rather than showing a reviewer a date nobody can order
+([`adr/0047`](adr/0047-the-audit-trail-says-which-clock.md)).
+
 The refusals matter as much as the operations. `merge`'s first working version produced a vocabulary
 violating S14 and S27 from ordinary input, so the check is now the *whole* condition set run against
 the vocabulary the change would leave — not the subset an author would have predicted. And every one

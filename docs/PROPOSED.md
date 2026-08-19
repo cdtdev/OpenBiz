@@ -1770,3 +1770,41 @@ worth nothing if they did not write it._
   committed with the item in the same PR and `main` has not yet been updated locally, so it should
   compare against the remote and treat "unpushed" and "unlanded" as distinct.
 - **Suggested phase:** Phase 14, or alongside the next product-owner pass.
+
+### A reader-facing view of the audit trail, in time order
+- **Status:** proposed.
+- **Gap:** as of `adr/0047` every timestamp in the trail is a typed `xsd:dateTime` carrying an
+  explicit offset, so the trail **can** be ordered and compared in SPARQL. Nothing in the product
+  does. There is no `openbiz history`, the candidate list is not sorted by time, and the one question
+  the policy stamp exists to answer — which minting convention was in force when that concept was
+  created — still requires a reader to write SPARQL against `urn:openbiz:graph:system` and know the
+  predicate names. The capability landed; the feature did not.
+- **Why load-bearing:** `CLAUDE.md` names governance as the substrate and explainability as a
+  first-class feature, and the trail is where both are cashed out. A governance team defending a
+  decision to an auditor needs *what happened, in order, and who decided it* — which is exactly the
+  shape the trail now supports and exactly what no command prints. It is also the honest completion
+  of this iteration: building the ordering and never offering it is the "built but no production
+  caller" failure one level up, and it is recorded in `UNTESTED.md` as such.
+- **Cost & impact:** one to two iterations for a CLI reader over candidates, policies, and migrations
+  merged into one timeline. No new dependency, no new store shape — the records are already there and
+  already typed. The open design question is scope: whether it reads the system graph only, or also
+  the retirement and provenance marks inside vocabularies, which are a different shape.
+- **Suggested phase:** Phase 2, after the candidate seam's HTTP and interface item.
+
+### Every timestamp outside `openbiz-store` needs the same rule applied
+- **Status:** proposed.
+- **Gap:** `adr/0047` covers the four wall-clock stamps that exist today, all of them in the store.
+  The product owner's rule is broader than that and the rest of it is unbuilt rather than wrong:
+  `openbiz-git` will write commit and authorship times, exports will carry `dcterms:modified`, and
+  PROV-O `generatedAtTime` is the audit model `CLAUDE.md` §2 commits to and Phase 2 has not reached.
+  Each is a place where a bare date or a server-local time would reintroduce exactly the defect this
+  iteration repaired, in a crate that has no reason to know `RecordedAt` exists.
+- **Why load-bearing:** the defect this iteration fixed shipped because one of four writers was
+  written differently from the other three, and nothing noticed for four format versions. The same
+  divergence is available to every future writer, and the ones listed above are the ones that reach a
+  *published* artefact rather than only our own system graph — a wrong timestamp in an export is one
+  a receiving tool believes.
+- **Cost & impact:** small per site and it is not one task. The real question a human should decide
+  is whether `RecordedAt` moves out of `openbiz-store` into a crate the git and export paths can also
+  depend on, which is a workspace-shape decision and not the loop's to take.
+- **Suggested phase:** Phase 3, or whenever `openbiz-git` starts writing.

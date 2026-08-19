@@ -818,7 +818,8 @@ mod tests {
             vec![
                 "0002-register-system-graph",
                 "0003-allow-candidate-graphs",
-                "0004-allow-candidate-removals"
+                "0004-allow-candidate-removals",
+                "0005-retype-iri-policy-stamps"
             ],
             "a version-1 backup runs the whole chain up to this build's format version"
         );
