@@ -5,6 +5,7 @@
 //! represent an ISO 25964 thesaurus — and our enterprise buyers have ISO 25964 in their
 //! requirements. See `docs/COMPETITIVE.md`.
 
+mod ancestry;
 mod labels;
 mod model;
 mod relations;
@@ -17,6 +18,7 @@ mod xl;
 #[cfg(test)]
 mod scale;
 
+pub use ancestry::{Ancestry, AncestryBound};
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
     SKOS_PREF_LABEL, XSD_STRING,

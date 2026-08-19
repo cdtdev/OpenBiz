@@ -187,9 +187,50 @@ records, rule by rule, whose. Two literal forms on one label is the specificatio
 "cardinality exactly 1" entails that a form exists without requiring the graph to state it, and
 refusing a partial export would be refusing valid data.
 
-`skosxl:labelRelation` is not read yet — see [`docs/UNTESTED.md`](docs/UNTESTED.md).
+`skosxl:labelRelation` **is** read — it is where ISO 25964 puts an acronym relationship, which
+plain SKOS cannot express — and a link entails its converse because S62 makes the property
+symmetric. A *refinement* of it is deliberately not closed, because Appendix B.4.4.1 warns that a
+sub-property of a symmetric property is not necessarily symmetric. See
+[`docs/adr/0022`](docs/adr/0022-skos-xl-label-relations.md).
 
 `inspect` only reads. It writes nothing, and a test asserts the store is byte-for-byte unchanged.
+
+### Reading the hierarchy
+
+```sh
+openbiz ancestors https://example.org/regions https://example.org/regions/japan
+```
+
+`skos:broader` records one step. §8 of the SKOS Reference makes `skos:broaderTransitive` an
+`owl:TransitiveProperty` (S24), so a chain of one-step links entails a link from each concept to
+every concept above it — and that closure is **never stored**, at any vocabulary size. A chain of
+100 000 links is a legal SKOS graph and its closure is five thousand million pairs, and a stored
+pair could cite the rule but not name the path it took. So it is walked on demand:
+
+```
+<…/japan>  ("Japan"@en)
+in https://example.org/regions
+
+2 concept(s) are above it, by 2 link(s) walked:
+  <…/apac>  ("Asia-Pacific"@en)
+    <…/japan> → <…/eastasia> → <…/apac>
+    because <…/japan> skos:broaderTransitive <…/eastasia>, <…/eastasia> skos:broaderTransitive <…/apac>
+    and S24: skos:broaderTransitive and skos:narrowerTransitive are each instances of owl:TransitiveProperty.
+```
+
+The path is the derivation. For a link nobody wrote, showing the chain is the difference between a
+verdict and an explanation.
+
+That walk is also what makes §8.4's integrity condition checkable. **S27** makes `skos:related`
+disjoint with `skos:broaderTransitive` — the SKOS Reference treats hierarchical and associative
+links as "fundamentally distinct in nature" and takes the stronger position that the disjointness
+reaches *indirect* hierarchical links too — so a vocabulary saying `<A> broader <B>`, `<B> broader
+<C>` and `<A> related <C>` is not a SKOS vocabulary, even though nobody wrote a link from `<A>` to
+`<C>`. `inspect` reports it, with the chain that makes it actionable.
+
+The walk is bounded, and a walk that hit its bound says so rather than reporting what it managed
+to reach as the answer — a check that gave up is not a check that passed. See
+[`docs/adr/0025`](docs/adr/0025-transitive-ancestry-by-walking.md).
 
 ## Development
 

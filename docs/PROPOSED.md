@@ -1137,3 +1137,58 @@ has. `README.md` is the right home for it and a human wrote it._
   silence it, which would be worse than no check; the mitigation is that a phrase only enters the
   ledger when a pass actually retires a claim, so the list stays short.
 - **Suggested phase:** Phase 14, or alongside the next product-owner pass.
+
+### Measure the ancestry walk at scale, the way `adr/0024` measured storing
+
+- **Status:** proposed.
+- **Gap:** `adr/0024` measured what materialising S24's closure would cost and ruled it out.
+  Iteration 28 built the alternative — a bounded walk, answered on read — and measured nothing
+  about it. So the repository has a hard number for the option it rejected and none for the one it
+  shipped. `crates/openbiz-skos/src/scale.rs` covers the relation *model* at 10k, 100k and 1M
+  links across four hierarchy shapes and does not touch `CoreModel::ancestry`.
+- **Why load-bearing:** the S27 pass runs one walk per concept with a `skos:related`, inside every
+  `openbiz inspect`, and Phase 3's concept tree will ask the same question of every visible node.
+  That is the quadratic iteration 26's loop-log flagged as the open risk of answering on read, and
+  it is now shipped rather than hypothetical. It also decides `AncestryBound::DEFAULT`: 100 000
+  ancestors and 1 000 000 links are a judgement about vocabularies nobody here has seen, and too
+  low refuses a real thesaurus an answer while too high makes the walk the reason a request hangs.
+- **What is being asked for:** extend `scale.rs` to the walk, at the same sizes and shapes, plus
+  one shape it does not have — a deep hierarchy with an associative link on every concept, which
+  is the shape that makes the S27 pass expensive. Report per-walk time and the whole-vocabulary
+  S27 pass separately, because they are different questions: one is what a concept-tree click
+  costs and the other is what an inspect costs. Then either confirm the default bound or move it,
+  in an ADR that records the number.
+- **Why the loop is not deciding it:** it is a second measurement iteration in the same area, and
+  `CLAUDE.md` §3's "stop at one item" plus iteration 26's own finding — that measuring a traversal
+  which does not exist yet produces a number that agrees with you — both say it belongs in its own
+  iteration rather than bolted onto the one that built the thing. It is also the shape of work a
+  human may reasonably want to sequence against Phase 3 instead.
+- **Cost & impact:** one iteration. No new dependency: the existing harness reads
+  `/proc/self/status` rather than pulling a crate in. Runtime impact is nil — the harness is
+  `#[cfg(test)]` and the expensive sizes are `#[ignore]`d.
+- **Suggested phase:** Phase 2, before the concept-tree query API item; or Phase 3 alongside it.
+
+### Make `openbiz inspect` say which integrity conditions it checked
+
+- **Status:** proposed.
+- **Gap:** the report closes with "no SKOS integrity condition is violated by this graph". That
+  sentence is true of every condition this build implements and silent about every one it does
+  not. Iteration 28 fixed the sharpest case — a check that started and hit its bound now reports
+  `Severity::Unchecked` and the closing sentence changes — but a condition that was never
+  implemented at all still produces the confident sentence, and nothing in the output distinguishes
+  "checked and clean" from "not looked for".
+- **Why load-bearing:** the whole pitch of the report is that a governance team can take it to an
+  auditor. A clean bill of health that does not say what was examined is the incumbents' failure
+  `docs/COMPETITIVE.md` records, reproduced by us. Phase 2 has "all SKOS integrity conditions, each
+  with a test citing its S-number" still open, which means the gap between what the sentence
+  implies and what is true is at its widest right now.
+- **What is being asked for:** an enumeration the report can print — the S-numbers this build
+  evaluates, and for each the number of resources it was evaluated over — so the closing sentence
+  becomes a claim with a scope. It probably wants to be a method on `CoreModel` rather than a list
+  maintained in the report, or it will drift out of date exactly like the sentence it replaces.
+- **Why the loop is not deciding it:** it changes the shape of the model's public answer and it
+  overlaps the open "all SKOS integrity conditions" plan item, so doing it now would half-build
+  that item out of order.
+- **Cost & impact:** one iteration on its own; close to free if done as part of the all-conditions
+  item, which is the better sequencing.
+- **Suggested phase:** Phase 2, as part of "All SKOS integrity conditions from the specification".

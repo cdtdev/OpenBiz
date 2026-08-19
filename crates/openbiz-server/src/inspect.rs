@@ -49,7 +49,7 @@ pub fn inspect(store: &Store, graph: &str) -> Result<String, CommandError> {
 ///
 /// The two types exist separately so that neither crate depends on the other, which is the
 /// decision `docs/adr/0019` records. This is where that decision is paid for.
-fn convert(statement: StatementRef<'_>) -> Statement {
+pub(crate) fn convert(statement: StatementRef<'_>) -> Statement {
     Statement {
         subject: node(statement.subject),
         predicate: statement.predicate.to_owned(),
@@ -338,10 +338,18 @@ fn report(graph: &str, model: &CoreModel) -> String {
         if stated_transitive > 0 {
             out.push_str(&format!(
                 "  {stated_transitive} link(s) stated with skos:broaderTransitive or \
-                 skos:narrowerTransitive, read one step at a time — the transitive closure S24 \
-                 licenses is not taken\n"
+                 skos:narrowerTransitive rather than with skos:broader\n"
             ));
         }
+        // S24 is answered by walking, not by storing, so the counts above are the *links* and
+        // never the closure. Saying which is not pedantry: an operator who read "1 200
+        // hierarchical links" as "1 200 ancestor relationships" would under-count a deep
+        // vocabulary badly, and `openbiz ancestors` is the command that answers the other
+        // question. See `docs/adr/0025`.
+        out.push_str(
+            "  counted as stated links; S24's transitive closure is not stored — \
+             `openbiz ancestors <graph> <concept>` walks it\n",
+        );
     }
 
     let derivations = model.derivations();
@@ -361,10 +369,18 @@ fn report(graph: &str, model: &CoreModel) -> String {
         out.push_str(&format!("  [{}] {finding}\n", finding.severity()));
     }
 
-    out.push_str(if model.is_consistent() {
-        "\nno SKOS integrity condition is violated by this graph.\n"
-    } else {
-        "\nthis graph violates a SKOS integrity condition and is not a SKOS vocabulary.\n"
+    // Three sentences and not two. A check that gave up is not a check that passed, and until
+    // this build had a bounded walk in it there was no way for the report to say so — which
+    // `docs/UNTESTED.md` recorded as the sharpest false green in the tree.
+    out.push_str(match (model.is_consistent(), model.checks_are_complete()) {
+        (false, _) => {
+            "\nthis graph violates a SKOS integrity condition and is not a SKOS vocabulary.\n"
+        }
+        (true, true) => "\nno SKOS integrity condition is violated by this graph.\n",
+        (true, false) => {
+            "\nno SKOS integrity condition is violated by the part of this graph that was \
+             checked — one or more checks above were abandoned and say so.\n"
+        }
     });
 
     out

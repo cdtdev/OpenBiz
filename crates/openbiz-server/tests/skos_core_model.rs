@@ -676,3 +676,114 @@ fn inspect_says_nothing_about_semantic_relations_for_a_flat_vocabulary() {
 
     assert!(!report.contains("semantic relations:"), "{report}");
 }
+
+/// S24 end to end: a chain three deep, walked by the real binary against a store on disk, with
+/// the derivation printed for the link nobody wrote. Everything in between — the file, the
+/// proposal, the approval, the store, the model, the walk — has to work for this to read.
+#[test]
+fn ancestors_walks_a_chain_off_disk_and_names_s24_for_the_step_nobody_stated() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "hierarchy.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:japan a skos:Concept ; skos:prefLabel \"Japan\"@en ; skos:broader ex:eastasia .\n\
+         ex:eastasia a skos:Concept ; skos:prefLabel \"East Asia\"@en ; skos:broader ex:apac .\n",
+    );
+
+    let output = run(
+        dir.path(),
+        &["ancestors", REGIONS, "https://example.org/regions/japan"],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(report.contains("2 concept(s) are above it"), "{report}");
+    assert!(
+        report.contains("(\"East Asia\"@en)") && report.contains("(\"Asia-Pacific\"@en)"),
+        "an operator reads labels, not IRIs: {report}"
+    );
+    assert!(
+        report.contains(
+            "<https://example.org/regions/japan> → <https://example.org/regions/eastasia> → \
+             <https://example.org/regions/apac>"
+        ),
+        "the path is the derivation for a transitive conclusion: {report}"
+    );
+    assert!(
+        report.contains(
+            "S24: skos:broaderTransitive and skos:narrowerTransitive are each instances of \
+             owl:TransitiveProperty."
+        ),
+        "the report must quote the statement, not merely cite it: {report}"
+    );
+    assert!(report.contains("that is all of them."), "{report}");
+
+    // And the direction is real: nothing is above the top of the chain.
+    let top = stdout(&run(
+        dir.path(),
+        &["ancestors", REGIONS, "https://example.org/regions/apac"],
+    ));
+    assert!(top.contains("nothing is above it"), "{top}");
+}
+
+/// A concept the vocabulary does not hold must not read as a root concept, and must not exit 0.
+#[test]
+fn ancestors_refuses_a_concept_the_vocabulary_does_not_hold() {
+    let dir = authored();
+
+    let output = run(
+        dir.path(),
+        &["ancestors", REGIONS, "https://example.org/regions/atlantis"],
+    );
+
+    assert!(
+        !output.status.success(),
+        "a concept that is not there must fail: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).contains("atlantis"), "{}", stderr(&output));
+}
+
+/// §8.5's Example 27 through the whole product: the clash is between concepts the author never
+/// linked directly, so a build without S24 reports this vocabulary as clean. That is the false
+/// green `docs/UNTESTED.md` recorded from iteration 24 until this one.
+#[test]
+fn inspect_reports_the_indirect_s27_clash_of_example_27() {
+    let dir = authored();
+
+    let clean = stdout(&run(dir.path(), &["inspect", REGIONS]));
+    assert!(
+        clean.contains("no SKOS integrity condition is violated"),
+        "{clean}"
+    );
+
+    import_and_approve(
+        dir.path(),
+        "clash.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:japan a skos:Concept ; skos:broader ex:eastasia ; skos:related ex:apac .\n\
+         ex:eastasia a skos:Concept ; skos:broader ex:apac .\n",
+    );
+
+    let output = run(dir.path(), &["inspect", REGIONS]);
+    let report = stdout(&output);
+
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "{report}"
+    );
+    assert!(
+        report.contains("skos:related is disjoint with the property skos:broaderTransitive."),
+        "the finding must quote S27, not merely cite it: {report}"
+    );
+    assert!(
+        report.contains(
+            "<https://example.org/regions/japan> skos:broaderTransitive \
+             <https://example.org/regions/eastasia>"
+        ),
+        "the chain is what makes the clash actionable, because nobody wrote the link: {report}"
+    );
+}

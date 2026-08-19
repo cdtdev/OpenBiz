@@ -64,6 +64,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::ancestry::AncestryBound;
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::ns;
 use crate::relations::{RelationOrigin, SemanticRelation, SKOS_SEMANTIC_RELATION};
@@ -205,8 +206,10 @@ pub enum SkosRule {
     S21,
     S22,
     S23,
+    S24,
     S25,
     S26,
+    S27,
     S29,
     S31,
     S33,
@@ -251,8 +254,10 @@ impl SkosRule {
             SkosRule::S21 => "S21",
             SkosRule::S22 => "S22",
             SkosRule::S23 => "S23",
+            SkosRule::S24 => "S24",
             SkosRule::S25 => "S25",
             SkosRule::S26 => "S26",
+            SkosRule::S27 => "S27",
             SkosRule::S29 => "S29",
             SkosRule::S30 => "S30",
             SkosRule::S31 => "S31",
@@ -319,10 +324,15 @@ impl SkosRule {
                  sub-property of skos:narrowerTransitive."
             }
             SkosRule::S23 => "skos:related is an instance of owl:SymmetricProperty.",
+            SkosRule::S24 => {
+                "skos:broaderTransitive and skos:narrowerTransitive are each instances of \
+                 owl:TransitiveProperty."
+            }
             SkosRule::S25 => "skos:narrower is owl:inverseOf the property skos:broader.",
             SkosRule::S26 => {
                 "skos:narrowerTransitive is owl:inverseOf the property skos:broaderTransitive."
             }
+            SkosRule::S27 => "skos:related is disjoint with the property skos:broaderTransitive.",
             SkosRule::S29 => "skos:OrderedCollection is a sub-class of skos:Collection.",
             SkosRule::S30 => {
                 "skos:member and skos:memberList are each instances of owl:ObjectProperty."
@@ -589,6 +599,15 @@ pub enum Severity {
     Inconsistent,
     /// SKOS permits it; we think it is a mistake. Our judgement, not the specification's.
     IllFormed,
+    /// A check could not be finished, so we do not know whether the graph passes it.
+    ///
+    /// Not a statement about the graph but about us, and it exists because the alternative is
+    /// worse: a bounded check that gave up and reported nothing is indistinguishable from one
+    /// that ran to the end and found nothing, and the second reading is a false green on the
+    /// exact vocabularies most likely to be broken. [`CoreModel::is_consistent`] deliberately
+    /// stays `true` in the presence of one — we have not found a violation — and
+    /// [`CoreModel::checks_are_complete`] is the question a report must ask beside it.
+    Unchecked,
 }
 
 impl fmt::Display for Severity {
@@ -596,6 +615,7 @@ impl fmt::Display for Severity {
         match self {
             Severity::Inconsistent => write!(f, "inconsistent"),
             Severity::IllFormed => write!(f, "ill-formed"),
+            Severity::Unchecked => write!(f, "unchecked"),
         }
     }
 }
@@ -813,6 +833,41 @@ pub enum Finding {
         /// The properties that carry it, in a stable order.
         kinds: Vec<LabelKind>,
     },
+    /// Two concepts are joined by both an associative and a hierarchical link. S27.
+    ///
+    /// §8.4's only integrity condition, and §8.6.10 explains the position it takes: the
+    /// specification treats the hierarchical and associative relations as "fundamentally
+    /// distinct in nature", and takes "the stronger position that, not only are the immediate
+    /// (i.e., direct) hierarchical and associative links disjoint, but associative links are also
+    /// disjoint with **indirect** hierarchical links".
+    ///
+    /// So the clash is often not visible in the file. Examples 27 and 29 each state a two-step
+    /// hierarchy and an associative link between its ends, and the specification marks both "not
+    /// consistent" — which is why the `path` is carried rather than the endpoints alone. An
+    /// author told "these two clash" for concepts they never linked directly has been given a
+    /// verdict; one shown the chain has been given the edit to make.
+    RelatedAndBroaderTransitive {
+        /// The concept the walk started from.
+        concept: Node,
+        /// The concept it is both `skos:related` to and transitively broader than.
+        related: Node,
+        /// The hierarchy from `concept` up to `related`, `concept` first. Two entries when the
+        /// clash is a direct link (Example 26); more when it is only entailed (Examples 27, 29).
+        path: Vec<Node>,
+    },
+    /// The walk of a concept's ancestors hit its bound, so S27 was not checked for it.
+    ///
+    /// [`Severity::Unchecked`], because it says nothing about whether the graph is consistent.
+    /// It is here rather than in a log because the report's closing sentence would otherwise
+    /// claim a check this graph did not get.
+    AncestryBoundReached {
+        /// The concept whose ancestors were being walked.
+        concept: Node,
+        /// How many ancestors had been reached when it stopped.
+        reached: usize,
+        /// How many links had been followed when it stopped.
+        links_walked: usize,
+    },
 }
 
 impl Finding {
@@ -832,11 +887,15 @@ impl Finding {
             Finding::NodeOnDatatypeProperty { .. }
             | Finding::MultipleLiteralForms { .. }
             | Finding::XlLabelPropertiesClash { .. } => Severity::Inconsistent,
+            // §8.4 is the only integrity condition §8 states, and §8.6.10 says the disjointness
+            // reaches indirect links as well as direct ones.
+            Finding::RelatedAndBroaderTransitive { .. } => Severity::Inconsistent,
             Finding::DefectiveMemberList { .. }
             | Finding::MultipleMemberLists { .. }
             | Finding::NonPlainLiteralLabel { .. }
             | Finding::NoLiteralForm { .. }
             | Finding::NonPlainLiteralForm { .. } => Severity::IllFormed,
+            Finding::AncestryBoundReached { .. } => Severity::Unchecked,
         }
     }
 }
@@ -971,6 +1030,32 @@ impl fmt::Display for Finding {
                     .collect::<Vec<_>>()
                     .join(" and "),
                 SkosRule::S58,
+            ),
+            Finding::RelatedAndBroaderTransitive {
+                concept,
+                related,
+                path,
+            } => write!(
+                f,
+                "{concept} skos:related {related}, and {related} is also above it in the \
+                 hierarchy\n    by {}\n    and {}\n    and {}",
+                path.windows(2)
+                    .map(|step| format!("{} skos:broaderTransitive {}", step[0], step[1]))
+                    .collect::<Vec<_>>()
+                    .join(", then "),
+                SkosRule::S24,
+                SkosRule::S27,
+            ),
+            Finding::AncestryBoundReached {
+                concept,
+                reached,
+                links_walked,
+            } => write!(
+                f,
+                "the walk up from {concept} stopped after {reached} ancestor(s) and \
+                 {links_walked} link(s) without reaching the top, so S27 was **not** checked for \
+                 it\n    and {}\n    this says nothing about whether the graph violates it",
+                SkosRule::S27,
             ),
         }
     }
@@ -1119,10 +1204,12 @@ impl Resource {
     /// author wrote downwards reads upwards too and every link appears under four properties. Each
     /// entry says which of those statements produced it, or that the graph stated it outright.
     ///
-    /// **Not closed under S24.** `skos:broaderTransitive` holds one-step links only — those S22
-    /// lifted from `skos:broader` and those the graph stated itself. Walking an ancestor chain is
-    /// the next build-plan item; a caller that treats this map as the closure will get a partial
-    /// answer, which is why the accessor is named for the property and not for "ancestors".
+    /// **Not closed under S24, permanently and by design.** `skos:broaderTransitive` holds
+    /// one-step links only — those S22 lifted from `skos:broader` and those the graph stated
+    /// itself. A caller that treats this map as the closure will get a partial answer, which is
+    /// why the accessor is named for the property and not for "ancestors". The closure is
+    /// [`CoreModel::ancestry`], which walks these links on read; `docs/adr/0025` records why it
+    /// is a walk and not a table.
     pub fn relations(&self, relation: SemanticRelation) -> Option<&BTreeMap<Node, RelationOrigin>> {
         self.semantic_relations.get(&relation)
     }
@@ -1274,11 +1361,27 @@ impl CoreModel {
     }
 
     /// Whether any finding says the graph violates a SKOS integrity condition.
+    ///
+    /// **Read it beside [`CoreModel::checks_are_complete`].** `true` means no violation was
+    /// found, which is not the same sentence as "there is none" when a check gave up partway.
     pub fn is_consistent(&self) -> bool {
         !self
             .findings
             .iter()
             .any(|finding| finding.severity() == Severity::Inconsistent)
+    }
+
+    /// Whether every condition this build implements was actually evaluated over the whole graph.
+    ///
+    /// `false` when a bounded walk was abandoned — see [`Finding::AncestryBoundReached`]. A
+    /// report that prints [`CoreModel::is_consistent`] without this one is claiming a check it
+    /// may not have finished, which is the failure `docs/UNTESTED.md` recorded against the
+    /// closing sentence of `openbiz inspect` while S27 was unimplemented.
+    pub fn checks_are_complete(&self) -> bool {
+        !self
+            .findings
+            .iter()
+            .any(|finding| finding.severity() == Severity::Unchecked)
     }
 }
 
@@ -1318,11 +1421,22 @@ pub struct CoreModelBuilder {
     label_relations: BTreeSet<(Node, Node)>,
     semantic_relations: BTreeMap<SemanticRelation, BTreeSet<(Node, Node)>>,
     semantic_relation_ends: BTreeSet<(Node, Node)>,
+    ancestry_bound: AncestryBound,
     findings: Vec<Finding>,
     statements_read: usize,
 }
 
 impl CoreModelBuilder {
+    /// How far S27's check may walk up the hierarchy before it gives up and says so.
+    ///
+    /// [`AncestryBound::DEFAULT`] unless a caller sets it. Configurable because the default is a
+    /// backstop against a pathological graph rather than a product limit, and because a test
+    /// should be able to hit it without generating a hundred thousand concepts to do it.
+    pub fn with_ancestry_bound(mut self, bound: AncestryBound) -> Self {
+        self.ancestry_bound = bound;
+        self
+    }
+
     /// Offer one statement. Anything outside the core model is counted and discarded.
     pub fn push(&mut self, statement: Statement) {
         self.statements_read += 1;
@@ -1539,8 +1653,59 @@ impl CoreModelBuilder {
         self.entail_dumbed_down_labels(&mut model);
         Self::check_disjointness(&mut model);
         Self::check_label_conditions(&mut model);
+        // S27 last, and after `close_semantic_relations` by necessity rather than by taste: it is
+        // the only condition read off a *derived* structure that no pass materialises, so it has
+        // to run when `skos:broaderTransitive` and `skos:related` are both final. It is also the
+        // only pass whose cost is not linear in the statements read — see its own note.
+        Self::check_semantic_relation_disjointness(&mut model, self.ancestry_bound);
 
         model
+    }
+
+    /// S27 — `skos:related` is disjoint with `skos:broaderTransitive`. §8.4.
+    ///
+    /// The condition is checked by **walking**, not by consulting a stored closure: `docs/adr/0025`
+    /// records why, and [`CoreModel::ancestry`] is the walk. For each concept with an associative
+    /// link, the hierarchy above it is walked once and the associative links are looked up in the
+    /// result — so the cost is one walk per concept that has a `skos:related`, and a vocabulary
+    /// with no associative links pays nothing at all.
+    ///
+    /// **One direction of the walk is enough, and that is not an optimisation.** S23 has already
+    /// put every associative link at both of its ends, so a clash reachable by walking up from
+    /// either concept is found from whichever end the hierarchy runs. §8.4's own note — "because
+    /// skos:related is a symmetric property, and skos:broaderTransitive and
+    /// skos:narrowerTransitive are inverses, skos:related is therefore also disjoint with
+    /// skos:narrowerTransitive" — is exactly this argument, and it is why Example 29, which
+    /// states its hierarchy with `skos:narrower`, is caught by an upward walk.
+    ///
+    /// A pair violating it in both directions (a cycle plus an associative link) is reported
+    /// twice, because it is two violating pairs and not one seen twice.
+    fn check_semantic_relation_disjointness(model: &mut CoreModel, bound: AncestryBound) {
+        let mut found: Vec<Finding> = Vec::new();
+        for (node, resource) in model.resources() {
+            let Some(associates) = resource.relations(SemanticRelation::Related) else {
+                continue;
+            };
+            let above = model.ancestry(node, bound);
+            if !above.is_complete() {
+                found.push(Finding::AncestryBoundReached {
+                    concept: node.clone(),
+                    reached: above.len(),
+                    links_walked: above.links_walked(),
+                });
+            }
+            for related in associates.keys() {
+                let Some(path) = above.path_to(related) else {
+                    continue;
+                };
+                found.push(Finding::RelatedAndBroaderTransitive {
+                    concept: node.clone(),
+                    related: related.clone(),
+                    path,
+                });
+            }
+        }
+        model.findings.extend(found);
     }
 
     /// S50, S54, S60 and S61 — the four rules that make something a `skosxl:Label` without an
@@ -1651,8 +1816,10 @@ impl CoreModelBuilder {
     /// states both directions has two asserted links and no derivation — symmetry means they are
     /// the same link, not two.
     ///
-    /// **S24 is not applied here.** `skos:broaderTransitive` comes out of this holding one-step
-    /// links only. See the [`relations`](crate::SemanticRelation) module.
+    /// **S24 is not applied here, and never will be.** `skos:broaderTransitive` comes out of this
+    /// holding one-step links only; the transitivity is answered by [`CoreModel::ancestry`],
+    /// which walks them on read. `docs/adr/0025` records why storing it is not an option at any
+    /// vocabulary size. See the [`ancestry`](crate::Ancestry) module.
     fn close_semantic_relations(&self, model: &mut CoreModel) {
         for (relation, links) in &self.semantic_relations {
             for (from, to) in links {
@@ -4548,7 +4715,7 @@ mod tests {
         );
     }
 
-    // ---- Semantic relations, §8 (S18–S26). S24 and S27 are the next build-plan item. ----
+    // ---- Semantic relations, §8 (S18–S27). ----
 
     /// The link the graph stated, and the three the four closure rules entail from it.
     #[test]
@@ -4854,35 +5021,153 @@ mod tests {
         );
     }
 
-    /// §8.6.2's Example 26 is inconsistent, and we do **not** say so yet. S27 is the next
-    /// build-plan item and this asserts the honest current behaviour rather than a claim we
-    /// cannot back — see `docs/UNTESTED.md`. It also pins what *is* true today: both links are
-    /// there, closed, and waiting for the condition that reads them.
+    /// §8.5, all five examples, each asserted to the consistency the specification prints beside
+    /// it. This is the acceptance test for S24 and S27 together, and the five are one test
+    /// because the point of the set is the *contrast*: 25 is consistent and 26–29 are not, and a
+    /// build that got them all wrong in the same direction would pass four of five split tests.
     #[test]
-    fn example_26_is_not_yet_reported_and_its_links_are_both_present() {
-        let (a, b) = (ex("A"), ex("B"));
-        let model =
-            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&a, &skos("related"), &b)]);
+    fn section_8_5_examples_25_to_29_come_out_as_the_specification_marks_them() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
 
-        assert!(model
-            .resource(&a)
-            .and_then(|resource| resource.relations(SemanticRelation::BroaderTransitive))
-            .is_some_and(|links| links.contains_key(&b)));
-        assert!(model
-            .resource(&a)
-            .and_then(|resource| resource.relations(SemanticRelation::Related))
-            .is_some_and(|links| links.contains_key(&b)));
-        assert!(
-            model.is_consistent(),
-            "S27 is not implemented, so nothing may claim to have checked it"
+        // Example 25 (consistent): `<A> skos:broader <B> ; skos:related <C> .`
+        let example_25 =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&a, &skos("related"), &c)]);
+        assert!(example_25.is_consistent(), "{:?}", example_25.findings());
+        assert!(example_25.checks_are_complete());
+
+        // Example 26 (not consistent): `<A> skos:broader <B> ; skos:related <B> .` — the direct
+        // clash, one step, visible in the file.
+        let example_26 =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&a, &skos("related"), &b)]);
+        assert!(!example_26.is_consistent());
+        assert_eq!(
+            example_26
+                .findings()
+                .iter()
+                .filter(|finding| matches!(finding, Finding::RelatedAndBroaderTransitive { .. }))
+                .count(),
+            1,
+            "one violating pair, reported once: {:?}",
+            example_26.findings()
+        );
+
+        // Example 27 (not consistent): the clash "is not immediately obvious" — it needs S22 and
+        // then S24 before the two ends are joined.
+        let example_27 = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&a, &skos("related"), &c),
+            s(&b, &skos("broader"), &c),
+        ]);
+        assert!(!example_27.is_consistent());
+        let Some(Finding::RelatedAndBroaderTransitive { path, .. }) = example_27
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::RelatedAndBroaderTransitive { .. }))
+        else {
+            panic!(
+                "Example 27 must report the clash: {:?}",
+                example_27.findings()
+            );
+        };
+        assert_eq!(
+            path,
+            &vec![a.clone(), b.clone(), c.clone()],
+            "the report names the chain, because the author never wrote A-to-C themselves"
+        );
+
+        // Example 28 (not consistent): the same graph after the inferences are drawn, stated
+        // outright. It must be caught by the one-step link and not only through a chain.
+        let example_28 = CoreModel::from_statements([
+            s(&a, &skos("broaderTransitive"), &c),
+            s(&a, &skos("related"), &c),
+        ]);
+        assert!(!example_28.is_consistent());
+
+        // Example 29 (not consistent): the hierarchy written *downwards*, so the clash is only
+        // reachable after S25 turns both links round. §8.4's note — related is symmetric and the
+        // transitive pair are inverses, so related is disjoint with skos:narrowerTransitive too —
+        // is what this example tests, and the upward walk from C is where it is found.
+        let example_29 = CoreModel::from_statements([
+            s(&a, &skos("narrower"), &b),
+            s(&a, &skos("related"), &c),
+            s(&b, &skos("narrower"), &c),
+        ]);
+        assert!(!example_29.is_consistent(), "{:?}", example_29.findings());
+        let Some(Finding::RelatedAndBroaderTransitive {
+            concept, related, ..
+        }) = example_29
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::RelatedAndBroaderTransitive { .. }))
+        else {
+            panic!(
+                "Example 29 must report the clash: {:?}",
+                example_29.findings()
+            );
+        };
+        assert_eq!(
+            (concept, related),
+            (&c, &a),
+            "the walk runs up from C, which is the end the hierarchy climbs from"
         );
     }
 
-    /// S24 is not applied, and a test says so rather than leaving it to be discovered. Example 27
-    /// needs the closure — `<A> broader <B>`, `<B> broader <C>` makes `<A>` transitively broader
-    /// than `<C>` — and the model must not pretend it has it.
+    /// The S27 pass walks **up** only, and this pins the argument that one direction suffices
+    /// rather than leaving it to a doc comment nobody re-checks.
+    ///
+    /// The reasoning is §8.4's own note — `skos:related` is symmetric (S23), so a stated link is
+    /// present at *both* of its ends before the pass runs, and the pass walks up from every
+    /// concept that has one. So whichever end the hierarchy climbs from is walked from, and the
+    /// same clash is found whether the author stated the associative link with the lower concept
+    /// as subject or with the higher one. Both orientations are asserted here, each with the
+    /// associative link stated **once and in one direction**, and each must report the pair
+    /// exactly once — a downward walk would be a second way to find the same violation, which is
+    /// how a pair gets reported twice.
     #[test]
-    fn the_transitive_closure_is_not_taken_and_stops_at_one_step() {
+    fn s27_is_found_from_whichever_end_the_hierarchy_climbs_from() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+
+        let clashes = |model: &CoreModel| -> Vec<(Node, Node)> {
+            model
+                .findings()
+                .iter()
+                .filter_map(|finding| match finding {
+                    Finding::RelatedAndBroaderTransitive {
+                        concept, related, ..
+                    } => Some((concept.clone(), related.clone())),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // The hierarchy climbs from A, and A is the subject of the stated associative link.
+        let subject_is_lower = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&b, &skos("broader"), &c),
+            s(&a, &skos("related"), &c),
+        ]);
+        assert_eq!(clashes(&subject_is_lower), vec![(a.clone(), c.clone())]);
+
+        // The hierarchy climbs from C, and C is now only the *object* of the stated link — the
+        // subject A is the top of the hierarchy and a walk up from it reaches nothing at all.
+        let subject_is_higher = CoreModel::from_statements([
+            s(&c, &skos("broader"), &b),
+            s(&b, &skos("broader"), &a),
+            s(&a, &skos("related"), &c),
+        ]);
+        assert_eq!(
+            clashes(&subject_is_higher),
+            vec![(c.clone(), a.clone())],
+            "S23 put the link at C's end too, which is the only reason an upward walk finds it"
+        );
+    }
+
+    /// S24's closure is **not** stored, permanently and by design — `docs/adr/0024` and
+    /// `docs/adr/0025`. `Resource::relations` keeps meaning "links under this property", so a
+    /// two-step chain still shows one step there; the closure is [`CoreModel::ancestry`], and
+    /// this test pins both halves so neither can drift into the other.
+    #[test]
+    fn the_stored_relation_stays_one_step_and_the_closure_is_a_walk() {
         let (a, b, c) = (ex("A"), ex("B"), ex("C"));
         let model =
             CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
@@ -4894,8 +5179,11 @@ mod tests {
         assert!(from_a.contains_key(&b));
         assert!(
             !from_a.contains_key(&c),
-            "S24 is the next item; claiming the closure now would be a green we did not earn"
+            "storing the closure is what adr/0024 ruled out; the walk is what answers it"
         );
+        assert!(model
+            .ancestry(&a, crate::AncestryBound::DEFAULT)
+            .contains(&c));
     }
 
     /// A blank node is a perfectly good concept, and the closure must not lose one.
@@ -4913,24 +5201,142 @@ mod tests {
         );
     }
 
-    /// A concept related to itself, or broader than itself. §8 states no condition against either
-    /// — S27 is about `skos:related` and `skos:broaderTransitive` *together* — so neither is a
-    /// finding, and inventing one would be the failure `docs/COMPETITIVE.md` records against the
-    /// incumbents. The same decision `adr/0022` records for a label linked to itself.
+    /// §8.6.5's Example 33 and §8.6.7's Example 36 — a concept related to itself, and a concept
+    /// broader than itself. Each **on its own** is marked consistent by the specification, which
+    /// says in both places that it states neither reflexivity nor irreflexivity and that an
+    /// application "may wish to search for such statements" without saying it must. So neither is
+    /// a finding, and inventing one would be the failure `docs/COMPETITIVE.md` records against
+    /// tools stricter than the standard. The same decision `adr/0022` records for a label linked
+    /// to itself.
     #[test]
-    fn a_concept_related_to_itself_is_not_a_finding() {
+    fn examples_33_and_36_are_each_consistent_on_their_own() {
         let a = ex("A");
-        let model =
-            CoreModel::from_statements([s(&a, &skos("related"), &a), s(&a, &skos("broader"), &a)]);
 
-        assert!(model.findings().is_empty(), "{:?}", model.findings());
+        let example_33 = CoreModel::from_statements([s(&a, &skos("related"), &a)]);
+        assert!(
+            example_33.findings().is_empty(),
+            "{:?}",
+            example_33.findings()
+        );
         assert_eq!(
-            model
+            example_33
                 .resource(&a)
                 .and_then(|resource| resource.relations(SemanticRelation::Related))
                 .and_then(|links| links.get(&a)),
             Some(&RelationOrigin::Asserted),
             "the reflexive pair is its own converse, so S23 has nothing to add"
         );
+
+        let example_36 = CoreModel::from_statements([s(&a, &skos("broader"), &a)]);
+        assert!(
+            example_36.findings().is_empty(),
+            "{:?}",
+            example_36.findings()
+        );
+    }
+
+    /// The two of them **together**, which the specification does not print as an example — and
+    /// which is inconsistent, because it is Example 26 with `<B>` substituted by `<A>`. S27 makes
+    /// `skos:related` and `skos:broaderTransitive` disjoint properties, and disjointness is a
+    /// condition on *pairs*; nothing excludes the pair `(A, A)`.
+    ///
+    /// **This is our reading and it is written down as one.** §8.6.5 and §8.6.7 are permissive
+    /// about each statement alone, and neither says what happens when a graph has both. The
+    /// alternative reading — exempt reflexive pairs from S27 — would have to invent an exception
+    /// the specification does not state, which is the larger liberty of the two.
+    #[test]
+    fn a_concept_both_related_to_and_broader_than_itself_violates_s27() {
+        let a = ex("A");
+        let model =
+            CoreModel::from_statements([s(&a, &skos("related"), &a), s(&a, &skos("broader"), &a)]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let Some(Finding::RelatedAndBroaderTransitive {
+            concept,
+            related,
+            path,
+        }) = model
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::RelatedAndBroaderTransitive { .. }))
+        else {
+            panic!("S27 must fire: {:?}", model.findings());
+        };
+        assert_eq!((concept, related), (&a, &a));
+        assert_eq!(path, &vec![a.clone(), a.clone()]);
+    }
+
+    /// §8.6.8's Example 37 — a cycle in the hierarchy is **consistent**, and the S27 pass must
+    /// walk it without hanging and without reporting it. The pass walks every concept that has an
+    /// associative link, so a cyclic vocabulary with one `skos:related` in it is the case where a
+    /// non-terminating walk would be discovered by a customer rather than by us.
+    #[test]
+    fn example_37_does_not_hang_the_disjointness_check_and_is_not_a_finding() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&b, &skos("broader"), &a),
+            s(&a, &skos("related"), &c),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.checks_are_complete());
+    }
+
+    /// A walk that hit its bound is reported as **unchecked**, not as consistent. This is the
+    /// difference between "we checked S27 and found nothing" and "we gave up", and the report's
+    /// closing sentence depends on it.
+    #[test]
+    fn an_abandoned_walk_is_reported_rather_than_read_as_a_pass() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let mut builder = CoreModel::builder().with_ancestry_bound(crate::AncestryBound::new(1, 8));
+        for statement in [
+            s(&a, &skos("broader"), &b),
+            s(&b, &skos("broader"), &c),
+            s(&a, &skos("related"), &c),
+        ] {
+            builder.push(statement);
+        }
+        let model = builder.build();
+
+        assert!(
+            !model.checks_are_complete(),
+            "the walk from A stopped one ancestor short of C: {:?}",
+            model.findings()
+        );
+        assert!(
+            model.is_consistent(),
+            "an unfinished check is not a violation, and must not be reported as one"
+        );
+        assert!(model
+            .findings()
+            .iter()
+            .any(|finding| finding.severity() == Severity::Unchecked));
+
+        // And with room, the same graph is caught — so the difference is the bound, not the data.
+        let unbounded = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&b, &skos("broader"), &c),
+            s(&a, &skos("related"), &c),
+        ]);
+        assert!(!unbounded.is_consistent() && unbounded.checks_are_complete());
+    }
+
+    /// A vocabulary with no associative links pays nothing for S27, and one with them and no
+    /// hierarchy pays a walk that finds nothing. Neither is a finding; the test is here because
+    /// the pass is the only one in `build` whose cost is not linear in the statements read, and a
+    /// regression that started walking every concept would show up as a scale problem long before
+    /// it showed up as a wrong answer.
+    #[test]
+    fn the_disjointness_pass_is_silent_on_a_vocabulary_it_has_nothing_to_say_about() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let hierarchy_only =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &c)]);
+        assert!(hierarchy_only.findings().is_empty());
+
+        let associative_only =
+            CoreModel::from_statements([s(&a, &skos("related"), &b), s(&b, &skos("related"), &c)]);
+        assert!(associative_only.findings().is_empty());
+        assert!(associative_only.checks_are_complete());
     }
 }
