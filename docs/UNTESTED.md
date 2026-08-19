@@ -36,13 +36,20 @@ Do not delete it — the record of what took how long to close is the signal.
   it. Two independent secondary sources (a 2024 peer-reviewed article by the revision's own
   participant, and NISO's ISO 25964 committee page) agree that ISO 25964-1 went to comment and vote
   on 2024-07-30, that TC 46's work is complete, and that publication is expected in 2026.
-- **What is not:** the primary source. `https://www.iso.org/standard/53657.html` returns **HTTP 403**
-  to automated fetching, so the actual stage code, the new edition's number, and whether it has in
-  fact published are unverified. "Expected in 2026" is somebody else's forecast repeated by us.
+- **What is not:** the primary source. The ISO catalogue returns **HTTP 403** to automated fetching
+  — confirmed again at iteration 50 against the *revision's* own entry,
+  `https://www.iso.org/standard/86713.html` (iteration 25 tried `53657`, which is the 2011 edition).
+  So the exact **stage code** (50.00 vs 50.20 vs 60.00) and any **publication date** remain
+  unverified.
+- **Narrowed at iteration 50, not closed.** Two things previously unknown are now known from the
+  catalogue entry's own title as surfaced in search metadata — still not the page itself: the
+  revision is at **FDIS** (`ISO/FDIS 25964-1`), the approval stage before publication, and it is
+  **Edition 2** with a changed title ("...for information retrieval, **management and use**"). That
+  is stronger than "expected in 2026", and it is still second-hand.
 - **What would close it:** a human opening the ISO catalogue page in a browser and reading the
   stage. One minute of work that this environment cannot do. Until then, no OpenBiz document may
-  say a 2026 edition of ISO 25964-1 exists — only that a revision is reported to be in progress.
-- **Opened:** iteration 25 (product-owner pass)
+  say a 2026 edition of ISO 25964-1 **exists** — only that the revision is at FDIS and unpublished.
+- **Opened:** iteration 25 (product-owner pass) · **narrowed:** iteration 50
 
 ### Every competitor-weakness claim we lean on comes from one source
 - **Kind:** partial-coverage
@@ -2659,3 +2666,26 @@ module's own tests and end to end against the real binary reading a store off di
   decision that one-at-a-time is right because each retirement was its own decision. Proposed in
   `docs/PROPOSED.md`, unpromoted.
 - **Opened:** iteration 47
+
+### data.world's catalog may be built on our own standards surface, and we could not read the source
+- **Kind:** environment-limited
+- **What is proven:** nothing, by test — a research finding, recorded here because it would change a
+  competitive conclusion and an `adr/0003` connector design if true.
+- **What is claimed:** that data.world's catalog knowledge graph is built from **DCAT** (catalog),
+  **Dublin Core** (metadata), **SKOS** (glossaries and thesauri) and **PROV** (provenance and
+  lineage). If that holds it is very nearly `CLAUDE.md` §2's own standards surface, which would make
+  data.world the one catalog vendor that is a **standards-story competitor** rather than a discovery
+  target — the opposite of how `adr/0003` currently frames it.
+- **What is not:** any primary source. The claim traces to a search-engine summary of a data.world
+  blog post (Juan Sequeda, Principal Scientist, dated 2022-02-04). **Two fetch attempts at
+  iteration 50 returned the page's headline, byline and footer but not the article body**, and a
+  second data.world article fetched in full contains no such statement. So we have an attribution
+  and no readable text behind it.
+- **Why it is filed rather than dropped:** the same pass found a secondary source asserting Collibra
+  supports SKOS, which Collibra's own documentation contradicts. That is direct evidence that
+  aggregated summaries about this vendor class are unreliable in **both** directions, so this one
+  should neither be repeated nor assumed false.
+- **What would close it:** a human — or any fetch that renders the post body — reading the article
+  and confirming or refuting the four-vocabulary composition. Alternatively data.world's own public
+  ontology documentation, which was not located this pass.
+- **Opened:** iteration 50 (product-owner pass)

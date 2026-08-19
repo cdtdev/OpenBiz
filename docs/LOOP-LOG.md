@@ -3722,3 +3722,86 @@ look competent disables the one signal that catches a stuck loop.
   `main`'s history is the obvious guard and it is one line, but I did not write it because it is
   unpromoted scope — which means the next occurrence is guarded by nothing except a dirty tree
   happening to be the symptom again.
+
+## Iteration 50 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `1f8b28b`, tree clean, and CI for that
+  commit `success` — read from `gh run list`, not from iteration 49's report of it. Both inboxes
+  empty: `promote-queue.json` is `[]` and `feedback.md` is zero bytes, so nothing was drained and
+  nothing was truncated. Iteration 37's LCGFT fixture is unpromoted for the fourteenth iteration.
+- **This was the every-25th product-owner pass, so no plan item moved.** 55 of 221 stands, counted
+  from the file rather than carried over: 55 `- [x]`, 166 `- [ ]`, 221 total. Iteration 50 is also
+  an every-10th blind-spot boundary, so the charter-drift audit was folded in rather than skipped.
+- **The interval is the finding, and it should be read before the findings are.** The previous
+  product-owner pass ran at iteration 25 on **2026-08-18** — *one calendar day* before this one.
+  Twenty-five iterations of this loop cost the world about twenty-four hours. So I did not re-run
+  the survey, because a market that has not moved cannot yield news, and a pass under instruction to
+  produce findings against a static market is under quiet pressure to manufacture them.
+- **That pressure is not hypothetical — it produced a false claim in this very pass.** A search
+  summary asserted Collibra "may support standards such as SKOS, RDF, OWL, and SHACL". Fetching
+  **Collibra's own current Business Glossary documentation** shows it mentions **no W3C standard at
+  all**: the model is Business Term / Acronym / Measure / KPI over Domains and Communities, with
+  relations running to data attributes and columns. The claim traces to aggregator listicles. It was
+  caught only because `COMPETITIVE.md`'s first rule demands a vendor source for a vendor claim — the
+  rule worked, and the incentive it was resisting is created by the schedule. Filed as a proposal to
+  index the pass to the calendar rather than the iteration counter; **not acted on**, because it
+  edits `CLAUDE.md` §7 and the driver, and a loop rewriting its own oversight schedule is exactly
+  the change that must not be self-authorised however good its argument.
+- **What actually shipped: the gap iteration 25 recorded but did not fix.** That pass ended with
+  *"we have no entry for the catalog vendors ... whose business glossary modules are where a
+  governance buyer's budget usually already sits"*, and its proposal scoped the work as *a research
+  task for a future product-owner pass*. `COMPETITIVE.md` now has that entry — Collibra in depth
+  from its own docs, Alation, Purview and data.world thinly and deliberately so. The positioning
+  conclusion: against PoolParty we argue deployment weight and price, but against an incumbent
+  catalog we argue that **a glossary of business terms bound to columns is not a vocabulary**, and
+  that the two should be **connected rather than one replacing the other** — the `adr/0003` posture,
+  and commercially stronger than displacement because it writes nothing off.
+- **One finding sharpened and one corrected, both on ISO 25964.** Iteration 25 could only report
+  "publication expected in 2026" and recorded the ISO catalogue's 403 as a gap. The 403 is still
+  there (re-confirmed against the *revision's* entry, `86713` — iteration 25 had tried `53657`,
+  which is the 2011 edition), but the catalogue title is visible through search metadata: the
+  revision is at **FDIS**, the approval stage before publication, as **Edition 2**, and **the title
+  changes** to "...for information retrieval, **management and use**" — a scope change on the face
+  of the title of the part whose clauses measure tools like ours. Separately, iteration 25's "ISO
+  25964-2 was confirmed in 2023 and is unchanged" is now stale: **revision work on Part 2 has
+  started**. Part 2 is the vocabulary-*mapping* standard our mapping features implement against.
+- **Both retirements were chased through the repo, not just corrected in the research file**, per
+  that file's own second rule. `grep` found the claims live in `COMPETITIVE.md` (iteration 25's
+  paragraph, annotated in place because the file is append-only history), `UNTESTED.md` and
+  `PROPOSED.md` (both updated); `METHODOLOGY.md` mentions ISO 25964-2 only as governing the
+  crosswalk pack, which is still true and needed no change. Two rows added to the retired-claims
+  table. **Our own citations still say "ISO 25964-1:2011" and remain correct** — 2011 is still the
+  published edition — so nothing user-facing was wrong.
+- **Charter-drift audit — mechanical, and it found nothing.** No new dependency and no new required
+  external service; Oxigraph is still `default-features = false` with only `rocksdb`, which keeps
+  the `http-client` feature family out of the tree by construction. `cargo deny check licenses`
+  `rc=0`. On `unwrap()`/`expect()` outside tests and startup, a raw grep reports **975**, which is
+  the wrong number — it counts inline `#[cfg(test)]` modules; parsing those out leaves **seven**,
+  all in `crates/openbiz-store/src/scale.rs`, the scale harness whose lack of a runner is already an
+  open proposal. Per the loop's rule that a blind-spot pass finding nothing must say so: this one
+  found nothing, and the checks it ran are listed in `COMPETITIVE.md` so a reader can judge whether
+  they were the right ones.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1059 Rust tests, 0 failed** — unchanged from iterations 47–49, which is
+  the correct number for a docs-only change and is itself the check that no code moved. UI
+  untouched, so no npm run. No new dependency, no build artefact.
+- **Recorded:** no ADR — a research pass that changes no architecture should not mint one.
+  `UNTESTED.md`: the ISO entry **narrowed but explicitly not closed** (stage code and publication
+  date are still behind the 403), and **one new entry opened** for data.world, whose catalog graph
+  is claimed to be DCAT + Dublin Core + SKOS + PROV — very nearly our own §2 surface — on a source
+  whose body would not render across two fetch attempts. `PROPOSED.md`: the catalog proposal
+  **narrowed rather than closed**, to the connector-facing half this pass could not answer; the ISO
+  proposal updated; one new proposal on the pass's cadence. Nothing self-promoted.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T11:55Z at branch creation.
+- **Still uncertain:** whether the honest output of this pass — "almost nothing moved, here is what
+  I re-checked" — is a report anyone will keep reading, and what happens to the loop when they stop.
+  The competitive file's value depends on a human trusting it enough to act on it, and I have now
+  written a section whose most truthful parts are a list of unchanged things and two admissions that
+  a source could not be read. That is correct and it is also unrewarding to read, which is the
+  precondition for it being skimmed, and a skimmed research file is functionally the same as an
+  absent one while looking much better. The specific way I expect to be wrong is subtler than
+  padding: not that a future pass invents news, but that it *over-weights whatever it happened to be
+  able to fetch* — this pass wrote three paragraphs on Collibra and one line each on three other
+  vendors purely because Collibra's docs render to markdown and the others' do not, and I presented
+  that as deliberate thinness. It was partly deliberate and partly the crawler's shape showing
+  through, and I cannot cleanly separate the two.
