@@ -66,6 +66,7 @@ use std::fmt;
 
 use crate::ancestry::AncestryBound;
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
+use crate::mapping::{ExactMatchDisjointness, MappingProperty, SKOS_MAPPING_RELATION};
 use crate::notes::{DocumentationCoverage, NoteKind, NoteOrigin};
 use crate::ns;
 use crate::refinement::{PropertyRefinements, REFINEMENT_RULE};
@@ -219,6 +220,14 @@ pub enum SkosRule {
     S33,
     S36,
     S37,
+    S38,
+    S39,
+    S40,
+    S41,
+    S42,
+    S43,
+    S44,
+    S46,
     S3,
     S30,
     S48,
@@ -270,6 +279,14 @@ impl SkosRule {
             SkosRule::S33 => "S33",
             SkosRule::S36 => "S36",
             SkosRule::S37 => "S37",
+            SkosRule::S38 => "S38",
+            SkosRule::S39 => "S39",
+            SkosRule::S40 => "S40",
+            SkosRule::S41 => "S41",
+            SkosRule::S42 => "S42",
+            SkosRule::S43 => "S43",
+            SkosRule::S44 => "S44",
+            SkosRule::S46 => "S46",
             SkosRule::S48 => "S48",
             SkosRule::S49 => "S49",
             SkosRule::S50 => "S50",
@@ -362,6 +379,31 @@ impl SkosRule {
             }
             SkosRule::S37 => {
                 "skos:Collection is disjoint with each of skos:Concept and skos:ConceptScheme."
+            }
+            SkosRule::S38 => {
+                "skos:mappingRelation, skos:closeMatch, skos:exactMatch, skos:broadMatch, \
+                 skos:narrowMatch and skos:relatedMatch are each instances of \
+                 owl:ObjectProperty."
+            }
+            SkosRule::S39 => "skos:mappingRelation is a sub-property of skos:semanticRelation.",
+            SkosRule::S40 => {
+                "skos:closeMatch, skos:broadMatch, skos:narrowMatch and skos:relatedMatch are \
+                 each sub-properties of skos:mappingRelation."
+            }
+            SkosRule::S41 => {
+                "skos:broadMatch is a sub-property of skos:broader, skos:narrowMatch is a \
+                 sub-property of skos:narrower, and skos:relatedMatch is a sub-property of \
+                 skos:related."
+            }
+            SkosRule::S42 => "skos:exactMatch is a sub-property of skos:closeMatch.",
+            SkosRule::S43 => "skos:narrowMatch is owl:inverseOf the property skos:broadMatch.",
+            SkosRule::S44 => {
+                "skos:relatedMatch, skos:closeMatch and skos:exactMatch are each instances of \
+                 owl:SymmetricProperty."
+            }
+            SkosRule::S46 => {
+                "skos:exactMatch is disjoint with each of the properties skos:broadMatch and \
+                 skos:relatedMatch."
             }
             SkosRule::S48 => {
                 "skosxl:Label is disjoint with each of skos:Concept, skos:ConceptScheme and \
@@ -997,6 +1039,30 @@ pub enum Finding {
         /// clash is a direct link (Example 26); more when it is only entailed (Examples 27, 29).
         path: Vec<Node>,
     },
+    /// Two concepts are joined by both an exact mapping link and a hierarchical or associative
+    /// one. S46.
+    ///
+    /// Section 10's only integrity condition, and the whole of it: everything else section 10
+    /// permits, including a mapping inside one scheme (Example 58), a reflexive mapping
+    /// (Example 66), and cycles in `skos:broadMatch` (Example 67). Reporting any of those would
+    /// be inventing a rule, which is the failure `docs/COMPETITIVE.md` records of the incumbents.
+    ///
+    /// The origins are carried because the clash is usually only half-written: Example 52 states
+    /// `skos:exactMatch` and `skos:broadMatch` in one direction, and the same graph read from the
+    /// other end is a clash between links S44 and S43 supplied. An author told their vocabulary
+    /// is inconsistent needs to see which of the two statements they actually typed.
+    ExactMatchClash {
+        /// The concept the clash is reported from — the first of the pair, since the far end
+        /// holds the same clash.
+        concept: Node,
+        /// The concept at the other end.
+        other: Node,
+        /// How the `skos:exactMatch` link between them was established.
+        exact: RelationOrigin,
+        /// Every property disjoint with `skos:exactMatch` that also links the pair, how each was
+        /// established, and how S46 reaches it.
+        clashes: Vec<(MappingProperty, RelationOrigin, ExactMatchDisjointness)>,
+    },
     /// The walk of a concept's ancestors hit its bound, so S27 was not checked for it.
     ///
     /// [`Severity::Unchecked`], because it says nothing about whether the graph is consistent.
@@ -1064,6 +1130,10 @@ impl Finding {
             // §8.4 is the only integrity condition §8 states, and §8.6.10 says the disjointness
             // reaches indirect links as well as direct ones.
             Finding::RelatedAndBroaderTransitive { .. } => Severity::Inconsistent,
+            // Section 10.4 is headed "Integrity Conditions" and the specification marks Examples
+            // 52 and 53 "(not consistent)", so this one is settled by the document rather than by
+            // us.
+            Finding::ExactMatchClash { .. } => Severity::Inconsistent,
             Finding::DefectiveMemberList { .. }
             | Finding::MultipleMemberLists { .. }
             | Finding::NonPlainLiteralLabel { .. }
@@ -1222,6 +1292,26 @@ impl fmt::Display for Finding {
                 SkosRule::S24,
                 SkosRule::S27,
             ),
+            Finding::ExactMatchClash {
+                concept,
+                other,
+                exact,
+                clashes,
+            } => write!(
+                f,
+                "{concept} skos:exactMatch {other} ({exact}), and the same pair is also linked \
+                 by {}\n    and {}",
+                clashes
+                    .iter()
+                    .map(|(property, origin, _)| format!("{property} ({origin})"))
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                clashes
+                    .iter()
+                    .map(|(_, _, disjointness)| disjointness.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n    and "),
+            ),
             Finding::AncestryBoundReached {
                 concept,
                 reached,
@@ -1292,6 +1382,7 @@ pub struct Resource {
     xl_labels: BTreeMap<Node, BTreeSet<LabelKind>>,
     label_relations: BTreeMap<Node, RelationOrigin>,
     semantic_relations: BTreeMap<SemanticRelation, BTreeMap<Node, RelationOrigin>>,
+    mappings: BTreeMap<MappingProperty, BTreeMap<Node, RelationOrigin>>,
     notes: BTreeMap<Term, BTreeMap<NoteKind, NoteOrigin>>,
 }
 
@@ -1447,6 +1538,22 @@ impl Resource {
         &self,
     ) -> &BTreeMap<SemanticRelation, BTreeMap<Node, RelationOrigin>> {
         &self.semantic_relations
+    }
+
+    /// The mapping links it holds under one property, and how each was established.
+    ///
+    /// One-step links only: the graph's own plus what S42, S43 and S44 entail from them. S45's
+    /// transitive closure of `skos:exactMatch` is **not** in here — see [`crate::mapping`].
+    pub fn mappings_of(
+        &self,
+        property: MappingProperty,
+    ) -> Option<&BTreeMap<Node, RelationOrigin>> {
+        self.mappings.get(&property)
+    }
+
+    /// Every mapping link this resource takes part in, in a stable order.
+    pub fn mappings(&self) -> &BTreeMap<MappingProperty, BTreeMap<Node, RelationOrigin>> {
+        &self.mappings
     }
 
     /// How many concepts it has as broader concepts.
@@ -1719,6 +1826,14 @@ pub struct CoreModelBuilder {
     label_relations: BTreeSet<(Node, Node)>,
     semantic_relations: BTreeMap<SemanticRelation, BTreeSet<(Node, Node)>>,
     semantic_relation_ends: BTreeSet<(Node, Node)>,
+    mappings: BTreeMap<MappingProperty, BTreeSet<(Node, Node)>>,
+    mapping_relation_ends: BTreeSet<(Node, Node)>,
+    /// What S41 lifts out of the mappings into the relations of section 8, and the mapping
+    /// statement each lift came from. Filled by `close_mappings` and consumed by
+    /// `close_semantic_relations`, which is why it is a field rather than a return value: the
+    /// second pass has to close the lifted links exactly as it closes the graph's own, or a
+    /// `skos:broadMatch` would give a `skos:broader` with no converse and no transitive variant.
+    lifted_relations: BTreeMap<SemanticRelation, BTreeMap<(Node, Node), String>>,
     notes: BTreeMap<Node, BTreeMap<Term, BTreeMap<NoteKind, NoteSource>>>,
     ancestry_bound: AncestryBound,
     /// What the graph's own `rdfs:subPropertyOf` declarations entail. Empty unless a caller ran
@@ -1843,6 +1958,30 @@ impl CoreModelBuilder {
                 self.object_property(subject, &predicate, object, SkosRule::S18, |b, s, o| {
                     b.semantic_relation_ends.insert((s, o));
                 })
+            }
+            SKOS_MAPPING_RELATION => {
+                // The super-property of section 10, and the same case as `skos:semanticRelation`
+                // below it: S38 refuses a literal, S39 carries it up so S19 and S20 type both
+                // ends, and there it stops. Nothing follows about which of the five mapping
+                // properties holds, so it is filed under none of them.
+                self.object_property(subject, &predicate, object, SkosRule::S38, |b, s, o| {
+                    b.mapping_relation_ends.insert((s, o));
+                })
+            }
+            _ if MappingProperty::from_iri(&predicate).is_some() => {
+                // Unreachable `None` — the guard has already matched the IRI. Written as a `let`
+                // for the reason the label arm below gives.
+                //
+                // Matched **before** the semantic relations, and the order is not arbitrary:
+                // `MappingProperty::from_iri` and `SemanticRelation::from_iri` accept disjoint
+                // sets of IRIs, so either order reads the same graph the same way, but a mapping
+                // link filed as a semantic relation would lose the property the author wrote and
+                // report the vocabulary as having no outward links at all.
+                if let Some(property) = MappingProperty::from_iri(&predicate) {
+                    self.object_property(subject, &predicate, object, SkosRule::S38, |b, s, o| {
+                        b.mappings.entry(property).or_default().insert((s, o));
+                    })
+                }
             }
             _ if SemanticRelation::from_iri(&predicate).is_some() => {
                 // Unreachable `None` — the guard has already matched the IRI. Written as a `let`
@@ -2026,7 +2165,19 @@ impl CoreModelBuilder {
         // constrain `skos:semanticRelation`, which no author writes, so the citation for a
         // concept typed out of a `skos:broader` runs through S22 and S21 first and those two
         // steps must already be in the derivation list for it to read.
+        // Section 10 before section 8, because S41 makes every hierarchical and associative
+        // mapping link a semantic relation and the closure below has to see them: a
+        // `skos:broadMatch` must come out with the `skos:narrower` S25 licenses and the
+        // `skos:broaderTransitive` S22 licenses, exactly as a stated `skos:broader` does.
+        // Running it afterwards would leave a mapped hierarchy readable in one direction only,
+        // and invisible to the S27 walk that Examples 59 to 61 turn on.
+        self.close_mappings(&mut model);
         self.close_semantic_relations(&mut model);
+        // The mapping route to `skos:Concept` runs first so that a concept reached both ways is
+        // typed by the shorter citation. Both are true — S40 and S39 carry a mapping to
+        // `skos:semanticRelation` in two steps, S41 then S22 then S21 carries it in three — and
+        // the two-step one is the one a reader can check against the property in front of them.
+        self.apply_mapping_class_rules(&mut model);
         self.apply_relation_class_rules(&mut model);
         self.attach_labels(&mut model);
         // §7. Independent of everything above and below it: notes entail nothing about classes,
@@ -2050,6 +2201,10 @@ impl CoreModelBuilder {
         self.entail_dumbed_down_labels(&mut model);
         Self::check_disjointness(&mut model);
         Self::check_label_conditions(&mut model);
+        // S46, section 10's only integrity condition. Read off the closed mapping links and not
+        // off the graph, because Example 52 states one direction of each property and the clash
+        // is only visible once S43 and S44 have supplied the other.
+        Self::check_mapping_disjointness(&mut model);
         // S27 last, and after `close_semantic_relations` by necessity rather than by taste: it is
         // the only condition read off a *derived* structure that no pass materialises, so it has
         // to run when `skos:broaderTransitive` and `skos:related` are both final. It is also the
@@ -2237,6 +2392,217 @@ impl CoreModelBuilder {
         }
     }
 
+    /// S42, S43 and S44 — every mapping link the graph stated, and the ones those three entail.
+    ///
+    /// Two passes over the mapping links, then a third that hands the result to section 8:
+    ///
+    /// 1. **The converses.** S43 pairs `skos:broadMatch` with `skos:narrowMatch`; S44 makes
+    ///    `skos:relatedMatch`, `skos:closeMatch` and `skos:exactMatch` symmetric, so each is its
+    ///    own inverse. A mapping an author wrote from their vocabulary to somebody else's reads
+    ///    from the other end too, which is what makes a mapped pair navigable in both directions.
+    /// 2. **The sub-property lift.** S42 puts every `skos:exactMatch` link under
+    ///    `skos:closeMatch`. It runs *after* the converses so that it lifts them too: a graph
+    ///    stating one direction of an exact match ends with both directions of the close match,
+    ///    and one stating the other direction ends with the same four links.
+    /// 3. **S41's lift into section 8**, recorded for [`Self::close_semantic_relations`] rather
+    ///    than applied here, because those links then need S22, S23, S25 and S26 run over them.
+    ///    It runs over everything held after passes 1 and 2, so a `skos:narrowMatch` the graph
+    ///    never wrote still contributes the `skos:narrower` its converse licenses.
+    ///
+    /// A direction the graph stated is never overwritten by one we derived.
+    ///
+    /// **S45 is not applied here**, and is the one part of section 10 this build does not yet
+    /// support: `skos:exactMatch` comes out of this holding one-step links only, so Example 62's
+    /// chained entailment does not follow. See [`crate::mapping`] and `docs/UNTESTED.md`.
+    fn close_mappings(&mut self, model: &mut CoreModel) {
+        for (property, links) in &self.mappings {
+            for (from, to) in links {
+                model
+                    .resources
+                    .entry(from.clone())
+                    .or_default()
+                    .mappings
+                    .entry(*property)
+                    .or_default()
+                    .insert(to.clone(), RelationOrigin::Asserted);
+            }
+        }
+
+        // As in `close_semantic_relations`: what holds after each pass, seeded with the asserted
+        // links so that no derivation is recorded for a direction the graph already stated.
+        let mut held: BTreeMap<MappingProperty, BTreeSet<(Node, Node)>> = self.mappings.clone();
+        let mut derived: Vec<(MappingProperty, Node, Node, SkosRule, String)> = Vec::new();
+
+        for (property, links) in &self.mappings {
+            let (inverse, rule) = property.inverse();
+            for (from, to) in links {
+                if held
+                    .entry(inverse)
+                    .or_default()
+                    .insert((to.clone(), from.clone()))
+                {
+                    derived.push((
+                        inverse,
+                        to.clone(),
+                        from.clone(),
+                        rule,
+                        format!("{from} {property} {to}"),
+                    ));
+                }
+            }
+        }
+
+        // Over every property and not over the one that has a super-property, so that
+        // `super_property` is the single place that decides which do.
+        for property in MappingProperty::ALL {
+            let Some((super_property, rule)) = property.super_property() else {
+                continue;
+            };
+            let links = held.get(&property).cloned().unwrap_or_default();
+            for (from, to) in links {
+                if held
+                    .entry(super_property)
+                    .or_default()
+                    .insert((from.clone(), to.clone()))
+                {
+                    let premise = format!("{from} {property} {to}");
+                    derived.push((super_property, from, to, rule, premise));
+                }
+            }
+        }
+
+        for (property, from, to, rule, premise) in derived {
+            model
+                .resources
+                .entry(from.clone())
+                .or_default()
+                .mappings
+                .entry(property)
+                .or_default()
+                .insert(to.clone(), RelationOrigin::Entailed(rule));
+            model.derivations.push(Derivation {
+                conclusion: format!("{from} {property} {to}"),
+                premise,
+                rule: rule.into(),
+            });
+        }
+
+        for (property, links) in &held {
+            let Some((relation, _)) = property.semantic_counterpart() else {
+                continue;
+            };
+            for (from, to) in links {
+                self.lifted_relations.entry(relation).or_default().insert(
+                    (from.clone(), to.clone()),
+                    format!("{from} {property} {to}"),
+                );
+            }
+        }
+    }
+
+    /// S40, S39, S19 and S20 — both ends of a mapping link are `skos:Concept`.
+    ///
+    /// The same shape as [`Self::apply_relation_class_rules`] and usually just as silent, and the
+    /// citation runs through the super-properties for the same reason: S19 constrains
+    /// `skos:semanticRelation`, which no author writes, so a report citing it against a
+    /// `skos:closeMatch` statement would name a statement that does not mention the property the
+    /// author used. Two steps are therefore printed — S40 up to `skos:mappingRelation`, S39 up to
+    /// `skos:semanticRelation` — and for `skos:exactMatch` the S42 step that
+    /// [`Self::close_mappings`] already recorded completes the chain, because S40 does not name
+    /// it. Examples 54 to 57 are exactly these entailments.
+    ///
+    /// The steps are recorded **only when a class actually follows**, as S21's are: a vocabulary
+    /// that types its concepts gets no derivations from this pass at all.
+    fn apply_mapping_class_rules(&self, model: &mut CoreModel) {
+        let mut links: Vec<(Node, Node, Option<MappingProperty>)> = Vec::new();
+        for (property, pairs) in &self.mappings {
+            for (from, to) in pairs {
+                links.push((from.clone(), to.clone(), Some(*property)));
+            }
+        }
+        for (from, to) in &self.mapping_relation_ends {
+            links.push((from.clone(), to.clone(), None));
+        }
+
+        for (from, to, via) in links {
+            let typed = |model: &CoreModel, node: &Node| {
+                model
+                    .resources
+                    .get(node)
+                    .is_some_and(|resource| resource.is_a(SkosClass::Concept))
+            };
+            if typed(model, &from) && typed(model, &to) {
+                continue;
+            }
+            let mapping_relation = format!("{from} skos:mappingRelation {to}");
+            let conclusion = format!("{from} skos:semanticRelation {to}");
+            if let Some(property) = via {
+                let (named_by_s40, rule) = property.mapping_relation_via();
+                model.derivations.push(Derivation {
+                    conclusion: mapping_relation.clone(),
+                    premise: format!("{from} {named_by_s40} {to}"),
+                    rule: rule.into(),
+                });
+                model.derivations.push(Derivation {
+                    conclusion: conclusion.clone(),
+                    premise: mapping_relation,
+                    rule: SkosRule::S39.into(),
+                });
+            }
+            entail_class(model, &from, SkosClass::Concept, SkosRule::S19, &conclusion);
+            entail_class(model, &to, SkosClass::Concept, SkosRule::S20, &conclusion);
+        }
+    }
+
+    /// S46 — `skos:exactMatch` is disjoint with `skos:broadMatch` and `skos:relatedMatch`.
+    /// Section 10.4.
+    ///
+    /// Read off the closed links, so Example 52 — which states one direction of each property —
+    /// is caught, and so is the same graph written from either end.
+    ///
+    /// **One finding per pair, not one per end.** Symmetry puts the exact match at both ends and
+    /// S43 puts the converse of the hierarchical link there too, so the clash is visible twice
+    /// and is one violation. It is reported from the lexicographically first end, which is the
+    /// same rule the report uses to count an associative link once. That is the opposite choice
+    /// to S27's, where two findings mean two genuinely different violating paths.
+    ///
+    /// `skos:closeMatch` is not checked against `skos:exactMatch` and never will be: S42 makes
+    /// every exact match a close match, so the two holding together is the entailment.
+    fn check_mapping_disjointness(model: &mut CoreModel) {
+        let mut found: Vec<Finding> = Vec::new();
+        for (node, resource) in model.resources() {
+            let Some(exact) = resource.mappings_of(MappingProperty::ExactMatch) else {
+                continue;
+            };
+            for (other, exact_origin) in exact {
+                // The far end holds the same clash — S44 and S43 saw to that — so it is examined
+                // once, from here. A self-link is its own first end and is examined here too.
+                if node > other {
+                    continue;
+                }
+                let clashes: Vec<(MappingProperty, RelationOrigin, ExactMatchDisjointness)> =
+                    MappingProperty::ALL
+                        .into_iter()
+                        .filter_map(|property| {
+                            let disjointness = property.disjoint_with_exact_match()?;
+                            let origin = *resource.mappings_of(property)?.get(other)?;
+                            Some((property, origin, disjointness))
+                        })
+                        .collect();
+                if clashes.is_empty() {
+                    continue;
+                }
+                found.push(Finding::ExactMatchClash {
+                    concept: node.clone(),
+                    other: other.clone(),
+                    exact: *exact_origin,
+                    clashes,
+                });
+            }
+        }
+        model.findings.extend(found);
+    }
+
     /// S22, S23, S25 and S26 — every link the graph stated, and the ones those four entail.
     ///
     /// Two passes, in this order and not the other:
@@ -2281,7 +2647,34 @@ impl CoreModelBuilder {
             self.semantic_relations.clone();
         let mut derived: Vec<(SemanticRelation, Node, Node, SkosRule, String)> = Vec::new();
 
-        for (relation, links) in &self.semantic_relations {
+        // S41's lift, before either pass below, so that a mapping link is closed exactly as a
+        // stated relation is: `close_mappings` has already put the mapping's own converses in,
+        // and from here the two are indistinguishable to S22, S23, S25 and S26 — which is what
+        // the sub-property statement means. A link the graph also stated outright stays asserted
+        // and produces no derivation, because it is not something we concluded.
+        for (relation, links) in &self.lifted_relations {
+            for ((from, to), premise) in links {
+                if held
+                    .entry(*relation)
+                    .or_default()
+                    .insert((from.clone(), to.clone()))
+                {
+                    derived.push((
+                        *relation,
+                        from.clone(),
+                        to.clone(),
+                        SkosRule::S41,
+                        premise.clone(),
+                    ));
+                }
+            }
+        }
+
+        // Over what is held rather than over the graph's own statements, so the converse of a
+        // lifted mapping link is derived too. Identical to iterating `self.semantic_relations`
+        // for a vocabulary that states no mappings, which is most of them.
+        let seeded = held.clone();
+        for (relation, links) in &seeded {
             let (inverse, rule) = relation.inverse();
             for (from, to) in links {
                 if held
@@ -6736,5 +7129,634 @@ mod tests {
         assert_eq!(held.notes_of(NoteKind::ScopeNote).count(), 0);
         assert!(model.is_consistent(), "{:?}", model.findings());
         assert!(model.checks_are_complete());
+    }
+
+    // ---- Mapping properties, section 10 (S38-S46). ----
+
+    /// `<from> skos:<local> <to>`.
+    fn maps(from: &Node, property: MappingProperty, to: &Node) -> Statement {
+        Statement::new(from.clone(), property.iri(), to.clone())
+    }
+
+    /// What a resource holds under a mapping property, as `(other, origin)` pairs.
+    fn mapped(
+        model: &CoreModel,
+        node: &Node,
+        property: MappingProperty,
+    ) -> Vec<(Node, RelationOrigin)> {
+        model
+            .resource(node)
+            .and_then(|resource| resource.mappings_of(property))
+            .map(|links| {
+                links
+                    .iter()
+                    .map(|(other, origin)| (other.clone(), *origin))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// **Example 49** — `<A> skos:exactMatch <B>`, marked consistent. One statement, and the
+    /// three links S42 and S44 entail from it.
+    #[test]
+    fn example_49_an_exact_match_is_symmetric_and_is_also_a_close_match() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([maps(&a, MappingProperty::ExactMatch, &b)]);
+
+        assert_eq!(
+            mapped(&model, &a, MappingProperty::ExactMatch),
+            vec![(b.clone(), RelationOrigin::Asserted)]
+        );
+        assert_eq!(
+            mapped(&model, &b, MappingProperty::ExactMatch),
+            vec![(a.clone(), RelationOrigin::Entailed(SkosRule::S44))],
+            "S44 makes skos:exactMatch symmetric"
+        );
+        assert_eq!(
+            mapped(&model, &a, MappingProperty::CloseMatch),
+            vec![(b.clone(), RelationOrigin::Entailed(SkosRule::S42))],
+            "S42 makes every exact match a close match"
+        );
+        assert_eq!(
+            mapped(&model, &b, MappingProperty::CloseMatch),
+            vec![(a.clone(), RelationOrigin::Entailed(SkosRule::S42))],
+            "and the converse lifts too, because the symmetric pass runs first"
+        );
+        // An equivalence mapping is not a hierarchy and not an association. S41 names three
+        // properties and neither of these is one of them.
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::Related))
+            .is_none());
+        assert!(model
+            .resource(&a)
+            .and_then(|resource| resource.relations(SemanticRelation::Broader))
+            .is_none());
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// **Example 50** — `<A> skos:closeMatch <B>`, marked consistent. The entailment runs upwards
+    /// only: a close match is not an exact one, and reading S42 backwards would upgrade every
+    /// hedged mapping in a vocabulary into a claim its author declined to make.
+    #[test]
+    fn example_50_a_close_match_is_symmetric_and_entails_no_exact_match() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([maps(&a, MappingProperty::CloseMatch, &b)]);
+
+        assert_eq!(
+            mapped(&model, &b, MappingProperty::CloseMatch),
+            vec![(a.clone(), RelationOrigin::Entailed(SkosRule::S44))]
+        );
+        assert!(mapped(&model, &a, MappingProperty::ExactMatch).is_empty());
+        assert!(mapped(&model, &b, MappingProperty::ExactMatch).is_empty());
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// **Example 51** — `<A> skos:broadMatch <B> ; skos:relatedMatch <C>`, marked consistent, and
+    /// the point at which section 10 joins section 8: S41 lifts both links into the relations the
+    /// rest of the build already walks, and S22, S23 and S25 then close them.
+    #[test]
+    fn example_51_a_hierarchical_and_an_associative_mapping_lift_into_section_8() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::BroadMatch, &b),
+            maps(&a, MappingProperty::RelatedMatch, &c),
+        ]);
+
+        assert_eq!(
+            mapped(&model, &b, MappingProperty::NarrowMatch),
+            vec![(a.clone(), RelationOrigin::Entailed(SkosRule::S43))],
+            "S43 makes skos:narrowMatch the inverse of skos:broadMatch"
+        );
+
+        let from_a = model.resource(&a).expect("A is in the model");
+        assert_eq!(
+            from_a
+                .relations(SemanticRelation::Broader)
+                .and_then(|links| links.get(&b)),
+            Some(&RelationOrigin::Entailed(SkosRule::S41)),
+            "S41 makes skos:broadMatch a sub-property of skos:broader"
+        );
+        assert_eq!(
+            from_a
+                .relations(SemanticRelation::BroaderTransitive)
+                .and_then(|links| links.get(&b)),
+            Some(&RelationOrigin::Entailed(SkosRule::S22)),
+            "and the lifted link is then closed exactly as a stated one is"
+        );
+        assert_eq!(
+            from_a
+                .relations(SemanticRelation::Related)
+                .and_then(|links| links.get(&c)),
+            Some(&RelationOrigin::Entailed(SkosRule::S41))
+        );
+        // The converse is there, and the citation is S41 rather than S25 — which is a choice
+        // and not an accident. Two routes reach it: S43 then S41 from the converse mapping, or
+        // S41 then S25 from the lifted relation. Both are two steps and both are printed, and
+        // the model takes the first because its premise, `<B> skos:narrowMatch <A>`, is a link
+        // the report shows in the mapping section. Citing S25 would rest the conclusion on a
+        // `skos:broader` that is itself inferred. It does not depend on the direction the author
+        // typed: the mapping converses are all closed before anything is lifted.
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|resource| resource.relations(SemanticRelation::Narrower))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S41)),
+            "the converse of a mapped link is lifted too"
+        );
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|resource| resource.relations(SemanticRelation::NarrowerTransitive))
+                .and_then(|links| links.get(&a)),
+            Some(&RelationOrigin::Entailed(SkosRule::S22))
+        );
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// **Examples 54 to 57** — every mapping link makes both of its ends a `skos:Concept`, and
+    /// the citation is the chain S40 and S39 actually license rather than S19 quoted flatly at a
+    /// property it does not mention.
+    #[test]
+    fn examples_54_to_57_type_both_ends_through_the_mapping_super_property() {
+        for property in MappingProperty::ALL {
+            let (a, b) = (ex("A"), ex("B"));
+            let model = CoreModel::from_statements([maps(&a, property, &b)]);
+
+            assert_eq!(
+                model
+                    .resource(&a)
+                    .and_then(|r| r.classes().get(&SkosClass::Concept)),
+                Some(&ClassOrigin::Entailed(SkosRule::S19)),
+                "{property}"
+            );
+            assert_eq!(
+                model
+                    .resource(&b)
+                    .and_then(|r| r.classes().get(&SkosClass::Concept)),
+                Some(&ClassOrigin::Entailed(SkosRule::S20)),
+                "{property}"
+            );
+
+            let steps: Vec<String> = model
+                .derivations()
+                .iter()
+                .map(|derivation| {
+                    format!(
+                        "{} <- {} ({})",
+                        derivation.conclusion,
+                        derivation.premise,
+                        derivation.rule.number()
+                    )
+                })
+                .collect();
+            let chain = steps.join("; ");
+            let (named_by_s40, _) = property.mapping_relation_via();
+            assert!(
+                chain.contains(&format!(
+                    "<{EX}A> skos:mappingRelation <{EX}B> <- <{EX}A> {named_by_s40} <{EX}B> (S40)"
+                )),
+                "{property}: {chain}"
+            );
+            assert!(
+                chain.contains(&format!(
+                    "<{EX}A> skos:semanticRelation <{EX}B> <- <{EX}A> skos:mappingRelation <{EX}B> (S39)"
+                )),
+                "{property}: {chain}"
+            );
+            if property == MappingProperty::ExactMatch {
+                // S40 does not name skos:exactMatch, so the chain runs through S42 and the step
+                // is printed. A citation that skipped it would name a statement that does not
+                // mention the property the author wrote.
+                assert!(
+                    chain.contains(&format!(
+                        "<{EX}A> skos:closeMatch <{EX}B> <- <{EX}A> skos:exactMatch <{EX}B> (S42)"
+                    )),
+                    "{chain}"
+                );
+            }
+        }
+    }
+
+    /// A vocabulary that types its own concepts gets no class derivations from the mapping pass.
+    /// The rules are there to make a mistake visible, not to restate what the file says.
+    #[test]
+    fn a_typed_pair_produces_no_derivation_from_the_mapping_class_rules() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            typed(&a, SkosClass::Concept),
+            typed(&b, SkosClass::Concept),
+            maps(&a, MappingProperty::BroadMatch, &b),
+        ]);
+
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| derivation.rule == SkosRule::S39
+                    || derivation.rule == SkosRule::S40)
+        );
+        assert_eq!(
+            model
+                .resource(&a)
+                .and_then(|r| r.classes().get(&SkosClass::Concept)),
+            Some(&ClassOrigin::Asserted)
+        );
+    }
+
+    /// **Example 52** — `<A> skos:exactMatch <B> ; skos:broadMatch <B>`, marked **not
+    /// consistent**: "a clash between exact and hierarchical mapping links". S46.
+    #[test]
+    fn example_52_an_exact_and_a_hierarchical_mapping_clash_under_s46() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&a, MappingProperty::BroadMatch, &b),
+        ]);
+
+        let clashes: Vec<&Finding> = model
+            .findings()
+            .iter()
+            .filter(|finding| matches!(finding, Finding::ExactMatchClash { .. }))
+            .collect();
+        assert_eq!(
+            clashes.len(),
+            1,
+            "one violation, not one per end: {:?}",
+            model.findings()
+        );
+        assert_eq!(clashes[0].severity(), Severity::Inconsistent);
+        assert!(!model.is_consistent());
+
+        let rendered = clashes[0].to_string();
+        assert!(
+            rendered.contains("skos:broadMatch (asserted)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "S46: skos:exactMatch is disjoint with each of the properties skos:broadMatch and \
+                 skos:relatedMatch."
+            ),
+            "the finding must quote the statement, not merely cite it: {rendered}"
+        );
+    }
+
+    /// **Example 53** — `<A> skos:exactMatch <B> ; skos:relatedMatch <B>`, marked **not
+    /// consistent**: "a clash between exact and associative mapping links". S46.
+    #[test]
+    fn example_53_an_exact_and_an_associative_mapping_clash_under_s46() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&a, MappingProperty::RelatedMatch, &b),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let rendered = model
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::ExactMatchClash { .. }))
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(
+            rendered.contains("skos:relatedMatch (asserted)"),
+            "{rendered}"
+        );
+    }
+
+    /// The same clash written from the other end. S44 and S43 supply what the author did not
+    /// type, so it is caught — once, and with the origins saying which statement was theirs.
+    ///
+    /// The citation is the one section 10.4's own note makes, because S46 does not name
+    /// `skos:narrowMatch`: "because skos:exactMatch is a symmetric property, and skos:broadMatch
+    /// and skos:narrowMatch are inverses, skos:exactMatch is therefore also disjoint with
+    /// skos:narrowMatch".
+    #[test]
+    fn the_same_clash_written_from_the_far_end_is_found_once_and_argued_through_the_inverse() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&b, MappingProperty::ExactMatch, &a),
+            maps(&b, MappingProperty::BroadMatch, &a),
+        ]);
+
+        let clashes: Vec<&Finding> = model
+            .findings()
+            .iter()
+            .filter(|finding| matches!(finding, Finding::ExactMatchClash { .. }))
+            .collect();
+        assert_eq!(clashes.len(), 1, "{:?}", model.findings());
+        assert!(!model.is_consistent());
+
+        let rendered = clashes[0].to_string();
+        assert!(
+            rendered.contains("also disjoint with skos:narrowMatch"),
+            "S46 does not name skos:narrowMatch, so the note is the argument: {rendered}"
+        );
+        // Reported from <A>, the first end, where both links were supplied by the closure. The
+        // origins are what tell the author the statements they typed are at the other end.
+        assert!(
+            rendered.contains("inferred, S44") && rendered.contains("inferred, S43"),
+            "{rendered}"
+        );
+    }
+
+    /// The same argument, with the author's own `skos:narrowMatch` in front of them rather than
+    /// one the closure supplied. S46 names two properties; this is the third.
+    #[test]
+    fn a_stated_narrow_match_clashing_with_an_exact_match_cites_the_note_and_not_s46_alone() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&a, MappingProperty::NarrowMatch, &b),
+        ]);
+
+        assert!(!model.is_consistent(), "{:?}", model.findings());
+        let rendered = model
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::ExactMatchClash { .. }))
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(
+            rendered.contains("skos:narrowMatch (asserted)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("also disjoint with skos:narrowMatch"),
+            "{rendered}"
+        );
+    }
+
+    /// S42 makes every exact match a close match, so the two holding together is the entailment
+    /// and never a clash. A disjointness table that included `skos:closeMatch` would report every
+    /// exact mapping in every vocabulary as a violation of the statement that produced it.
+    #[test]
+    fn an_exact_match_never_clashes_with_the_close_match_it_entails() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&a, MappingProperty::CloseMatch, &b),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// **Example 58** — mapping links between concepts in the *same* scheme, marked consistent.
+    /// Section 10.6.1 calls linking across schemes a convention and says there are "no formal
+    /// integrity conditions" against the other case, so a tool that reported it would be
+    /// inventing a rule and rejecting data SKOS accepts.
+    #[test]
+    fn example_58_a_mapping_inside_one_concept_scheme_is_consistent() {
+        let (a, b, c, scheme) = (ex("A"), ex("B"), ex("C"), ex("MyScheme"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::BroadMatch, &b),
+            maps(&a, MappingProperty::RelatedMatch, &c),
+            s(&a, SKOS_IN_SCHEME, &scheme),
+            s(&b, SKOS_IN_SCHEME, &scheme),
+            s(&c, SKOS_IN_SCHEME, &scheme),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.checks_are_complete());
+    }
+
+    /// **Examples 59 and 60** — a hierarchical and an associative mapping between the same pair,
+    /// marked not consistent. Nothing in section 10 says so: both are caught by S27, because S41
+    /// has put both links into section 8 where the disjointness lives.
+    #[test]
+    fn examples_59_and_60_a_mapped_hierarchy_clashes_with_a_mapped_association() {
+        for hierarchical in [MappingProperty::BroadMatch, MappingProperty::NarrowMatch] {
+            let (a, b) = (ex("A"), ex("B"));
+            let model = CoreModel::from_statements([
+                maps(&a, hierarchical, &b),
+                maps(&a, MappingProperty::RelatedMatch, &b),
+            ]);
+
+            assert!(
+                model
+                    .findings()
+                    .iter()
+                    .any(|finding| matches!(finding, Finding::RelatedAndBroaderTransitive { .. })),
+                "{hierarchical}: {:?}",
+                model.findings()
+            );
+            assert!(!model.is_consistent(), "{hierarchical}");
+        }
+    }
+
+    /// **Example 61** — the clash nobody wrote: two `skos:broadMatch` steps and a
+    /// `skos:relatedMatch` between the ends, marked not consistent. It needs S41's lift, S22's,
+    /// S25's, and then S24 answered by walking, and it is the reason the mapping links are closed
+    /// before section 8's pass rather than kept in a section of their own.
+    #[test]
+    fn example_61_a_two_step_mapped_hierarchy_clashes_with_an_associative_mapping() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::BroadMatch, &b),
+            maps(&b, MappingProperty::BroadMatch, &c),
+            maps(&a, MappingProperty::RelatedMatch, &c),
+        ]);
+
+        let clash = model
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::RelatedAndBroaderTransitive { .. }))
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(clash.contains("S27"), "{:?}", model.findings());
+        assert!(
+            clash.contains(&format!("<{EX}A>")) && clash.contains(&format!("<{EX}C>")),
+            "the path is the derivation, and the author linked neither end directly: {clash}"
+        );
+        assert!(!model.is_consistent());
+    }
+
+    /// **Examples 63, 64 and 65** — none of the four other mapping properties is transitive, so a
+    /// chain entails no direct link. Asserting the absence is the only way this stays true: a
+    /// closure added later for `skos:exactMatch` must not quietly take the others with it.
+    #[test]
+    fn examples_63_to_65_no_mapping_property_but_the_exact_one_chains() {
+        for property in [
+            MappingProperty::BroadMatch,
+            MappingProperty::RelatedMatch,
+            MappingProperty::CloseMatch,
+        ] {
+            let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+            let model =
+                CoreModel::from_statements([maps(&a, property, &b), maps(&b, property, &c)]);
+
+            let from_a: Vec<Node> = mapped(&model, &a, property)
+                .into_iter()
+                .map(|(other, _)| other)
+                .collect();
+            assert!(
+                !from_a.contains(&c),
+                "{property} is not transitive, so <A> is not linked to <C>: {from_a:?}"
+            );
+        }
+    }
+
+    /// **Example 62 is not supported**, and this test exists to say so rather than to let a green
+    /// suite imply otherwise. S45 makes `skos:exactMatch` an `owl:TransitiveProperty` and this
+    /// build does not close it: `adr/0025`'s rule is that a transitive closure is walked and not
+    /// stored, and the walk is part 2 of this item. `docs/UNTESTED.md` carries the gap.
+    ///
+    /// When part 2 lands, this assertion is expected to be **replaced** by its opposite — by
+    /// hand, deliberately, with the walk in place. It must never be deleted to make a build pass.
+    #[test]
+    fn s45_is_not_applied_so_an_exact_match_chain_does_not_close() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&b, MappingProperty::ExactMatch, &c),
+        ]);
+
+        let from_a: Vec<Node> = mapped(&model, &a, MappingProperty::ExactMatch)
+            .into_iter()
+            .map(|(other, _)| other)
+            .collect();
+        assert_eq!(from_a, vec![b.clone()], "S45 is not applied");
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// **Example 66** — a reflexive mapping, marked consistent: none of the five properties is
+    /// irreflexive. The `skos:broadMatch` half is the interesting one, because S41 turns it into
+    /// a `skos:broader` self-loop that the S27 walk then has to survive.
+    #[test]
+    fn example_66_a_reflexive_mapping_is_consistent() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &a),
+            maps(&b, MappingProperty::BroadMatch, &b),
+            maps(&c, MappingProperty::RelatedMatch, &c),
+        ]);
+
+        assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.checks_are_complete(), "{:?}", model.findings());
+    }
+
+    /// **Examples 67 and 68** — cycles and alternate paths in `skos:broadMatch`, both marked
+    /// consistent. Section 10.6.5: "there are no formal integrity conditions preventing either
+    /// cycles or alternative paths in a graph of hierarchical mapping links". After S41 these are
+    /// cycles in `skos:broader`, so the walk has to terminate on them and report nothing.
+    #[test]
+    fn examples_67_and_68_cycles_and_alternate_paths_in_a_mapped_hierarchy_are_consistent() {
+        let (a, b, x, y, z) = (ex("A"), ex("B"), ex("X"), ex("Y"), ex("Z"));
+        let cycles = CoreModel::from_statements([
+            maps(&a, MappingProperty::BroadMatch, &b),
+            maps(&b, MappingProperty::BroadMatch, &a),
+            maps(&x, MappingProperty::BroadMatch, &y),
+            maps(&y, MappingProperty::BroadMatch, &z),
+            maps(&z, MappingProperty::BroadMatch, &x),
+        ]);
+        assert!(cycles.is_consistent(), "{:?}", cycles.findings());
+        assert!(cycles.checks_are_complete(), "{:?}", cycles.findings());
+
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let alternate = CoreModel::from_statements([
+            maps(&a, MappingProperty::BroadMatch, &b),
+            maps(&b, MappingProperty::BroadMatch, &c),
+            maps(&a, MappingProperty::BroadMatch, &c),
+        ]);
+        assert!(alternate.is_consistent(), "{:?}", alternate.findings());
+    }
+
+    /// S38 makes all six object properties, so a literal on one is refused and the link is not
+    /// kept — the same treatment S18 gets, and for the same reason.
+    #[test]
+    fn a_literal_on_a_mapping_property_is_refused_under_s38() {
+        let a = ex("A");
+        let model = CoreModel::from_statements([Statement::new(
+            a.clone(),
+            MappingProperty::ExactMatch.iri(),
+            plain("their Client"),
+        )]);
+
+        assert!(mapped(&model, &a, MappingProperty::ExactMatch).is_empty());
+        assert!(!model.is_consistent());
+        let rendered = model
+            .findings()
+            .first()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(rendered.contains("skos:exactMatch"), "{rendered}");
+        assert!(rendered.contains("S38"), "{rendered}");
+    }
+
+    /// `skos:mappingRelation` stated outright: read, both ends typed through S39, and filed under
+    /// none of the five — nothing follows about which of them holds.
+    #[test]
+    fn a_stated_mapping_relation_types_both_ends_and_is_filed_under_no_property() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([Statement::new(
+            a.clone(),
+            SKOS_MAPPING_RELATION.to_owned(),
+            b.clone(),
+        )]);
+
+        for property in MappingProperty::ALL {
+            assert!(mapped(&model, &a, property).is_empty(), "{property}");
+            assert!(mapped(&model, &b, property).is_empty(), "{property}");
+        }
+        assert_eq!(
+            model
+                .resource(&a)
+                .and_then(|r| r.classes().get(&SkosClass::Concept)),
+            Some(&ClassOrigin::Entailed(SkosRule::S19))
+        );
+        assert_eq!(
+            model
+                .resource(&b)
+                .and_then(|r| r.classes().get(&SkosClass::Concept)),
+            Some(&ClassOrigin::Entailed(SkosRule::S20))
+        );
+        assert!(model.is_consistent(), "{:?}", model.findings());
+    }
+
+    /// A link the graph states both as a mapping and as a plain `skos:broader` stays **asserted**.
+    /// Reporting the author's own statement as something we inferred would be a derivation
+    /// nobody needed and a premise that was never necessary.
+    #[test]
+    fn a_lifted_link_never_overwrites_the_one_the_graph_stated() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::BroadMatch, &b),
+            s(&a, &skos("broader"), &b),
+        ]);
+
+        assert_eq!(
+            model
+                .resource(&a)
+                .and_then(|resource| resource.relations(SemanticRelation::Broader))
+                .and_then(|links| links.get(&b)),
+            Some(&RelationOrigin::Asserted)
+        );
+        assert!(
+            !model
+                .derivations()
+                .iter()
+                .any(|derivation| derivation.rule == SkosRule::S41
+                    && derivation.conclusion.contains("skos:broader ")),
+            "{:?}",
+            model.derivations()
+        );
+    }
+
+    /// A vocabulary that states no mapping at all is unchanged by all of the above: no mapping
+    /// links, no S41 derivations, and the same relations it had before section 10 was read.
+    #[test]
+    fn a_vocabulary_with_no_mappings_is_untouched_by_section_10() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        assert!(model
+            .resources()
+            .all(|(_, resource)| resource.mappings().is_empty()));
+        assert!(!model
+            .derivations()
+            .iter()
+            .any(|derivation| derivation.rule == SkosRule::S41));
     }
 }

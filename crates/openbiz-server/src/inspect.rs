@@ -24,8 +24,9 @@
 //! vocabulary redirects to a file; an operator with a truncated report has no way to know.
 
 use openbiz_skos::{
-    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, NoteKind, PropertyRefinements,
-    RelationOrigin, Resource, SemanticRelation, SkosClass, Statement, Term,
+    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, MappingProperty, Node, NoteKind,
+    PropertyRefinements, RelationOrigin, Resource, SemanticRelation, SkosClass, SkosRule,
+    Statement, Term,
 };
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
@@ -322,11 +323,21 @@ fn report(graph: &str, model: &CoreModel) -> String {
         .resources()
         .map(|(_, resource)| resource.broader_count())
         .sum();
+    // Entailed **under S25** and not merely entailed. Now that section 10 is read, a
+    // `skos:broader` link can also arrive under S41 from a `skos:broadMatch`, and calling that one
+    // "stated as skos:narrower" would tell an author their file says something it does not. The
+    // two are counted apart and the second gets its own line.
     let from_narrower: usize = model
         .resources()
         .filter_map(|(_, resource)| resource.relations(SemanticRelation::Broader))
         .flat_map(|links| links.values())
-        .filter(|origin| matches!(origin, RelationOrigin::Entailed(_)))
+        .filter(|origin| **origin == RelationOrigin::Entailed(SkosRule::S25))
+        .count();
+    let from_mapping: usize = model
+        .resources()
+        .filter_map(|(_, resource)| resource.relations(SemanticRelation::Broader))
+        .flat_map(|links| links.values())
+        .filter(|origin| **origin == RelationOrigin::Entailed(SkosRule::S41))
         .count();
     let associative: usize = model
         .resources()
@@ -342,7 +353,15 @@ fn report(graph: &str, model: &CoreModel) -> String {
         .resources()
         .filter_map(|(_, resource)| resource.relations(SemanticRelation::Related))
         .flat_map(|links| links.values())
-        .filter(|origin| matches!(origin, RelationOrigin::Entailed(_)))
+        .filter(|origin| **origin == RelationOrigin::Entailed(SkosRule::S23))
+        .count();
+    // As above: an associative link lifted from a `skos:relatedMatch` under S41 is not a converse
+    // that S23 supplied.
+    let associative_from_mapping: usize = model
+        .resources()
+        .filter_map(|(_, resource)| resource.relations(SemanticRelation::Related))
+        .flat_map(|links| links.values())
+        .filter(|origin| **origin == RelationOrigin::Entailed(SkosRule::S41))
         .count();
     // A link the graph stated with `skos:broaderTransitive` itself rather than with
     // `skos:broader`. It is not in the count above and never will be: sub-property entailment
@@ -371,6 +390,12 @@ fn report(graph: &str, model: &CoreModel) -> String {
             "  {associative} associative link(s), {associative_converses} converse(s) inferred \
              under S23\n"
         ));
+        if from_mapping > 0 || associative_from_mapping > 0 {
+            out.push_str(&format!(
+                "  {from_mapping} hierarchical and {associative_from_mapping} associative \
+                 link(s) were lifted from mapping links under S41\n"
+            ));
+        }
         // Polyhierarchy. §8 states nothing against it and ISO 25964 relies on it, so it is a
         // number and never a finding — but it is the number a migration from a strictly
         // single-parent source asks for first, so it is printed whenever there is any.
@@ -398,6 +423,93 @@ fn report(graph: &str, model: &CoreModel) -> String {
         out.push_str(
             "  counted as stated links; S24's transitive closure is not stored — \
              `openbiz ancestors <graph> <concept>` walks it\n",
+        );
+    }
+
+    // Section 10 — the outward links, and the reason `CLAUDE.md` §1.7 exists: an enterprise with
+    // nine overlapping vocabularies needs to see which of them are joined to anything. Left out
+    // entirely for a vocabulary with no mappings, as the sections above are.
+    //
+    // **Counted as links and not as statements.** S43 pairs every `skos:broadMatch` with a
+    // `skos:narrowMatch` and S44 makes the other three symmetric, so summing what each resource
+    // holds would report twice the reach the author wrote. `skos:broadMatch` is counted and
+    // `skos:narrowMatch` is not, because after the closure they are the same links seen from the
+    // two ends — the rule the hierarchy above is counted by.
+    let hierarchical_mappings: usize = model
+        .resources()
+        .map(|(_, resource)| {
+            resource
+                .mappings_of(MappingProperty::BroadMatch)
+                .map_or(0, |links| links.len())
+        })
+        .sum();
+    let from_narrow_match: usize = model
+        .resources()
+        .filter_map(|(_, resource)| resource.mappings_of(MappingProperty::BroadMatch))
+        .flat_map(|links| links.values())
+        .filter(|origin| matches!(origin, RelationOrigin::Entailed(_)))
+        .count();
+    let symmetric = |property: MappingProperty| -> usize {
+        model
+            .resources()
+            .map(|(node, resource)| {
+                resource.mappings_of(property).map_or(0, |links| {
+                    links.keys().filter(|other| *other >= node).count()
+                })
+            })
+            .sum()
+    };
+    let exact = symmetric(MappingProperty::ExactMatch);
+    let close = symmetric(MappingProperty::CloseMatch);
+    let associative_mappings = symmetric(MappingProperty::RelatedMatch);
+    let close_from_exact: usize = model
+        .resources()
+        .map(|(node, resource)| {
+            resource
+                .mappings_of(MappingProperty::CloseMatch)
+                .map_or(0, |links| {
+                    links
+                        .iter()
+                        .filter(|(other, origin)| {
+                            *other >= node && matches!(origin, RelationOrigin::Entailed(_))
+                        })
+                        .count()
+                })
+        })
+        .sum();
+    let mapped = model
+        .resources()
+        .filter(|(_, resource)| !resource.mappings().is_empty())
+        .count();
+    if mapped > 0 {
+        out.push_str("\nmappings:\n");
+        out.push_str(&format!(
+            "  {hierarchical_mappings} hierarchical mapping link(s), {from_narrow_match} of them \
+             stated as skos:narrowMatch\n"
+        ));
+        out.push_str(&format!(
+            "  {associative_mappings} associative mapping link(s)\n"
+        ));
+        out.push_str(&format!(
+            "  {exact} exact and {close} close equivalence mapping link(s), {close_from_exact} \
+             of the close ones inferred under S42\n"
+        ));
+        out.push_str(&format!(
+            "  {mapped} resource(s) in this graph carry at least one mapping link\n"
+        ));
+        // Said in every report that has a mapping in it, because it is a gap and not a footnote.
+        // An operator who read "3 exact" as "3 equivalence classes" would under-count a mapped
+        // vocabulary in exactly the way S45 licenses and this build does not compute.
+        out.push_str(
+            "  counted as stated links; S45 makes skos:exactMatch transitive and this build does \
+             not close it, so a chain of exact matches is reported as the links it states\n",
+        );
+        // §10.6.1: using the mapping properties only across concept schemes is a convention, and a
+        // mapping inside one scheme is consistent. Said out loud so that the count above is never
+        // read as a complaint about a vocabulary that maps within itself.
+        out.push_str(
+            "  \u{a7}10.6.1 makes mapping across schemes a convention rather than a rule, so a \
+             mapping inside one scheme is counted here and is never a finding\n",
         );
     }
 
@@ -815,6 +927,129 @@ ex:Chemistry a skos:Concept ;
         assert!(
             !report.contains("through a declared refinement"),
             "{report}"
+        );
+    }
+
+    /// The mapping section: what a vocabulary is joined to, counted as links rather than as the
+    /// statements S43 and S44 double.
+    #[test]
+    fn the_report_counts_mapping_links_once_and_says_what_it_did_not_close() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             @prefix theirs: <http://other.example.org/> .
+             ex:cat a skos:Concept ;
+                 skos:prefLabel \"Cat\"@en ;
+                 skos:exactMatch theirs:feline ;
+                 skos:broadMatch theirs:mammal ;
+                 skos:relatedMatch theirs:pet .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(report.contains("\nmappings:\n"), "{report}");
+        assert!(
+            report.contains("1 hierarchical mapping link(s), 0 of them stated as skos:narrowMatch"),
+            "{report}"
+        );
+        assert!(report.contains("1 associative mapping link(s)"), "{report}");
+        assert!(
+            report.contains(
+                "1 exact and 1 close equivalence mapping link(s), 1 of the close ones inferred \
+                 under S42"
+            ),
+            "{report}"
+        );
+        // Four resources: the concept, and the three it maps to, each of which S20 typed.
+        assert!(
+            report.contains("4 resource(s) in this graph carry at least one mapping link"),
+            "{report}"
+        );
+        assert!(
+            report
+                .contains("S45 makes skos:exactMatch transitive and this build does not close it"),
+            "the gap is stated in the report, not only in the ledger: {report}"
+        );
+        assert!(
+            report.contains("no SKOS integrity condition is violated"),
+            "{report}"
+        );
+    }
+
+    /// A vocabulary that maps nothing gets no mapping section at all — the rule the SKOS-XL
+    /// section follows, and the reason the section's presence is itself an answer.
+    #[test]
+    fn a_vocabulary_with_no_mappings_gets_no_mapping_section() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             ex:cat a skos:Concept ; skos:prefLabel \"Cat\"@en .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+        assert!(!report.contains("mappings:"), "{report}");
+    }
+
+    /// S46 through the report: the clash is named, the statement is quoted, and the closing
+    /// sentence refuses to call the vocabulary consistent.
+    #[test]
+    fn an_exact_match_clashing_with_a_hierarchical_one_is_reported_as_inconsistent() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             @prefix theirs: <http://other.example.org/> .
+             ex:cat a skos:Concept ;
+                 skos:exactMatch theirs:feline ;
+                 skos:broadMatch theirs:feline .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(report.contains("skos:broadMatch (asserted)"), "{report}");
+        assert!(
+            report.contains(
+                "S46: skos:exactMatch is disjoint with each of the properties skos:broadMatch"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains("violates a SKOS integrity condition"),
+            "{report}"
+        );
+    }
+
+    /// A mapped hierarchy is a hierarchy: S41 puts `skos:broadMatch` under `skos:broader`, so the
+    /// semantic relation counts include it and `openbiz ancestors` can walk through it. A build
+    /// that kept mappings in a section of their own would report this vocabulary as flat.
+    ///
+    /// And the lifted link is **not** counted as one "stated as skos:narrower", which is what that
+    /// line said before section 10 was read and would now be a report of a statement nobody wrote.
+    #[test]
+    fn a_mapped_hierarchy_is_counted_as_hierarchy_and_cites_s41() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+             @prefix theirs: <http://other.example.org/> .
+             ex:cat a skos:Concept ; skos:broadMatch theirs:mammal .
+            "
+        ));
+
+        let report = inspect(&store, VOCABULARY).expect("a readable vocabulary");
+
+        assert!(
+            report.contains("1 hierarchical link(s), 0 of them stated as skos:narrower"),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "1 hierarchical and 0 associative link(s) were lifted from mapping links under S41"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "S41: skos:broadMatch is a sub-property of skos:broader, skos:narrowMatch is a"
+            ),
+            "the lift must explain itself with the statement that licensed it: {report}"
         );
     }
 }

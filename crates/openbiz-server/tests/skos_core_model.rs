@@ -984,3 +984,98 @@ fn inspect_says_the_disjointness_check_was_abandoned_rather_than_claiming_it_pas
     // And the hedge must be earned: this vocabulary really does violate nothing.
     assert!(!report.contains("is not a SKOS vocabulary"), "{report}");
 }
+
+/// §10 end to end: a vocabulary whose hierarchy leaves the building. `skos:broadMatch` is a
+/// sub-property of `skos:broader` under S41, so the walk climbs *through* the mapping into
+/// somebody else's concept — which is the whole point of a mapping and the thing an operator
+/// cannot see from a Turtle export, where the two properties look unrelated.
+///
+/// A build that kept the mapping properties in a section of their own would report this thesaurus
+/// as one concept deep and every mapped vocabulary as an island.
+#[test]
+fn ancestors_climbs_through_a_mapping_link_off_disk_and_names_s41() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "mapped.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         @prefix theirs: <https://other.example.org/geo/> .\n\
+         ex:japan a skos:Concept ; skos:prefLabel \"Japan\"@en ; skos:broader ex:eastasia .\n\
+         ex:eastasia a skos:Concept ; skos:prefLabel \"East Asia\"@en ;\n\
+             skos:broadMatch theirs:asia .\n",
+    );
+
+    let output = run(
+        dir.path(),
+        &["ancestors", REGIONS, "https://example.org/regions/japan"],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(report.contains("2 concept(s) are above it"), "{report}");
+    assert!(
+        report.contains(
+            "<https://example.org/regions/japan> → <https://example.org/regions/eastasia> → \
+             <https://other.example.org/geo/asia>"
+        ),
+        "the walk must cross the mapping: {report}"
+    );
+
+    // And the report of the vocabulary says where that link came from, with the statement that
+    // licensed the lift rather than a bare "inferred".
+    let inspected = stdout(&run(dir.path(), &["inspect", REGIONS]));
+    assert!(
+        inspected.contains(
+            "S41: skos:broadMatch is a sub-property of skos:broader, skos:narrowMatch is a"
+        ),
+        "{inspected}"
+    );
+    assert!(
+        inspected.contains("1 hierarchical mapping link(s), 0 of them stated as skos:narrowMatch"),
+        "{inspected}"
+    );
+    assert!(
+        inspected.contains("S45 makes skos:exactMatch transitive and this build does not close it"),
+        "the report states the part of §10 it does not do: {inspected}"
+    );
+    assert!(
+        inspected.contains("no SKOS integrity condition is violated"),
+        "{inspected}"
+    );
+}
+
+/// S46 end to end — §10's only integrity condition, read by the real binary off disk. The clash
+/// is between an exact mapping and a hierarchical one, which is Example 52, and the vocabulary is
+/// refused the word "consistent".
+#[test]
+fn inspect_reports_an_exact_and_hierarchical_mapping_clash_off_disk() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "clash.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         @prefix theirs: <https://other.example.org/geo/> .\n\
+         ex:japan a skos:Concept ; skos:prefLabel \"Japan\"@en ;\n\
+             skos:exactMatch theirs:nippon ; skos:broadMatch theirs:nippon .\n",
+    );
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+
+    assert!(
+        report.contains("skos:exactMatch <https://other.example.org/geo/nippon> (asserted)"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "S46: skos:exactMatch is disjoint with each of the properties skos:broadMatch and \
+             skos:relatedMatch."
+        ),
+        "the report must quote the statement, not merely cite it: {report}"
+    );
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "{report}"
+    );
+}

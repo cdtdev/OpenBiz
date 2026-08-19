@@ -7,6 +7,7 @@
 
 mod ancestry;
 mod labels;
+mod mapping;
 mod model;
 mod notes;
 mod refinement;
@@ -24,6 +25,10 @@ pub use ancestry::{Ancestry, AncestryBound};
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
     SKOS_PREF_LABEL, XSD_STRING,
+};
+pub use mapping::{
+    ExactMatchDisjointness, MappingProperty, SKOS_BROAD_MATCH, SKOS_CLOSE_MATCH, SKOS_EXACT_MATCH,
+    SKOS_MAPPING_RELATION, SKOS_NARROW_MATCH, SKOS_RELATED_MATCH,
 };
 pub use model::{
     ClassOrigin, CoreModel, CoreModelBuilder, Derivation, Finding, ListDefect, Literal, MemberList,
