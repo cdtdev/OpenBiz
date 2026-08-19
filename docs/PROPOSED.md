@@ -1808,3 +1808,51 @@ worth nothing if they did not write it._
   is whether `RecordedAt` moves out of `openbiz-store` into a crate the git and export paths can also
   depend on, which is a workspace-shape decision and not the loop's to take.
 - **Suggested phase:** Phase 3, or whenever `openbiz-git` starts writing.
+
+### Give the reuse ladder an enforcement point, at the moment somebody is already deciding
+- **Status:** proposed.
+- **Gap:** `adr/0049` built the record `adr/0003` §3 asks for, and nothing requires it. The reason is
+  structural rather than an oversight: there is no single-step "create concept" in this build, so
+  there is no moment at which a refusal can be attached. `openbiz mint` computes an IRI and writes
+  no concept; the concept arrives later, in a candidate, and the two are not linked by anything.
+  The consequence is stated on the item and in both reports — an empty `openbiz justifications` is
+  consistent with a store where everything was reused *and* with one where nobody used the flag.
+- **Why load-bearing:** it is the difference between §3's mechanism and its decoration, and §3 is
+  explicit that a mechanism people route around has failed rather than been ignored. Three
+  iterations have now built toward this — discovery on `mint` (55), discovery on `split` (56), the
+  record (57) — and each one's honest scope note says the same thing: nothing is refused. A fourth
+  iteration adding another unenforced surface would be the loop convincing itself.
+- **The shape I would propose, and why it is not mine to take:** `Store::decide` is the honest
+  candidate. An approval that introduces concept IRIs with no justification recorded against them is
+  the one moment when somebody accountable is already looking at the change, which is exactly what
+  §3 means by "visible to the people accountable". But that is a change to the *seam* — it makes
+  approval refusable on a governance ground rather than a correctness one, it needs a policy for
+  vocabularies that do not want it, and it interacts with the blocked HTTP half of the seam. Those
+  are product decisions about how strict OpenBiz is by default, and `CLAUDE.md` §7 puts that class
+  of decision here rather than in the plan.
+- **Cost & impact:** medium. The read is cheap — the justifications for a candidate's new IRIs are
+  one system-graph lookup — and the expensive part is deciding what happens when it fails, and
+  whether the answer is "refuse", "warn", or "record that it was approved without one", which is
+  itself a third kind of auditable record and arguably the best of the three.
+- **Suggested phase:** Phase 6, beside authentication, since a refusal a person can override needs
+  to know who overrode it.
+
+### Say whether a justified creation ever actually happened
+- **Status:** proposed.
+- **Gap:** a justification records that somebody decided to create rather than reuse. It does not
+  record whether they then did. A curator can file one and never stage the concept, or stage it and
+  have the candidate rejected, and `openbiz justifications` will still report the IRI as created
+  despite a match. So the report over-states proliferation by an unknown amount, in a direction that
+  makes OpenBiz's own governance numbers look worse than the truth rather than better — which is the
+  safe direction, but it is still wrong.
+- **Why load-bearing:** a governance report an auditor cannot take at face value is one they stop
+  reading. This is also the one thing standing between the record and a genuine metric: "concepts
+  created despite an existing match, that are now in a vocabulary" is a number a data-governance
+  function would actually track quarter on quarter.
+- **Cost & impact:** small for the reporting half — the store can already answer whether an IRI is
+  in a vocabulary, and it is one line per entry. It is proposed rather than done because the
+  interesting half is a decision: what a justification *means* once its candidate is rejected. Kept
+  as a record of what was proposed and refused, which is arguably the most useful record in the
+  file? Or marked so it stops counting? That interacts directly with the `openbiz split` item, and
+  taking it in passing would settle it by accident.
+- **Suggested phase:** Phase 2, immediately after the `openbiz split` half lands.

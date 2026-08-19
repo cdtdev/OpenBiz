@@ -45,6 +45,7 @@ mod candidate;
 /// is written and read through. See the module documentation.
 mod clock;
 mod graph;
+mod justification;
 /// How a store written by an older OpenBiz becomes one this build reads: the migration chain, the
 /// records it leaves behind, and why it refuses rather than skips. See the module documentation.
 mod migrate;
@@ -77,6 +78,7 @@ pub use candidate::{
     Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, Provenance,
 };
 pub use clock::{ClockError, RecordedAt};
+pub use justification::{Justification, JustificationId, JustificationRejected};
 pub use migrate::{Migration, MigrationReport, MigrationStep};
 pub use policy::{IriPolicy, PolicyRecorded};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
@@ -417,6 +419,13 @@ pub enum StoreError {
         /// What was missing or wrong, and why it matters.
         detail: String,
     },
+    /// The justification offered for creating a new concept is not one this build will record.
+    ///
+    /// Its own variant rather than a second `detail` string, because the IRI whose creation was
+    /// being justified is the first thing an operator needs back: a refusal that does not say
+    /// which creation it turned away leaves them guessing which of several to write again.
+    #[error(transparent)]
+    JustificationRejected(#[from] justification::JustificationRejected),
 
     /// A change was proposed against a graph that is not a vocabulary.
     #[error(

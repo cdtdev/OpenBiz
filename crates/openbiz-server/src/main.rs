@@ -156,8 +156,18 @@ async fn main() -> anyhow::Result<()> {
             graph,
             label,
             pattern,
+            because,
         } => one_shot(store, |store| {
-            openbiz_server::mint(store, &graph, label.as_deref(), pattern.as_deref())
+            openbiz_server::mint(
+                store,
+                &graph,
+                label.as_deref(),
+                pattern.as_deref(),
+                because.as_deref(),
+            )
+        }),
+        Command::Justifications { graph } => one_shot(store, |store| {
+            openbiz_server::justifications(store, graph.as_deref())
         }),
         Command::Policy { graph, pattern } => one_shot(store, |store| {
             openbiz_server::policy(store, &graph, pattern.as_deref())

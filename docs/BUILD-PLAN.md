@@ -3,21 +3,21 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **61 of 226 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **62 of 227 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 31 of 33; the denominator moved again at
-iteration 56, which split the discovery-on-`split` item from the recorded justification `adr/0003`
-§3 requires, because the second is a store-format decision and not a paragraph of the first. Every
-count on this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of
-what was left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also
-records how the denominator has moved as items were split.
+wait on authorisation, not on anything else. Phase 2 is 32 of 34; the denominator moved again at
+iteration 57, which split the record and the `mint` path from the same record on `split`, because a
+split is *N* creations from one command and raises two governance questions the mint path does not.
+Every count on this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory
+of what was left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which
+also records how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **31 of 33**. Iteration 56 put discovery on
-the second creation path: `openbiz split` now asks what already exists under **every** part name,
-across the whole store, in one pass rather than one per name (`adr/0048`). Of the two items left,
-one — the candidate seam over HTTP and in the interface — is **blocked on authentication**
-(`BLOCKED.md`); the other is the recorded justification `adr/0003` §3 requires, which is a decision
-about the candidate record and therefore about the store format.
+**Current position:** Phase 2 (SKOS authoring model), **32 of 34**. Iteration 57 gave the reuse
+ladder teeth on the path that had none: `openbiz mint --because "…"` files a first-class record of
+what discovery found and why none of it fitted, and `openbiz justifications` reads it back across
+every vocabulary (`adr/0049`). Of the two items left, one — the candidate seam over HTTP and in the
+interface — is **blocked on authentication** (`BLOCKED.md`); the other is the same record on
+`openbiz split`, where one command creates several concepts at once.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1303,22 +1303,42 @@ the interface is a core differentiator, and building it late means retrofitting 
       > **Scope, honestly:** nothing is refused, as on the mint path; the justification is still
       > unrecorded and the report says so; matching is lexical; and `split` now reads the store
       > once more than it did, unmeasured. In `docs/UNTESTED.md`.
-- [ ] The recorded justification `adr/0003` §3 requires, on the creation paths
-      > Creating new when something existing would serve has to leave an auditable record naming
-      > what was found and why nothing fitted. §3 is explicit that the justification *is* the
-      > mechanism — "not a warning dialog, those get clicked through, but an auditable record that
-      > makes proliferation visible to the people accountable for it".
-      > Today there is nowhere first-class for it. `openbiz mint` writes nothing at all, so it can
-      > only print the ladder; `openbiz split` stages a candidate whose provenance note says what
-      > the command did rather than why the concepts it found did not fit. Both reports say so
-      > rather than implying the ladder has teeth.
-      > **The decision this item has to make** is whether the record is a field on the candidate's
-      > provenance — a store format bump, a migration, a fixture, and validation on read like
-      > every other field of that record — or prose in the note. "Makes proliferation visible to
-      > the people accountable" means an auditor can ask *which concepts were created despite an
-      > existing match*, and a prose note cannot be asked that, which is the argument for the
-      > field. Against it: `mint` has no record to write to at all, so a field only covers half
-      > the creation paths, and the half it covers is the one that already has a reviewer.
+- [x] **The recorded justification `adr/0003` §3 requires — the record, and `openbiz mint`**
+      (`adr/0049`)
+      > Split in place at iteration 57. The item named one decision and two creation paths; the
+      > decision plus the path that had *nothing* is this item, and `openbiz split` is the next.
+      > **The decision: a first-class record in the system graph, keyed to the created IRI** —
+      > not a field on the candidate's provenance and not prose in a note. A candidate can create
+      > several concepts at once, so one field could not say which of them had a match; and
+      > `openbiz mint` has no candidate at all, so a field would have covered only the half of the
+      > creation surface that already has a reviewer. No store format bump: nothing already on
+      > disk changes meaning, which is what versions 3 and 4 existed for.
+      > `openbiz mint <graph> <label> --because "…"` records what discovery found and why none of
+      > it fitted; `openbiz justifications [<graph>]` reads it back across every vocabulary,
+      > because proliferation happens *between* vocabularies. What was passed over is stored as an
+      > **IRI in the object position**, which is the whole difference from a note: the auditor's
+      > question is a query, and there is a test that joins it to the vocabulary's own labels and
+      > fails when the representation weakens.
+      > The record says whether the search behind it finished, because evidence from a pass that
+      > stopped at its bound says less than one that did not, and a record silent about that
+      > invites a reader to take one for the other.
+      > **Scope, honestly:** nothing is refused — there is no single-step create to attach a
+      > refusal to — so these are what people chose to write down, and both reports say so in the
+      > full and the empty case. A blank-node match cannot be named in the record and is counted
+      > instead. The unavailable-source half of "the search did not finish" has no production
+      > caller: this build has one source and it always answers. In `docs/UNTESTED.md`.
+- [ ] The same record on the other creation path — `openbiz split`
+      > `openbiz split` prints the ladder over every part name (`adr/0048`) and still records
+      > nothing, so half the creation surface remains outside the mechanism `adr/0049` built.
+      > It is a separate item because a split is *N* creations from one command, and the two
+      > questions that raises are not the mint path's: does one `--because` cover every part, or
+      > does each part need its own reason — and what does a justification mean for a part whose
+      > candidate is later **rejected**, since nothing was created after all. The record already
+      > survives its candidate's fate by construction; whether that is right for a rejection is
+      > the decision this item has to take, and it is a governance question rather than a coding
+      > one. `adr/0048`'s self-match rule also has to carry through: the concept being divided is
+      > not something the split "passed over", and recording it as such would file the original as
+      > a duplicate of its own parts.
 - [x] **The audit trail says which clock it is on, and its stamps are values** (`adr/0047`)
       > Added on product-owner instruction (`FEEDBACK-LOG.md`, 2026-08-20), which set the rule:
       > for anything a reader must order, an explicit offset or UTC and never a bare date.
