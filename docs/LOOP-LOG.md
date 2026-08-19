@@ -2745,3 +2745,64 @@ look competent disables the one signal that catches a stuck loop.
   limitation is not merely unhelpful but makes the new code's central bound unmeasurable in
   principle. The next blind-spot pass — iteration 40 — should widen the generator and do nothing
   else, and it should generate **branching**, which is the axis none of the six gaps has had.
+
+## Iteration 37 — 2026-08-19
+- **Clean start, `main` green on `ba9b21a`, promote queue empty — and the feedback inbox was not.**
+  The product owner's note was drained into `FEEDBACK-LOG.md` and the inbox truncated **before** any
+  work began, per the standing ordering rule. It became the whole iteration: no plan item was taken,
+  because the note asked for one specific deliverable and it is not a plan item.
+- **The correction was right and the loop had been hiding behind a true sentence.** Six consecutive
+  iterations closed with a variant of *"it cannot be told from inside this repository."* Each was
+  true. Together they were a habit — "I cannot know" reads like diligence and costs nothing, and
+  `CLAUDE.md` §8 never listed public test data as out of scope. About forty minutes of `curl`, a
+  VoID descriptor and a public SPARQL endpoint produced numbers for four of the six.
+- **What was measured, without adding anything to the repository.** AGROVOC by SPARQL: 41,825
+  concepts, 10,089,090 triples, **474 concepts with two broader links and none with three**, 50,636
+  mapping links of which 36,402 are `skos:exactMatch`, 1,251,722 `skosxl:Label`. LC Genre/Form
+  Terms by fetching the 745 KiB dump to `/tmp` and counting it: 2,685 concepts, **25.8% with more
+  than one broader concept**, maximum 4, and a worst case of **7 routes to a summit at depth 3**.
+- **`PathBound::DEFAULT` was not merely unmeasured — the reasoning behind it pointed the wrong
+  way.** Iteration 36 put an ordinary thesaurus *near* the 10,000-route ceiling by arguing that
+  branching and depth compound. On the one real polyhierarchy available they do not, because real
+  thesauri are three or four levels deep. The entry is amended rather than closed: two vocabularies
+  are not a population and none of this came from a test.
+- **The SKOS extension point is used in the wild, and not once where we tested it.** AGROVOC
+  declares 21 `rdfs:subPropertyOf` into SKOS — 8 refining `skos:notation`, 12 refining
+  `skos:related`, one refining **`skos:broader`** — and **zero** refining a documentation property,
+  which is the only shape any fixture here has. A refinement of `skos:broader` is a hierarchy link a
+  reader that does not entail from `rdfs:subPropertyOf` cannot see. The same query answered the
+  entry's other unknown in our favour: the declarations sit in the *same* graph as the concepts, so
+  our first pass looks in the right place. And **2 of the 21 are used on any statement**, so a
+  report that lists declarations is 90% noise.
+- **Three of the note's four premises came back different, which is the point of checking rather
+  than complying.** EuroVoc **fails** a licence check today — the Publications Office licenses "the
+  editorial content of this website" CC BY 4.0 and routes CELLAR and EU Vocabularies to an email
+  address, so only secondary sources say CC BY, which is exactly the standard the note set. The
+  "26 GB free" is C:, which holds the loop state; the repo is on G: with 355 GB and the caches are
+  on ext4 with 929 GB, so it is a placement constraint. And checksum-pinning has a hole: **neither
+  publisher offers an immutable URL** — AGROVOC serves only a moving `latestAgrovoc` path with older
+  releases behind an email request, LC regenerates daily — so a pin goes stale on their schedule.
+- **A checksum that looks wrong and is not.** Two independent fetches of `genreForms.skosrdf.nt.gz`
+  agreed with each other and disagreed with LC's published PREMIS SHA-1. The hash is attached to the
+  `.gz` URI in the JSON-LD and is in fact the hash of the **decompressed** bytes. I nearly wrote it
+  up as a publisher defect; hashing the unpacked file first is what stopped that.
+- **The recommendation is deliberately narrower than what was asked for.** Take LCGFT and only
+  LCGFT — 745 KiB, public domain, real polyhierarchy, real SKOS-XL, real reified change notes — and
+  do **not** build fetch machinery for AGROVOC, whose 70 MiB behind a moving URL with
+  mixed-provenance multilingual content is a human's decision. It is a proposal and it stays one:
+  the loop does not promote its own.
+- **Verification.** Docs only — no Rust or TypeScript changed. `cargo test --workspace` run anyway
+  to confirm the inherited baseline: **716 tests, rc=0**, read from the exit status and not a pipe.
+  No new dependency; nothing added to the repository; the 12 MB of scratch in `/tmp` deleted.
+- **Recorded:** one proposal, three `UNTESTED.md` entries amended with measurements (none closed —
+  a measurement taken by a throwaway script is not a test, and saying otherwise would be the exact
+  false green this ledger exists to prevent). No ADR: nothing was decided, which is the point.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T06:21Z.
+- **Still uncertain:** whether a fixture that **skips** in CI is worth building at all. Air-gapped
+  honesty forces it — a test that fetches is a test that fails in the deployments §1.1 exists to
+  serve — but a measurement nobody is forced to run is a measurement that rots, and I have just
+  spent an iteration demonstrating that this loop will happily let an unanswered question sit for
+  six iterations when nothing forces the answer. So the proposal's own mechanism has the failure
+  mode the proposal was written to fix, and I do not know the way out: a required check needs the
+  network, an optional one needs a discipline the last six iterations are evidence against. That is
+  question (c) in the proposal and it is the one I would most like a human to answer.
