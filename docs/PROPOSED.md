@@ -360,7 +360,17 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
   is chosen here has to cover that too. Read the two together; they are one decision.
 
 ### Measure the core model's size before the transitive closure is built on top of it
-- **Status:** proposed.
+- **Status:** deferred — **overtaken by events, iteration 26.** The measurement was taken and the
+  decision recorded, without this proposal being promoted, because the build-plan item it was a
+  prerequisite of said so itself: *"a decision on the closure's size taken against the measurement
+  `docs/UNTESTED.md` now asks for"* is a clause of "Semantic relations, part 2", so taking it was
+  splitting an in-plan item rather than promoting a proposal. The numbers and the decision are in
+  `docs/adr/0024-semantic-relation-closure-scale.md`; the harness is `openbiz-skos`'s `scale`
+  module. **The decision went the way this proposal guessed it might:** S24's closure is answered
+  on read and never stored. What the measurement additionally found — that the *existing*
+  materialisation costs 3.9 KiB per link and 4.4 GiB at a million — is genuinely new and is the
+  three proposals immediately below, which are *not* self-promoted and want a human.
+- **Superseded status:** proposed.
 - **Gap:** iteration 24 put semantic relations into `openbiz-skos`, and they are the first thing
   in the crate that scales with a vocabulary's **size** rather than with its structure. The
   closure materialises every stated link under four properties — the one written, its inverse
@@ -1005,3 +1015,93 @@ the runbook's correctness is a property of the commands, the exit statuses, and 
 of which we own and can document exactly. An LLM-written runbook is a plausible document that
 nobody verified against the binary, and it would be discovered wrong on the worst day the customer
 has. `README.md` is the right home for it and a human wrote it._
+
+### Cut what a semantic relation costs, starting with the derivation text
+
+- **Status:** proposed.
+- **Gap:** `docs/adr/0024` measures **3.86 KiB of resident memory per stated `skos:broader`** —
+  43× the 92 bytes of the fact itself — against 0.70 KiB for a typed concept that states nothing.
+  A million-link vocabulary carrying **no labels at all** held 4 376 MiB and took 62.66 s to
+  build, 54.7 s of it system time, which is a machine paging rather than computing. `CLAUDE.md`
+  §1.5 asks for "modest memory at rest". This is not that.
+- **Why load-bearing:** it is the first hard number that contradicts a non-negotiable, and it is
+  in the crate every later phase reads through. Phase 3's concept tree, Phase 4's exports and
+  Phase 6's validation all build on `CoreModel`, so the cost is paid again by everything
+  downstream. It is also cheapest to change now: the ADR has just decided that S24 adds *nothing*
+  to this structure, so the structure is momentarily stable.
+- **What is being asked for**, in the order the ADR's decomposition ranks them, each measured
+  against the existing `scale` harness rather than argued:
+  1. **Stop pre-rendering derivations** (~900 B/link, the largest single share). A `Derivation`
+     holds two eagerly-`format!`ed `String`s of about 120 characters. The same facts are already
+     in the model as structured links; the text could be reconstructed from
+     `(relation, from, to, rule)` at the moment something reads it, which for most vocabularies is
+     never. This changes a public type with callers in `openbiz-server`.
+  2. **Store one direction of each inverse pair** (~200 B/link). S25 and S26 make the converse
+     recoverable exactly; holding both is a read-time convenience paid for in permanent memory.
+     The cost is that `Resource::relations` becomes a computed answer for one direction, which
+     needs care to keep `RelationOrigin` truthful about which direction the graph actually stated.
+  3. **Escape `BTreeMap`'s allocation floor** (~1 KiB/link). An eleven-slot node is allocated for
+     a map holding one entry, once per relation per resource, and most of those maps will never
+     hold a second. A small-vector-of-pairs representation below a threshold would reclaim most of
+     it. This is the largest share and the least interesting change, which is a good sign for it.
+- **Why the loop is not deciding it:** all three change shipped public types with production
+  callers, and (1) in particular trades memory against the latency of an explanation, which is the
+  feature `CLAUDE.md` §3 calls first-class. Ranking memory above explanation latency is a product
+  judgement. A target should also be *stated* — "a million-link vocabulary in under N GiB" — and
+  choosing N is not the loop's to do.
+- **Cost & impact:** roughly one iteration each, independently landable in the order above. No new
+  dependency for (1) and (2); (3) is implementable with `Vec` and needs none either.
+- **Suggested phase:** Phase 2, after "Semantic relations, part 2" — the traversal that item builds
+  should be measured on the current shape before the shape moves.
+
+### Decide what `openbiz inspect` does when the explanation is a gigabyte
+
+- **Status:** proposed.
+- **Gap:** a derivation renders on **three** lines carrying the full text of the SKOS statement
+  that licensed it, and there are three derivations per stated link. `docs/adr/0024` measures the
+  `why:` section at **10.3 MiB at 10k links, 103 MiB at 100k, and 1 033.8 MiB at 1M** — built into
+  a single `String` and printed at the end, so at a million links it is a gigabyte held *on top of*
+  the 4.4 GiB model. No test runs `inspect` at that size.
+- **Why load-bearing:** it is the only place the inference model is reachable by a user today, so
+  it is where a real operator meets this first, and they meet it as a machine that stops
+  responding. It is also the template for every later explanation surface — Phase 3's "why is this
+  concept here?" panel and Phase 6's validation report have the same problem in a smaller font.
+- **Why the loop is not deciding it:** `inspect`'s own module documentation argues, at length and
+  correctly, that a silent cap in an *inference* report is the one thing such a report must never
+  do — a truncated explanation implies "that is all there was", which is exactly what is false, and
+  `docs/COMPETITIVE.md` records opaque incumbent reporting as a thing we sell against. Overturning
+  a documented product argument on memory grounds is a product decision. The alternatives are not
+  equivalent and want choosing between: **stream** the report as it is built rather than buffering
+  it (keeps every derivation, costs the summary counts that come last); **cap with a named flag**,
+  printing "n of m shown, `--all` for the rest" (never silent, but a default that hides most of the
+  answer); or **group** derivations by rule and print each rule once with a count and a sample
+  (readable at any size, and no longer a per-fact audit trail).
+- **Cost & impact:** one iteration once the shape is chosen. Streaming is the largest change and
+  touches how `inspect` composes its whole report, not only this section.
+- **Suggested phase:** Phase 2.
+
+### Give the scale harnesses a home and a schedule, because nothing runs them
+
+- **Status:** proposed.
+- **Gap:** there are now three `#[ignore]`d measurement harnesses — `openbiz-store`'s `scale` and
+  `literal_precision`, and `openbiz-skos`'s `scale` — feeding `adr/0013`, `adr/0014` and
+  `adr/0024`. **Nothing runs any of them.** CI runs the ordinary suite, which by design skips
+  every row that matters. Each has a small in-suite case asserting the fixture's arithmetic so the
+  harness cannot rot into measuring nothing, and that is a real guard, but it does not notice a
+  change that makes the model twice as large — it only notices one that changes the *ratio*.
+- **Why load-bearing:** a performance number in an ADR with nothing re-measuring it is a claim with
+  an expiry date nobody wrote down. `adr/0013`'s numbers are from iteration 11 and the store has
+  had a format migration since. The failure mode is quiet and familiar: the ADR still reads true,
+  and the machine no longer agrees with it.
+- **What is being asked for:** one of — a `cargo xtask bench` that runs all three and prints the
+  tables together, so a human can run one command before a release; **or** a scheduled CI job on a
+  runner large enough for the 1M rows, which is arguably the hardware-bound testing `CLAUDE.md` §8
+  puts outside the loop; **or** an explicit decision that these are run by hand at named moments
+  (before a phase closes, before a release) and that the ADRs carry the date they were last run.
+  The third costs nothing and would be a real improvement on today.
+- **Why the loop is not deciding it:** two of the three options are about CI infrastructure and
+  runner cost, which is a spending decision, and the third is a process commitment about when
+  humans do things.
+- **Cost & impact:** the third option is under an iteration. The first is one. The second is not
+  the loop's to arrange.
+- **Suggested phase:** Phase 14, or sooner if a release is contemplated.

@@ -104,24 +104,55 @@ Do not delete it — the record of what took how long to close is the signal.
   entry is the only place that says the report's closing sentence is narrower than it reads.
 - **Opened:** iteration 24
 
-### The semantic relation model holds four entries per stated link, and the ceiling is unmeasured
+### ~~The semantic relation model holds four entries per stated link, and the ceiling is unmeasured~~
 - **Kind:** partial-coverage
-- **What is proven:** the model is correct on graphs of a handful of links, unit and end to end.
-- **What is not:** the size. The closure materialises every link under four properties — the
-  stated one, its inverse under S25, and both transitive variants under S22 — so a 100k-link
-  thesaurus holds roughly 400k `(Node, RelationOrigin)` entries with the IRIs cloned into each,
-  and the semantic relations are the part of a vocabulary that scales with its size rather than
-  with its structure. `CoreModelBuilder`'s doc comment claims what is kept is "proportional to the
-  resources the model has something to say about rather than to the size of the graph"; that
-  claim was true when labels and notes were counted and dropped, and **this item is the first
-  thing that makes it false**. The derivation list grows with it: three derivations per stated
-  link, all printed by `openbiz inspect`, which prints every one deliberately and without a cap.
-- **What would close it:** a measurement at 10k, 100k and 1M links of peak memory and of the
-  report's size, and then a decision — the candidates are storing one direction and answering the
-  other on read, or not materialising the S22 lift until S24 needs it. Neither should be chosen
-  before the number is known. Note that S24's closure, the next item, is worse than linear in the
-  same data, so the measurement wants taking before it lands rather than after.
-- **Opened:** iteration 24
+- **Closed, iteration 26.** The measurement it asked for exists: `crates/openbiz-skos/src/scale.rs`
+  reports time, resident memory, held entries, derivations, report size and the S24 closure's size
+  at 10k, 100k and 1M links across four hierarchy shapes, and the numbers are in
+  `docs/adr/0024-semantic-relation-closure-scale.md`. The decision it asked for was taken: **S24's
+  closure is not materialised**, because a legal 100 000-link chain licenses five thousand million
+  pairs and because a stored entry cannot name the path it took.
+- **What it found, and what has replaced it below:** the ceiling is not comfortable. A stated link
+  costs **3.9 KiB resident**, 43× the size of the fact; a million-link vocabulary with **no labels
+  at all** measured **4.4 GiB and a 62-second build**. That is a live problem with what is already
+  shipped, not with what comes next, and it is now the two entries that follow.
+
+### A stated semantic relation costs 3.9 KiB of memory, and a million-link vocabulary does not fit
+- **Kind:** measured-and-over-budget
+- **What is proven:** the number, three ways. `docs/adr/0024` measures a marginal
+  **3.86 KiB per stated `skos:broader`** at a million links and **3.85 KiB** at a hundred thousand,
+  against **0.70 KiB** for a typed concept that states nothing — so the relations are five times
+  the rest of the model at one link per concept. A 1M-link tree held **4 376 MiB** (peak 5 081 MiB)
+  and took **62.66 s** to build, of which 54.7 s was system time: it was paging, not computing.
+- **What is not:** any judgement that this is acceptable. `CLAUDE.md` §1.5 asks for "modest memory
+  at rest", and 4.4 GiB before a single `skos:prefLabel` is loaded is not that. The ADR decomposes
+  it — roughly 900 B of eagerly-rendered derivation text, 390 B of cloned IRIs, and about 1 KiB of
+  `BTreeMap`'s eleven-slot allocation floor paid for maps that hold one entry — but **fixes none of
+  it**, because each fix changes a shipped public type and belongs to its own item.
+- **What would close it:** the three reductions in `docs/PROPOSED.md` — derivations reconstructed
+  on demand rather than pre-rendered, one direction stored per inverse pair, and a container
+  without the eleven-slot floor — measured against the same harness, with a target stated in the
+  plan rather than assumed.
+- **Do not read this as "1M links is unsupported".** It completes and answers correctly. It is the
+  memory that is wrong, and nothing in the product currently refuses a vocabulary for being large,
+  which is the honest shape of the risk: a customer meets this as a slow machine, not as an error.
+- **Opened:** iteration 26
+
+### `openbiz inspect` renders a 1 GiB report from a million-link vocabulary, in one `String`
+- **Kind:** measured-and-over-budget
+- **What is proven:** the size. A derivation renders on **three** lines carrying the full text of
+  the SKOS statement that licensed it, and there are three derivations per stated link, so the
+  `why:` section alone is **10.3 MiB at 10k links, 103 MiB at 100k, and 1 033.8 MiB at 1M** —
+  measured by `scale.rs` in the same format `inspect` uses, with a test pinning the two together.
+- **What is not:** what the command does with it. `inspect` builds its whole report into a single
+  `String` and prints it at the end, so at a million links the report is a gigabyte held *on top of*
+  the 4.4 GiB model. Nothing measures that and no test runs `inspect` at that size.
+- **Why it is not simply capped:** the module argues, at length and correctly, that a silent cap in
+  an *inference* report is the one thing such a report must never do — "that is all there was" is
+  precisely what a truncated explanation implies and precisely what is false. The fix is therefore
+  a product decision (stream rather than buffer? a cap that names itself and the flag that lifts
+  it?) and not a constant. In `docs/PROPOSED.md`.
+- **Opened:** iteration 26
 
 ### A candidate's evidence is kept forever, and nobody has decided for how long
 - **Kind:** partial-coverage

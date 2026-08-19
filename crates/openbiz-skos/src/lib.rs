@@ -10,6 +10,13 @@ mod model;
 mod relations;
 mod xl;
 
+/// What the semantic relation model costs at 10k, 100k and 1M links, and what S24's transitive
+/// closure would cost on top of it — counted before it is built. Test-only: it generates its own
+/// vocabulary, and the sizes that take minutes are `#[ignore]`d. See
+/// `docs/adr/0024-semantic-relation-closure-scale.md` for the numbers and the decision.
+#[cfg(test)]
+mod scale;
+
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
     SKOS_PREF_LABEL, XSD_STRING,
