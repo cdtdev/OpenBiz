@@ -249,3 +249,76 @@ fn search_current_only_still_admits_that_a_retired_concept_matched() {
     assert!(shown.contains(WIRELESS), "{shown}");
     assert!(shown.contains(RADIO), "the successor is named: {shown}");
 }
+
+/// The browse half of `docs/adr/0043`, end to end and against the real binary. `Wireless` is
+/// retired and `Morse` is still under it — the commonest outcome of a retirement — so this is the
+/// case the whole design turns on: the retired concept is kept, marked, and the live child keeps
+/// its place, because dropping the parent would take the child with it.
+#[test]
+fn tree_current_only_keeps_a_retired_concept_that_a_live_one_hangs_off() {
+    let dir = retired();
+    let report = read(dir.path(), &["tree", THESAURUS, TELEGRAPHY, "--current"]);
+
+    assert!(
+        report.contains("current concepts only"),
+        "the narrowing is stated before the counts it changes: {report}"
+    );
+    assert!(
+        report.contains("[retired, kept as the route to what is below]"),
+        "the retired parent is kept and says why: {report}"
+    );
+    assert!(
+        report.contains(MORSE),
+        "the live child is not lost with its parent: {report}"
+    );
+    assert!(
+        report.contains(
+            "retired concept(s) are shown, marked, because current concepts sit \
+                         below them"
+        ),
+        "{report}"
+    );
+
+    // And the same tree without the flag places the child in exactly the same position: the flag
+    // removes concepts, it never lifts or re-parents one.
+    let shown = read(dir.path(), &["tree", THESAURUS, TELEGRAPHY]);
+    let indent = |report: &str, iri: &str| -> usize {
+        report
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("<{iri}>")))
+            .map(|line| line.len() - line.trim_start().len())
+            .unwrap_or_else(|| panic!("{iri} is in the tree:\n{report}"))
+    };
+    assert_eq!(indent(&shown, MORSE), indent(&report, MORSE), "{report}");
+}
+
+/// **The failure the flag would otherwise reintroduce**, in the hierarchy rather than the flat
+/// list. Everything below `Wireless` here is retired, so the narrowed tree is empty — and an empty
+/// tree under a concept that has a subtree reads as a leaf, which is a term the vocabulary *holds*
+/// reported as one it has never heard of (`CLAUDE.md` §1.7).
+#[test]
+fn tree_current_only_still_admits_that_a_retired_subtree_is_there() {
+    let dir = retired();
+    // Retire the one live child, so nothing below Wireless is current any more.
+    let proposed = run(
+        dir.path(),
+        &["deprecate", THESAURUS, MORSE, "--replaced-by", RADIO],
+    );
+    assert!(proposed.status.success(), "{}", stderr(&proposed));
+    let approved = run(dir.path(), &["approve", "3"]);
+    assert!(approved.status.success(), "{}", stderr(&approved));
+
+    let report = read(dir.path(), &["tree", THESAURUS, WIRELESS, "--current"]);
+    assert!(
+        report.contains("nothing below it is current: all 1 concept(s) below it are retired"),
+        "{report}"
+    );
+    assert!(
+        report.contains("run the same command without --current"),
+        "the way to see them is in the report, not in the manual: {report}"
+    );
+
+    // And the way back works, from this same store, without any other change.
+    let shown = read(dir.path(), &["tree", THESAURUS, WIRELESS]);
+    assert!(shown.contains(MORSE), "{shown}");
+}

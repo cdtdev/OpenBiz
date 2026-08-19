@@ -151,6 +151,121 @@ impl Descent {
         self.0
             .derivation_to(node, SemanticRelation::NarrowerTransitive)
     }
+
+    /// Which descendants survive when the caller wants none of `skip`, and which of `skip` cannot
+    /// be taken out without taking a survivor with it.
+    ///
+    /// The walk itself is **not** narrowed and this takes no part in it: a concept in `skip` may
+    /// be the only route to concepts the caller does want, so it has to be walked *through*
+    /// whatever the caller thinks of it. This is therefore a decision about rendering a finished
+    /// descent, and it is the one place where a hierarchy differs from a flat list — see
+    /// [`CoreModel::search_excluding`], where the exclusion runs inside the scan because there is
+    /// no structure to preserve.
+    ///
+    /// The rule is a single sentence: **a branch goes only when the whole branch is in `skip`.**
+    /// A member of `skip` lying on the tree's path to a survivor is retained as a *route*
+    /// ([`Pruned::is_route`]) rather than dropped. Nothing is lifted and nothing is re-parented,
+    /// so every concept shown keeps the depth, the parent, and the derivation the unpruned tree
+    /// gave it, and the pruning can never make the tree state a link the graph does not.
+    ///
+    /// As everywhere else in this crate, the set is of *nodes*: this is told which resources to
+    /// leave out and never why.
+    pub fn excluding<'a>(&'a self, skip: &BTreeSet<Node>) -> Pruned<'a> {
+        let mut from: BTreeMap<&Node, &Node> = BTreeMap::new();
+        for (node, predecessor) in self.steps() {
+            from.insert(node, predecessor);
+        }
+
+        let mut shown: BTreeSet<&Node> = BTreeSet::new();
+        let mut routes: BTreeSet<&Node> = BTreeSet::new();
+        let mut kept = 0usize;
+        for node in self.descendants() {
+            if skip.contains(node) {
+                continue;
+            }
+            kept += 1;
+            if !shown.insert(node) {
+                continue;
+            }
+            // Up the tree's own predecessor list, marking everything between this survivor and
+            // the origin. Every node reached is shown; the ones in `skip` are shown as routes.
+            let mut at = node;
+            while let Some(predecessor) = from.get(at).copied() {
+                // The origin is the root of the report and is never pruned, and stopping here is
+                // also what terminates a cyclic hierarchy, which §8.6.8 says is consistent.
+                if predecessor == self.origin() {
+                    break;
+                }
+                if skip.contains(predecessor) {
+                    routes.insert(predecessor);
+                }
+                // Anything already shown has already had its own chain walked, so there is
+                // nothing above it left to mark.
+                if !shown.insert(predecessor) {
+                    break;
+                }
+                at = predecessor;
+            }
+        }
+
+        // Counted rather than subtracted: the three numbers have to add up to the descent's own
+        // length and a report that derives one of them from the other two cannot notice when they
+        // do not.
+        let dropped = self
+            .descendants()
+            .filter(|node| skip.contains(*node) && !routes.contains(node))
+            .count();
+        Pruned {
+            shown,
+            routes,
+            kept,
+            dropped,
+        }
+    }
+}
+
+/// What a [`Descent`] shows once a set of concepts is asked to be left out of it.
+///
+/// Three numbers and two questions, and the numbers are the point: [`Pruned::dropped`] and
+/// [`Pruned::routes`] are what a report has to state so that narrowing a tree never reads as a
+/// vocabulary that is smaller than it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pruned<'a> {
+    shown: BTreeSet<&'a Node>,
+    routes: BTreeSet<&'a Node>,
+    kept: usize,
+    dropped: usize,
+}
+
+impl Pruned<'_> {
+    /// Whether the tree still shows `node`, either on its own account or as a route.
+    pub fn shows(&self, node: &Node) -> bool {
+        self.shown.contains(node)
+    }
+
+    /// Whether `node` is one of the excluded concepts, kept only because survivors sit below it.
+    ///
+    /// A caller rendering the tree must say so against the line: an excluded concept appearing
+    /// unremarked in a report that was asked to leave those out is worse than not narrowing at
+    /// all.
+    pub fn is_route(&self, node: &Node) -> bool {
+        self.routes.contains(node)
+    }
+
+    /// How many descendants were not in the excluded set. The size of the answer asked for.
+    pub fn kept(&self) -> usize {
+        self.kept
+    }
+
+    /// How many excluded concepts are still shown, because something kept sits below them.
+    pub fn routes(&self) -> usize {
+        self.routes.len()
+    }
+
+    /// How many excluded concepts went, taking nothing kept with them.
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
 }
 
 /// The concepts sharing a broader concept with one concept, and which concepts they share.
@@ -338,6 +453,156 @@ mod tests {
             .children(concept)
             .map(|(child, _)| child.clone())
             .collect()
+    }
+
+    /// The rule the whole pruning is: a branch goes only when the whole branch is excluded. A
+    /// leaf that nobody wants is dropped; the same concept with a survivor under it is kept as a
+    /// route, and the survivor keeps the depth and the parent the unpruned tree gave it.
+    #[test]
+    fn an_excluded_concept_with_a_survivor_below_it_is_kept_as_a_route() {
+        let (top, gone, kept, alone) = (ex("Top"), ex("Gone"), ex("Kept"), ex("Alone"));
+        let model = CoreModel::from_statements([
+            s(&top, &skos("narrower"), &gone),
+            s(&gone, &skos("narrower"), &kept),
+            s(&top, &skos("narrower"), &alone),
+        ]);
+
+        let below = model.descent(&top, WalkBound::DEFAULT);
+        let pruned = below.excluding(&BTreeSet::from([gone.clone(), alone.clone()]));
+
+        assert!(pruned.shows(&kept));
+        assert!(pruned.shows(&gone), "the only route to Kept");
+        assert!(pruned.is_route(&gone));
+        assert!(
+            !pruned.shows(&alone),
+            "excluded, and nothing kept is below it"
+        );
+        assert_eq!(
+            (pruned.kept(), pruned.routes(), pruned.dropped()),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            below.path_to(&kept),
+            Some(vec![top.clone(), gone.clone(), kept.clone()]),
+            "nothing is lifted: the path through the excluded concept is unchanged"
+        );
+    }
+
+    /// The three numbers are the report's whole honesty and they must account for every
+    /// descendant. A subtree several levels deep, excluded all the way down, is the case where a
+    /// count derived by subtraction from a partial walk would quietly disagree.
+    #[test]
+    fn every_descendant_is_kept_a_route_or_dropped_and_nothing_else() {
+        let (top, a, b, c, d) = (ex("Top"), ex("A"), ex("B"), ex("C"), ex("D"));
+        let model = CoreModel::from_statements([
+            s(&top, &skos("narrower"), &a),
+            s(&a, &skos("narrower"), &b),
+            s(&b, &skos("narrower"), &c),
+            s(&top, &skos("narrower"), &d),
+        ]);
+
+        let below = model.descent(&top, WalkBound::DEFAULT);
+        let pruned = below.excluding(&BTreeSet::from([a.clone(), b.clone(), c.clone()]));
+
+        assert_eq!(
+            pruned.kept() + pruned.routes() + pruned.dropped(),
+            below.len()
+        );
+        assert_eq!(
+            (pruned.kept(), pruned.routes(), pruned.dropped()),
+            (1, 0, 3)
+        );
+        assert!(pruned.shows(&d) && !pruned.shows(&a));
+    }
+
+    /// Excluding everything must leave an empty tree and a number saying so, not an empty tree
+    /// that reads as a concept with nothing below it. This is the case the report's wording is
+    /// built around.
+    #[test]
+    fn excluding_every_descendant_leaves_the_count_behind() {
+        let (top, a, b) = (ex("Top"), ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            s(&top, &skos("narrower"), &a),
+            s(&a, &skos("narrower"), &b),
+        ]);
+
+        let below = model.descent(&top, WalkBound::DEFAULT);
+        let pruned = below.excluding(&BTreeSet::from([a.clone(), b.clone()]));
+
+        assert_eq!(
+            (pruned.kept(), pruned.routes(), pruned.dropped()),
+            (0, 0, 2)
+        );
+        assert!(!pruned.shows(&a) && !pruned.shows(&b));
+    }
+
+    /// An empty exclusion changes nothing, which is what makes the flag safe to leave off.
+    #[test]
+    fn excluding_nothing_shows_every_descendant() {
+        let (top, a, b) = (ex("Top"), ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            s(&top, &skos("narrower"), &a),
+            s(&a, &skos("narrower"), &b),
+        ]);
+
+        let below = model.descent(&top, WalkBound::DEFAULT);
+        let pruned = below.excluding(&BTreeSet::new());
+
+        assert_eq!(
+            (pruned.kept(), pruned.routes(), pruned.dropped()),
+            (2, 0, 0)
+        );
+        assert!(pruned.shows(&a) && pruned.shows(&b));
+    }
+
+    /// §8.6.8 says a cyclic hierarchy is consistent, and a cycle puts the origin back among its
+    /// own descendants. Walking each survivor's chain upwards must terminate on it rather than
+    /// going round for ever.
+    #[test]
+    fn a_cycle_terminates_the_walk_back_up() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            s(&a, &skos("narrower"), &b),
+            s(&b, &skos("narrower"), &c),
+            s(&c, &skos("narrower"), &a),
+        ]);
+
+        let below = model.descent(&a, WalkBound::DEFAULT);
+        let pruned = below.excluding(&BTreeSet::from([b.clone()]));
+
+        assert!(pruned.shows(&c) && pruned.is_route(&b));
+        assert_eq!(
+            pruned.kept() + pruned.routes() + pruned.dropped(),
+            below.len()
+        );
+    }
+
+    /// A concept below the origin by two routes is printed once, under the shorter — so an
+    /// exclusion on the *other* route must not resurrect that route as a structural line.
+    #[test]
+    fn only_the_route_the_tree_actually_took_is_kept() {
+        let (top, long, short, leaf) = (ex("Top"), ex("Long"), ex("Short"), ex("Leaf"));
+        let model = CoreModel::from_statements([
+            s(&top, &skos("narrower"), &short),
+            s(&short, &skos("narrower"), &leaf),
+            s(&top, &skos("narrower"), &long),
+            s(&long, &skos("narrower"), &leaf),
+        ]);
+
+        let below = model.descent(&top, WalkBound::DEFAULT);
+        let pruned = below.excluding(&BTreeSet::from([short.clone(), long.clone()]));
+
+        let reached = below.path_to(&leaf).expect("Leaf is below Top");
+        let through = &reached[1];
+        assert!(pruned.is_route(through), "the route the tree took is kept");
+        let other = match through == &short {
+            true => &long,
+            false => &short,
+        };
+        assert!(
+            !pruned.shows(other),
+            "the route the tree did not take is not resurrected by the pruning"
+        );
     }
 
     /// §8.6.6's Example 35 read downwards. `<A> broader <B> . <B> broader <C> .` entails

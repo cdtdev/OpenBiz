@@ -2565,26 +2565,27 @@ module's own tests and end to end against the real binary reading a store off di
   they are per-resource reports, so the focus rule in `adr/0041` §4 applies rather than the list one.
 - **Opened:** iteration 46
 
-### Only `openbiz search` can be asked for current concepts only — the browse commands cannot
+### `openbiz ancestors` and `openbiz paths` cannot be asked for current concepts only
 - **Kind:** partial-coverage
-- **Was:** *"No read command can be asked for current concepts only"*, opened at iteration 46.
-  **Narrowed, not closed**, at iteration 51: `openbiz search <graph> <text> --current` exists
-  (`adr/0043`), leaves the retired hits out, and always reports how many it withheld and on how
-  many concepts — including when they were everything that matched, which is the case that would
-  otherwise reproduce the false negative `adr/0041` refused to ship. Proven in-process and against
-  the real binary.
-- **What is still not:** `openbiz tree`, `openbiz ancestors` and `openbiz paths` have no such flag,
-  and the hard part of the original entry is exactly the part still open — what a *tree* does when
-  a retired concept has current concepts below it, where dropping the branch loses them and
-  keeping the node contradicts the flag. Both are now their own plan items.
-- **The inconsistency is the live cost, and it is worth stating plainly:** the flag is real on one
-  command of four, so a curator who learns `--current` on `search` and types it on `tree` gets an
-  unknown-option error. That is the right failure — better than a silent no-op — but a flag that
-  works on one command and errors on its neighbours reads as a half-finished tool, which is what
-  it is until the two items land.
-- **What would close it:** those two plan items, with the tree case decided explicitly rather than
-  by whatever falls out of a filter.
-- **Opened:** iteration 46 · **Narrowed:** iteration 51
+- **Was:** *"No read command can be asked for current concepts only"*, opened at iteration 46;
+  narrowed at iteration 51 to *"only `openbiz search` can"*. **Narrowed again, not closed**, at
+  iteration 52: `openbiz tree <graph> <concept> --current` exists (`adr/0044`), and it decided the
+  hard case the original entry named rather than letting it fall out of a filter — a retired
+  concept with current concepts below it is **kept and marked** as the route to them, and a branch
+  is dropped only when the whole branch is retired. Nothing is lifted or re-parented, which a test
+  pins by comparing the two reports' indentation. Proven in-process and against the real binary,
+  including the case where every descendant is retired and the tree would otherwise read as a leaf.
+- **What is still not:** `openbiz ancestors` and `openbiz paths` have no such flag. Both answer
+  about *routes*, which is a third question again — not which concepts to drop but what to say
+  about a route that runs through a retired concept, which is neither a route to offer a reader
+  nor a route that has stopped existing. It is its own plan item.
+- **The inconsistency is the live cost, and it is worth stating plainly:** the flag is real on two
+  commands of four, so a curator who learns `--current` on `search` and `tree` and types it on
+  `ancestors` gets an unknown-option error. That is the right failure — better than a silent no-op
+  — but a flag that works on half the browse commands reads as a half-finished tool, which is what
+  it is until that item lands.
+- **What would close it:** that plan item, with the route case decided explicitly.
+- **Opened:** iteration 46 · **Narrowed:** iterations 51, 52
 
 ### Nothing reads the retirement marker at scale, and `inspect`'s section walks the hierarchy again
 - **Kind:** partial-coverage
@@ -2599,7 +2600,12 @@ module's own tests and end to end against the real binary reading a store off di
   smaller one: `--current` materialises the set of retired IRIs before the scan, so a vocabulary
   mid-migration holds a `BTreeSet<Node>` of a large fraction of its own concepts on top of the
   model. It is strictly smaller than the model itself — the containment argument `adr/0041` §2
-  makes about `Retirements` — but it is another allocation nobody has measured.
+  makes about `Retirements` — but it is another allocation nobody has measured. Iteration 52 added
+  a fourth: `Descent::excluding` holds a second set of borrowed nodes the size of the shown
+  subtree, and walks each survivor's chain back to the origin. The `shown` set makes that
+  amortised linear in the subtree rather than quadratic, and that argument is reasoning about the
+  code and not a measurement — on a tree bounded by `WalkBound::DEFAULT` it is bounded too, and
+  nobody has run it against a real one.
 - **Note:** the ninth unmeasured cost in this crate, and the second one in a *read* path rather
   than a write. The proposal to replace the whole run of them with measurements is in
   `docs/PROPOSED.md` from iteration 45 and is unpromoted.

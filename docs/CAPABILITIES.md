@@ -137,6 +137,7 @@ All four commands only read. A test asserts the store is byte-for-byte unchanged
 openbiz ancestors <graph> <concept>   # what is above it, and by what path
 openbiz paths <graph> <concept>       # every route up to a root, and the cycles they hit
 openbiz tree <graph> <concept>        # what is below it and beside it
+openbiz tree <graph> <concept> --current  # ... leaving out the retired ones, and saying how many
 openbiz search <graph> <text>         # find concepts by a word, not by an IRI
 openbiz search <graph> <text> --current   # ... leaving out the retired ones, and saying how many
 ```
@@ -179,8 +180,18 @@ many labels it withheld, on how many retired concepts, and how to see them. Espe
 *everything* that matched: a report that said "nothing matched" about a term the vocabulary holds is
 the false negative the default exists to prevent. The exclusion runs inside the scan, so the result
 limit is spent on hits you will actually see
-([`adr/0043`](adr/0043-current-only-hides-the-hits-and-never-the-count.md)). It is `search` only so
-far; `tree`, `ancestors` and `paths` still show everything, marked.
+([`adr/0043`](adr/0043-current-only-hides-the-hits-and-never-the-count.md)).
+
+**`openbiz tree --current` narrows a hierarchy, which is a different question with a different
+answer.** Because a deprecation touches nothing below it, a retired concept with current concepts
+under it is the *commonest* outcome of a retirement — so a narrowed tree drops a branch **only when
+the whole branch is retired**, and keeps a retired concept that current ones hang off, marked as the
+route to them. Nothing is lifted and nothing is re-parented: every concept the narrowed tree shows
+keeps the depth, the parent and the derivation the full tree gave it, so narrowing can never make
+the tree state a link the vocabulary does not. The counts close the report either way, including the
+case where every descendant is retired and the tree would otherwise read as a leaf
+([`adr/0044`](adr/0044-a-branch-goes-only-when-the-whole-branch-is-retired.md)). `ancestors` and
+`paths` still show everything, marked.
 
 ---
 

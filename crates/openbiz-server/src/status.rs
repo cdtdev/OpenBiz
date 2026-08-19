@@ -26,9 +26,16 @@
 //! - **Showing without marking is the status quo, and it is the defect.**
 //!
 //! So a retired concept appears wherever it appeared before, carrying [`MARKER`], and the concept
-//! the report is *about* gets the full sentence from [`explain`]. Filtering retired concepts out
-//! on request is a real need and a separate plan item: it is an opt-in per command, not a default,
-//! and it is not built here.
+//! the report is *about* gets the full sentence from [`explain`].
+//!
+//! # Leaving them out is a request, and the set is built here
+//!
+//! Filtering retired concepts out **on request** is a real need and it is opt-in per command,
+//! never a default: nothing above moves. `openbiz search --current` (`docs/adr/0043`) and
+//! `openbiz tree --current` (`docs/adr/0044`) both ask [`retired_in`] for the set of resources to
+//! leave out, and both close their report with what the narrowing withheld — a concept that goes
+//! from a report is never a concept the report stops mentioning. `openbiz ancestors` and
+//! `openbiz paths` have no such flag yet.
 //!
 //! # Marked in a list, explained at the focus
 //!
@@ -38,6 +45,8 @@
 //! asked about carries the explanation and the signpost. Nothing is withheld: `openbiz deprecate`
 //! and `openbiz inspect` both report the whole picture, and asking about the marked concept
 //! directly gives the full account of it.
+
+use std::collections::BTreeSet;
 
 use openbiz_skos::{CoreModel, Node, Resource, Retirements};
 
@@ -53,6 +62,29 @@ pub(crate) const MARKER: &str = "  [retired]";
 /// `openbiz deprecate` cannot produce, so it arrived by import or by hand, and it reads as fully
 /// current to every other line of every report.
 pub(crate) const UNMARKED: &str = "  [replaced, but not marked retired]";
+
+/// What a retired concept carries when a report asked for current concepts only has kept it
+/// anyway, because concepts the reader *did* ask for sit below it.
+///
+/// A different mark because it answers a different question. Under `--current` the reader has been
+/// told the retired concepts are out, so one appearing unremarked reads as a bug in the flag; this
+/// says why it is there and, by saying it, shows the pending decision `docs/adr/0040` leaves —
+/// current concepts under an obsolete parent, which is the commonest outcome of a retirement.
+pub(crate) const ROUTE: &str = "  [retired, kept as the route to what is below]";
+
+/// Every resource this vocabulary marks `owl:deprecated`, as the set a read command is told to
+/// leave out when it is asked for current concepts only.
+///
+/// Deliberately [`Retirements::retired`] and not "anything the index knows about". The other state
+/// it records — a replacement named with no marker — is a concept every command here reads as
+/// **current**, and dropping it would hide a term the vocabulary has not retired on the strength
+/// of a statement that does not retire it (`docs/adr/0043` §5).
+pub(crate) fn retired_in(retirements: &Retirements) -> BTreeSet<Node> {
+    retirements
+        .retired()
+        .map(|(node, _)| node.clone())
+        .collect()
+}
 
 /// The mark for one resource in a list, or nothing when the vocabulary says nothing about it.
 pub(crate) fn mark(retirements: &Retirements, node: &Node) -> &'static str {

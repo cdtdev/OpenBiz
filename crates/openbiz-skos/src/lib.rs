@@ -91,7 +91,7 @@ pub use split::{
     Part, PartRequest, Placement, Split, SplitError, Unapportioned, PROV_WAS_DERIVED_FROM,
 };
 pub use status::{Retirement, Retirements, RetirementsBuilder};
-pub use tree::{Descent, Siblings};
+pub use tree::{Descent, Pruned, Siblings};
 pub use xl::{
     LabelOrigin, SKOSXL_ALT_LABEL, SKOSXL_HIDDEN_LABEL, SKOSXL_LABEL, SKOSXL_LABEL_RELATION,
     SKOSXL_LITERAL_FORM, SKOSXL_PREF_LABEL,

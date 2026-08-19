@@ -3874,3 +3874,74 @@ look competent disables the one signal that catches a stuck loop.
   do what it says. I picked the honest minimum and I cannot tell from here whether it is enough,
   because the failure it guards against is a person creating a concept somewhere else entirely and
   nothing in this repository will ever observe it.
+
+## Iteration 52 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `5cd7649`, tree clean, and the CI run
+  for that exact commit was `success` — read from `gh run list --branch main`, not inferred from
+  the previous iteration's claim. Both inboxes empty: `promote-queue.json` is `[]`,
+  `feedback.md` zero bytes. Iteration 37's LCGFT fixture is unpromoted for the sixteenth iteration.
+- **The date disagrees again, and this is the second time.** The harness reports `currentDate`
+  **2026-08-20**; `date -u` on the host said **2026-08-19T12:44Z** at branch creation and 13:18Z at
+  verification. Iteration 51 hit the same gap and said it was worth a human glance if it recurred.
+  It has recurred, in the same direction and the same size. Everything here is dated from the host
+  clock, because that is what the commits and the CI runs are stamped with.
+- **What shipped: `openbiz tree <graph> <concept> --current` (`adr/0044`)** — the second of the
+  three commands iteration 51 split the "current concepts only" item into, and the one the split
+  was made to give room to. Phase 2 is 27 of 30.
+- **The decision, of the three the item named.** A retired concept with current concepts below it
+  is the *commonest* outcome of a retirement (`adr/0040`), so the flag cannot simply drop the
+  branch. **A branch goes only when the whole branch is retired**; a retired concept lying on the
+  route to a surviving one is kept and marked `[retired, kept as the route to what is below]`.
+  Lifting the children was rejected — it is sound against the closure, but the tree's own legend
+  makes a concept at depth 1 a *stated* child, so a lift makes the legend false, and it hides the
+  one thing the curator most needs: the route to those children runs through an obsolete concept
+  and somebody has to decide what to do about it. Refusing the combination was rejected as a
+  command that disobeys, and a flag whose availability depends on the data.
+- **The property that makes the rule safe to reason about is that nothing moves.** Every concept
+  the narrowed tree shows keeps the depth, the parent and the derivation the full tree gave it, so
+  the pruning can never make the tree state a link the graph does not. That is not an argument in a
+  comment: `the_flag_removes_concepts_and_never_moves_them` reads `Morse`'s indentation out of both
+  reports and compares them, in-process and again against the real binary.
+- **Where a hierarchy genuinely departs from `adr/0043`.** That ADR put the exclusion *inside* the
+  scan, so the 200-hit bound was spent on hits the caller would see. Here the excluded concept may
+  be the only route to what the caller wants, so it has to be walked **through**, and the bound is
+  spent exactly as the unnarrowed command spends it. The seam is therefore
+  `Descent::excluding(skip) -> Pruned` over a *finished* descent — still handed a `BTreeSet<Node>`
+  and still never told why those nodes are in it, which keeps `owl:deprecated` out of a SKOS crate.
+- **`adr/0043`'s rule is what the tests pin, not the happy path.** Each list and the tree close with
+  what they withheld. The case that matters is the one where every descendant is retired: the tree
+  is empty, and without the count that report says a concept is a leaf when the vocabulary holds a
+  subtree under it — the same false negative `adr/0041` refused to ship, one level up. Two tests
+  pin that sentence, one of them end to end by retiring the last live child and re-running.
+- **One bug I found by driving the binary and not by testing.** A list the flag emptied printed its
+  count twice — "none of the 1 concept(s) … are listed" immediately followed by "1 more … not
+  listed" — which reads as two different numbers about the same thing. Fixed, and
+  `a_list_emptied_by_the_flag_says_so_once` asserts the phrase appears once.
+- **Deduplication rather than a second copy:** `search.rs`'s private `retired_in` moved to
+  `status.rs` and both commands now call it, so `adr/0043` §5's decision about what counts as
+  current is one function instead of the same paragraph twice.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1085 Rust tests, 0 failed**, up from 1070: fifteen new — six on the
+  pruning seam in `openbiz-skos`, six on the report, one in the CLI parser, two end to end. The
+  seam's tests were mutation-checked: reverting `excluding` to drop routes instead of keeping them
+  fails four of them, so they catch the thing they are for. UI untouched, so no npm run. No new
+  dependency, no build artefact.
+- **Recorded:** `adr/0044`. `UNTESTED.md`'s "current concepts only" entry **narrowed again, not
+  closed** — renamed to name `ancestors` and `paths`, with the live cost restated: the flag now
+  works on two browse commands of four. The unmeasured-scale entry gained a fourth allocation, with
+  the honest note that "amortised linear in the subtree" is reasoning about the code and not a
+  measurement. `CAPABILITIES.md` and `BUILD-PLAN.md` updated; the plan's "better, not parity" note
+  was written to claim nothing about the incumbents' filters, because this iteration measured none.
+  Nothing self-promoted.
+- **Still uncertain:** whether keeping the retired parent is the right trade or only the
+  *defensible* one. The rule is conservative by construction — it hides a concept only when hiding
+  it costs nothing — and the failure mode of a conservative rule is that it does too little to be
+  worth typing. A vocabulary mid-migration, which is exactly when someone wants this flag, is one
+  where a large fraction of the interior is retired; there the narrowed tree could differ from the
+  unnarrowed one by almost nothing while carrying a longer report, and a curator who tries it once
+  and sees the same tree with extra prose will not type it again. I cannot tell from a fixture of
+  five concepts whether that is a real shape or a worry, because the difference depends entirely on
+  where in a real hierarchy the retirements fall, and this repository has never seen one. The
+  measurement that would settle it is the same one nine other entries in `UNTESTED.md` are waiting
+  on, which is starting to look less like nine gaps and more like one.
