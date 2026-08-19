@@ -143,6 +143,9 @@ async fn main() -> anyhow::Result<()> {
         } => one_shot(store, |store| {
             openbiz_server::mint(store, &graph, label.as_deref(), pattern.as_deref())
         }),
+        Command::Policy { graph, pattern } => one_shot(store, |store| {
+            openbiz_server::policy(store, &graph, pattern.as_deref())
+        }),
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),

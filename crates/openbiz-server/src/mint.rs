@@ -15,6 +15,27 @@
 //! no minter at all. The IRI becomes taken when a candidate carrying it is staged — and the next
 //! mint sees it, because the scan reads staged changes as well as vocabularies.
 //!
+//! # Which pattern is used, and why the order matters
+//!
+//! Three answers, and the first one that exists wins:
+//!
+//! 1. **`--pattern`**, for this one invocation.
+//! 2. **The pattern recorded for the vocabulary** (`openbiz policy`). This is what a deployment
+//!    should be on: an import, a discovery match, and an agent proposal all read the same recorded
+//!    policy, so they mint the same way as the curator does.
+//! 3. **The convention read off the vocabulary's own concepts**, when nothing is recorded.
+//!
+//! The third is a good suggestion and a poor policy, and the report says so where it is used.
+//! Inference answers "what do most of these concepts look like *now*", so it moves when the
+//! vocabulary does: a vocabulary whose first ten concepts are in one namespace and whose next ten
+//! arrive in another silently changes its own convention part-way through, and by the time anybody
+//! notices the IRIs are permanent. A recorded policy is the answer to that, and it is why `openbiz
+//! policy` exists.
+//!
+//! A recorded pattern this build cannot parse is **refused**, not quietly replaced by inference:
+//! falling back would mint into a namespace nobody chose while the vocabulary has a written
+//! decision saying otherwise.
+//!
 //! # What is read
 //!
 //! Three things, and the report names all three:
@@ -22,7 +43,7 @@
 //! 1. **The vocabulary's own convention.** The namespace most of its concepts are already in, and
 //!    whether their local names are numbered or worded, is the evidence for the default pattern.
 //!    A vocabulary that has no majority namespace gets no suggestion rather than a confident
-//!    wrong one, and `--pattern` is then required.
+//!    wrong one, and a pattern — recorded or given — is then required.
 //! 2. **Every IRI under that pattern's prefix, anywhere in the store.** Not just the target
 //!    vocabulary: an IRI is a global identifier, and a deployment where two vocabularies extend
 //!    the same namespace is the ordinary case in an enterprise, not an exotic one. Only IRIs
@@ -38,7 +59,7 @@ use openbiz_skos::{
     mint as mint_iri, CoreModel, IriConvention, LabelKind, LabelQuery, MatchMode, MintDerivation,
     MintPattern, MintScan, Minted, Node, Resource, SkosClass, SlugBound, Suggestion,
 };
-use openbiz_store::{CandidateState, GraphKind, Store};
+use openbiz_store::{CandidateState, GraphId, GraphKind, IriPolicy, Store};
 
 use crate::cli::CommandError;
 use crate::inspect::convert;
@@ -60,23 +81,41 @@ pub fn mint(
     // as a contradiction. Found by running the command.
     let staged = staged_models(store, graph)?;
 
-    let mut convention = IriConvention::new();
-    for (node, _) in model.instances_of(SkosClass::Concept) {
-        match node.as_iri() {
-            Some(iri) => convention.push(iri),
-            None => convention.push_blank(),
-        }
-    }
+    let convention = convention_of(&model);
 
-    // An explicit pattern wins and the suggestion is still computed, so the report can say what
-    // the vocabulary would have chosen — a `--pattern` that disagrees with the vocabulary's own
-    // convention is exactly the thing worth showing somebody before they use it.
+    // What this vocabulary has *decided*, which outranks what its concepts happen to look like.
+    let recorded = store.iri_policy(&GraphId::vocabulary(graph)?)?;
+
+    // Whichever pattern wins, the suggestion is still computed, so the report can say what the
+    // vocabulary's own concepts would have chosen — a pattern that disagrees with them is exactly
+    // the thing worth showing somebody before they use it.
     let suggested = convention.suggest();
-    let chosen = match pattern {
-        Some(text) => MintPattern::parse(text)?,
-        None => match &suggested {
-            Ok(suggestion) => suggestion.pattern.clone(),
-            Err(error) => return Err(CommandError::NoConvention(error.clone())),
+    let (chosen, source) = match pattern {
+        Some(text) => (
+            MintPattern::parse(text)?,
+            PatternSource::Given {
+                recorded: recorded.as_ref(),
+            },
+        ),
+        None => match &recorded {
+            // Refused rather than fallen back from. A vocabulary with a recorded policy has made a
+            // decision, and minting under a different pattern because we could not read that
+            // decision is worse than not minting at all.
+            Some(policy) => (
+                MintPattern::parse(policy.pattern()).map_err(|source| {
+                    CommandError::RecordedPatternUnusable {
+                        graph: graph.to_owned(),
+                        pattern: policy.pattern().to_owned(),
+                        recorded_by: policy.recorded_by().to_owned(),
+                        source,
+                    }
+                })?,
+                PatternSource::Recorded(policy),
+            ),
+            None => match &suggested {
+                Ok(suggestion) => (suggestion.pattern.clone(), PatternSource::Inferred),
+                Err(error) => return Err(CommandError::NoConvention(error.clone())),
+            },
         },
     };
 
@@ -95,15 +134,7 @@ pub fn mint(
     }
 
     Ok(report(
-        graph,
-        label,
-        &chosen,
-        pattern.is_some(),
-        &suggested,
-        &scan,
-        &minted,
-        &model,
-        &staged,
+        graph, label, &chosen, &source, &suggested, &scan, &minted, &model, &staged,
     ))
 }
 
@@ -185,13 +216,112 @@ fn push_iris(scan: &mut MintScan, statement: openbiz_store::StatementRef<'_>, so
     scan.push(statement.predicate, source);
 }
 
+/// Where the pattern being minted under came from — the three answers, in the order they win.
+///
+/// Kept as a type rather than a pair of booleans because the report says something different about
+/// each, and "given" and "inferred" being distinguishable by accident is how a report ends up
+/// telling somebody their deployment has a policy when it has a coincidence.
+pub(crate) enum PatternSource<'a> {
+    /// Given with `--pattern`, for this invocation only.
+    ///
+    /// Carries whatever the vocabulary records, because overriding a *written decision* is a louder
+    /// thing than overriding a guess and the report has to name the decision it is stepping over.
+    Given {
+        /// The recorded policy this command is ignoring for one mint, if there is one.
+        recorded: Option<&'a IriPolicy>,
+    },
+    /// Recorded for the vocabulary, which is what every producer reads.
+    Recorded(&'a IriPolicy),
+    /// Read off the vocabulary's own concepts, because nothing is recorded.
+    Inferred,
+}
+
+/// What a vocabulary's own concepts say about how it names things.
+///
+/// Shared with `openbiz policy`, which needs exactly the same evidence to tell an operator whether
+/// the pattern they are about to record agrees with what the vocabulary already does. Two copies of
+/// this would eventually disagree, and the report that said "your concepts suggest X" would stop
+/// matching the one that mints.
+pub(crate) fn convention_of(model: &CoreModel) -> IriConvention {
+    let mut convention = IriConvention::new();
+    for (node, _) in model.instances_of(SkosClass::Concept) {
+        match node.as_iri() {
+            Some(iri) => convention.push(iri),
+            None => convention.push_blank(),
+        }
+    }
+    convention
+}
+
+/// The trade a pattern's policy makes, in the words the operator needs before choosing it.
+pub(crate) fn policy_line(pattern: &MintPattern) -> &'static str {
+    match pattern.policy() {
+        openbiz_skos::MintPolicy::Opaque => {
+            "  an opaque IRI: the local name means nothing, so nothing about the concept can \
+             make it wrong\n"
+        }
+        openbiz_skos::MintPolicy::Readable => {
+            "  a readable IRI: the local name comes from the label, and is never revised when \
+             the label changes\n"
+        }
+    }
+}
+
+/// Whether the pattern being compared is one chosen now or one the vocabulary already records.
+///
+/// The two need different sentences, and getting that wrong was found by reading the command's own
+/// output: a *recorded* pattern that disagrees with the concepts is not somebody "minting under a
+/// different pattern" — nobody is doing anything, the vocabulary's written policy and its existing
+/// IRIs simply differ — and telling the reader they are taking a risky action they are not taking is
+/// how a report stops being read.
+pub(crate) enum PatternStanding {
+    /// Chosen for this command: given with `--pattern`, or being recorded right now.
+    Chosen,
+    /// Already recorded for the vocabulary, and being reported.
+    Recorded,
+}
+
+/// How a pattern stands against what the vocabulary's own concepts suggest.
+///
+/// Said out loud wherever a pattern is reported, because a disagreement is legitimate — it is how a
+/// convention gets changed on purpose — and is also exactly how somebody mints into the wrong
+/// namespace without noticing. Only the reader can tell which of the two it is, so neither command
+/// refuses and both say what they saw.
+pub(crate) fn compared_with_convention(
+    pattern: &MintPattern,
+    suggested: &Result<Suggestion, openbiz_skos::NoConvention>,
+    standing: PatternStanding,
+) -> String {
+    match suggested {
+        Ok(suggestion) if suggestion.pattern == *pattern => {
+            "  which is also what this vocabulary's own concepts suggest\n".to_owned()
+        }
+        Ok(suggestion) => match standing {
+            PatternStanding::Chosen => format!(
+                "  this vocabulary's own concepts suggest {} instead; minting under a different \
+                 pattern is legitimate and it is also how a concept ends up in the wrong \
+                 namespace\n",
+                suggestion.pattern
+            ),
+            PatternStanding::Recorded => format!(
+                "  this vocabulary's own concepts suggest {} instead, so its recorded policy and \
+                 the IRIs it already holds disagree: either the policy was recorded to change the \
+                 convention, or it names a namespace nobody meant. Nothing already minted is \
+                 affected either way\n",
+                suggestion.pattern
+            ),
+        },
+        Err(error) => format!("  this vocabulary suggests nothing to compare it with: {error}\n"),
+    }
+}
+
 /// The report, kept apart from the store so it can be tested against parts in hand.
 #[allow(clippy::too_many_arguments)]
 fn report(
     graph: &str,
     label: Option<&str>,
     pattern: &MintPattern,
-    pattern_was_given: bool,
+    source: &PatternSource<'_>,
     suggested: &Result<Suggestion, openbiz_skos::NoConvention>,
     scan: &MintScan,
     minted: &Result<Minted, openbiz_skos::MintError>,
@@ -210,17 +340,8 @@ fn report(
     out.push_str(&already_called(model, staged, label));
 
     out.push_str(&format!("\npattern: {pattern}\n"));
-    out.push_str(match pattern.policy() {
-        openbiz_skos::MintPolicy::Opaque => {
-            "  an opaque IRI: the local name means nothing, so nothing about the concept can \
-             make it wrong\n"
-        }
-        openbiz_skos::MintPolicy::Readable => {
-            "  a readable IRI: the local name comes from the label, and is never revised when \
-             the label changes\n"
-        }
-    });
-    out.push_str(&source_of_pattern(pattern, pattern_was_given, suggested));
+    out.push_str(policy_line(pattern));
+    out.push_str(&source_of_pattern(pattern, source, suggested));
 
     out.push_str(&format!(
         "\nchecked against {} IRI(s) under {}, out of {} read:\n",
@@ -265,56 +386,97 @@ fn report(
     out
 }
 
-/// Where the pattern came from: the operator, or the vocabulary's own concepts.
+/// Where the pattern came from: the operator, the vocabulary's recorded policy, or its concepts.
 fn source_of_pattern(
     pattern: &MintPattern,
-    pattern_was_given: bool,
+    source: &PatternSource<'_>,
     suggested: &Result<Suggestion, openbiz_skos::NoConvention>,
 ) -> String {
     let mut out = String::new();
-    if !pattern_was_given {
-        if let Ok(suggestion) = suggested {
-            let evidence = &suggestion.evidence;
-            out.push_str(&format!(
-                "  read off this vocabulary: {} of its {} concept(s) are in {}",
-                evidence.namespace_count, evidence.concepts, evidence.namespace
+    match source {
+        PatternSource::Given { recorded } => {
+            out.push_str("  given with --pattern, for this one command\n");
+            match recorded {
+                Some(policy) if policy.pattern() == pattern.to_string() => out.push_str(&format!(
+                    "  which is also what this vocabulary records, set by {} at {}\n",
+                    policy.recorded_by(),
+                    policy.recorded_at()
+                )),
+                // The loud case. A recorded policy is what every other producer will mint under, so
+                // a command that steps over it has to say whose decision it stepped over.
+                Some(policy) => out.push_str(&format!(
+                    "  this vocabulary records {:?} instead, set by {} at {}; that record is \
+                     unchanged and every other producer still mints under it. Use `openbiz policy` \
+                     if the recorded pattern is the one that should change\n",
+                    policy.pattern(),
+                    policy.recorded_by(),
+                    policy.recorded_at()
+                )),
+                None => out.push_str(
+                    "  nothing is recorded for this vocabulary, so this pattern applies to this \
+                     command and to nothing else\n",
+                ),
+            }
+            out.push_str(&compared_with_convention(
+                pattern,
+                suggested,
+                PatternStanding::Chosen,
             ));
-            match &evidence.fixed_part {
-                Some((fixed, count)) => out.push_str(&format!(
-                    ", and {count} of those have a number after {fixed:?}\n"
-                )),
-                None => out.push_str(&format!(
-                    ", and {} of those have a numbered local name, which is not most of them\n",
-                    evidence.numbered
-                )),
-            }
-            if evidence.namespaces > 1 {
+        }
+        PatternSource::Recorded(policy) => {
+            out.push_str(&format!(
+                "  recorded for this vocabulary by {} at {}, so every producer mints under it — \
+                 an import, a match against another vocabulary, and a curator at this command \
+                 line all get the same answer\n",
+                policy.recorded_by(),
+                policy.recorded_at()
+            ));
+            out.push_str(&compared_with_convention(
+                pattern,
+                suggested,
+                PatternStanding::Recorded,
+            ));
+            out.push_str(
+                "  give --pattern to mint once under a different one, or `openbiz policy` to \
+                 change what is recorded\n",
+            );
+        }
+        PatternSource::Inferred => {
+            if let Ok(suggestion) = suggested {
+                let evidence = &suggestion.evidence;
                 out.push_str(&format!(
-                    "  {} namespace(s) are in use here; the others are not minted into\n",
-                    evidence.namespaces
+                    "  read off this vocabulary: {} of its {} concept(s) are in {}",
+                    evidence.namespace_count, evidence.concepts, evidence.namespace
                 ));
+                match &evidence.fixed_part {
+                    Some((fixed, count)) => out.push_str(&format!(
+                        ", and {count} of those have a number after {fixed:?}\n"
+                    )),
+                    None => out.push_str(&format!(
+                        ", and {} of those have a numbered local name, which is not most of them\n",
+                        evidence.numbered
+                    )),
+                }
+                if evidence.namespaces > 1 {
+                    out.push_str(&format!(
+                        "  {} namespace(s) are in use here; the others are not minted into\n",
+                        evidence.namespaces
+                    ));
+                }
             }
-            out.push_str("  give --pattern to override it\n");
+            // The point of the item this paragraph exists for. An inferred pattern is a reading of
+            // the vocabulary as it stands, so it moves when the vocabulary does, and nothing says
+            // so at the moment the IRI it produced becomes permanent.
+            out.push_str(
+                "  nothing is recorded for this vocabulary, so this was inferred from its own \
+                 concepts and is a reading of them as they stand now: it changes when they do, \
+                 and two producers reading it at different times can disagree\n",
+            );
+            out.push_str(
+                "  record it with `openbiz policy` to fix it for every producer, or give \
+                 --pattern to override it once\n",
+            );
         }
-        return out;
-    }
-
-    out.push_str("  given with --pattern\n");
-    match suggested {
-        Ok(suggestion) if suggestion.pattern == *pattern => {
-            out.push_str("  which is also what this vocabulary's own concepts suggest\n")
-        }
-        // Worth saying loudly. A pattern that disagrees with the vocabulary is legitimate — it is
-        // how a convention gets changed — and it is also how somebody mints into the wrong
-        // namespace without noticing.
-        Ok(suggestion) => out.push_str(&format!(
-            "  this vocabulary's own concepts suggest {} instead; minting under a different \
-             pattern is legitimate and it is also how a concept ends up in the wrong namespace\n",
-            suggestion.pattern
-        )),
-        Err(error) => out.push_str(&format!(
-            "  this vocabulary suggests nothing to compare it with: {error}\n"
-        )),
     }
     out
 }

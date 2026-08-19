@@ -45,6 +45,7 @@ mod graph;
 /// How a store written by an older OpenBiz becomes one this build reads: the migration chain, the
 /// records it leaves behind, and why it refuses rather than skips. See the module documentation.
 mod migrate;
+mod policy;
 mod query;
 mod results;
 /// Conformance of the line-based exports against the specifications' own grammars. Test-only:
@@ -73,6 +74,7 @@ pub use candidate::{
     Candidate, CandidateId, CandidateIdError, CandidateSource, CandidateState, Decision, Provenance,
 };
 pub use migrate::{Migration, MigrationReport, MigrationStep};
+pub use policy::{IriPolicy, PolicyRecorded};
 pub use query::{QueryFormats, QueryLimits, QueryReport, QueryShape};
 pub use results::ResultsSyntax;
 pub use statement::{StatementRef, StatementTerm};
@@ -391,6 +393,15 @@ pub enum StoreError {
     /// The provenance offered with a candidate would not let a reviewer judge it.
     #[error("that change cannot be proposed: {detail}")]
     CandidateProvenance {
+        /// What was missing or wrong, and why it matters.
+        detail: String,
+    },
+    /// The IRI-minting policy offered for a vocabulary is not one this build will record.
+    ///
+    /// About the *record*, not the pattern: see [`policy`] for why the store does not judge a
+    /// pattern's syntax, and `openbiz-server` for where it is judged.
+    #[error("that minting policy cannot be recorded: {detail}")]
+    PolicyRejected {
         /// What was missing or wrong, and why it matters.
         detail: String,
     },
