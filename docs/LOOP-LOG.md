@@ -4405,3 +4405,77 @@ look competent disables the one signal that catches a stuck loop.
   unpromoted, and the difference between "waiting for a human to decide how strict OpenBiz is" and
   "building an ever more articulate description of a thing that does not happen" is not visible from
   inside the loop.
+
+## Iteration 59 — 2026-08-20 (NZST, UTC+12)
+- **Clean start, verified rather than assumed.** `main` at `e816ede`, tree clean, and the CI run for
+  that exact SHA was `success` — read from `gh run list --branch main`, not from iteration 58's
+  claim. Both human inboxes empty: `promote-queue.json` is `[]` and `feedback.md` is zero bytes.
+  Iteration 37's LCGFT fixture is unpromoted for the twenty-third iteration.
+- **Phase 2 is as done as it can get, so this is the first Phase 3 item.** Its remaining item is
+  blocked on authentication and has been since iteration 17, so the interface is what comes next.
+- **Split in place, three ways.** "Design system: type scale, spacing, colour with verified
+  contrast, motion, dark and light" is five things wearing one checkbox. Part 1 (this iteration) is
+  the token layer and the contrast proof; part 2 is choosing a theme explicitly over the operating
+  system's; part 3 is motion — and part 3 is deliberately **last**, because nothing in the interface
+  moves yet and motion tokens today would be values with no rule using them, which `CLAUDE.md` §4
+  counts as undone rather than as groundwork. Phase 3's denominator moved 12 → 14 accordingly.
+- **The decision the item turns on: the CSS is the source of truth and the test reads it.** The
+  usual arrangement — declare tokens in TypeScript, generate the CSS — lets a suite verify a source
+  of truth the browser never loads, and the artefact that drifts silently is always the generated
+  one. So `tokens.css` is the file, and `tokens.ts` is a narrow reader that **refuses** what it does
+  not understand rather than skipping it.
+- **And the reader's first version read nothing at all.** `import css from "./tokens.css?raw"` is
+  the obvious way and returns the **empty string** — Vitest stubs CSS imports out. A probe test
+  printed `LENGTH 0`. Every colour assertion would have iterated an empty token set and reported
+  green: the exact vacuous pass the whole design is built to prevent, arrived at by the tidiest
+  route available. Reading with `node:fs` instead cost one dev-only dependency, `@types/node` (MIT,
+  2.6 MB in `node_modules`, nothing in the binary), and that trade is in `adr/0051`.
+- **The pairings are derived from the token names, not from a list.** `--color-[<qualifier>-]on-<base>`
+  must clear 4.5:1 against `--color-<base>`; `--border-on-<base>` and `--focus-on-<base>` must clear
+  3:1. A list of legal pairings kept beside the tokens would be a second place to update, so a
+  surface added without a legible foreground would pass a check written against the list. Here it is
+  an unresolvable partner and the suite fails. **The first run failed on seven real problems**, four
+  of them borders below 3:1 that I had picked by eye.
+- **Three rules that keep it a system rather than a suggestion**, each the mechanical form of
+  something the charter already says: no literal colour outside the palette layer; no palette swatch
+  no role names (which is why the neutral ramp has gaps at 200, 300, 700, 800); no colour role no
+  rule uses (which is why there is no `info` role and no filled-accent surface — nothing is yet
+  informational or pressable).
+- **A feature was deleted because the check could not see it.** The vocabulary list had zebra
+  striping, which puts a *surface* foreground on the *canvas* colour — a real pairing the naming
+  convention cannot check. Replaced with a hairline separator. An unverifiable contrast is not worth
+  a decorative alternation, and the incident is now the concrete example in the `UNTESTED.md` entry
+  about what the check does not cover.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and never
+  through a pipe. **1202 Rust tests, 0 failed**, unchanged: no Rust changed. UI: `npm run typecheck`,
+  `npm test`, `npm run build` all `rc=0`, **82 tests up from 30** — 52 new, 19 on the contrast maths
+  and 33 on the token file. The built CSS is 6.54 kB and linked from `index.html`; the custom
+  properties and the dark block are both in it.
+- **Mutation-checked, not just green — twelve reversions, and two of them found defects in my own
+  checks.** The literal-colour scan used `/#[0-9a-fA-F]{3}\b/`; `#666666` ends on a word character,
+  so the boundary matched the three-digit form and **missed every six-digit one** — `color: #666666`
+  passed. And both "is it actually imported?" assertions matched raw source, so commenting the
+  import out left them green. Fixed, re-mutated, both now fail. The other ten fail as they should:
+  a border swatch lightened below 3:1, a dark override deleted, a swatch nudged out of ramp order,
+  an unreferenced swatch, a colour role whose only rule was removed, an off-pixel type step, an
+  off-grid space step, a step that breaks the scale ratio, and the luminance coefficients transposed.
+- **Recorded:** `adr/0051`. Five `UNTESTED.md` entries and they are the larger half. The arithmetic
+  is over *values*: jsdom evaluates no media query and no cascade, so **nothing has rendered the dark
+  theme**; the pairing check reads names rather than the background a rule actually draws on; the
+  focus ring is proven to be a colour and not to be visible, and SC 2.4.11 cannot be tested here at
+  all; two type-scale steps have no rule using them, on an argument I record as genuinely weaker than
+  the one for colour; and **nothing has looked at the page** — a design-system iteration with no
+  screenshot. `BUILD-PLAN.md` and `CAPABILITIES.md` updated. Nothing self-promoted.
+- **Still uncertain:** whether a design system verified only as arithmetic is design work or
+  bookkeeping about design. What landed is real and it bites — twelve mutations say so, and four
+  contrast failures on the first run were mine — but every one of those checks is about values in a
+  file, and the charter's claim is "visually stunning and modern", which is a claim about a rendered
+  page nobody in this loop can see. I chose the colours by computing ratios until they passed, which
+  is how you get a palette that is *correct*; I have no way to know whether it is *good*, and I
+  notice that the same mechanism that makes the contrast honest also makes it easy to mistake a
+  passing suite for a finished feature. The Playwright item is the nearest closer for the mechanical
+  half and it is four items down the phase. For the other half the answer is a person opening the
+  page, which is the third distinct thing this loop has now stacked up behind "one human, one
+  session, one look" — the other two being whether a curator shown "STOP" acts on it, and whether
+  the reuse ladder reads as a mechanism.

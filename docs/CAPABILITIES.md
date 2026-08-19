@@ -7,8 +7,9 @@ evaluating OpenBiz, not as a log of how it got here.
 *rewritten*, not appended to. If you want the history, `docs/LOOP-LOG.md` has one entry per
 iteration and `docs/adr/` has the decisions.
 
-> **Pre-alpha.** OpenBiz is 55 of 221 backlog items — Phase 0 and most of Phases 1 and 2. There is
-> a working command line over a real embedded RDF store and a minimal web interface. There is **no
+> **Pre-alpha.** OpenBiz is 64 of 229 backlog items — Phase 0, most of Phases 1 and 2, and the
+> first of Phase 3. There is a working command line over a real embedded RDF store and a minimal
+> web interface. There is **no
 > authentication**, no validation rule packs, no reasoner, no governance workflow beyond
 > approve/reject, and no LLM assistance. Do not put a vocabulary you care about in it yet.
 >
@@ -367,8 +368,20 @@ Minimal and honest about it. It lists the vocabularies in the store — keeping 
 out of the user's list, counted rather than hidden — and offers a per-vocabulary export with a format
 chooser read from the server.
 
-That is all of it. The interface is **Phase 3, and Phase 3 has not started**: 0 of 12 items. None of
-the command line above is reachable from a browser yet.
+It is now **drawn through a design system rather than through browser defaults**: one token file
+carries the colour, type and spacing vocabulary, in a light theme and a dark one that follows the
+operating system. The part of that worth stating to an evaluator is how the colour is checked. Every
+foreground is paired with its background by a naming rule, and the suite **computes WCAG 2.2 contrast
+over the stylesheet that ships** — 4.5:1 for text, 3:1 for borders and focus rings, in both themes.
+A palette change that breaks AA fails the build. Three further rules hold the line: no literal colour
+outside the palette layer, no swatch no role names, no role no rule uses.
+
+What that does *not* claim: nothing has rendered the dark theme, and nothing has looked at the page.
+The arithmetic is proven; the appearance is not, and the gaps are itemised in
+[`UNTESTED.md`](UNTESTED.md).
+
+That is all of it. The interface is **Phase 3, 1 of 14 items**. None of the command line above is
+reachable from a browser yet.
 
 ---
 

@@ -3030,3 +3030,70 @@ module's own tests and end to end against the real binary reading a store off di
   has been run against a store with thousands of records or a split with dozens of parts.
 - **What would close it:** the same benchmark as the entry above, driving a wide split.
 - **Opened:** iteration 58
+
+### The dark theme has never been rendered
+- **Kind:** partial-coverage
+- **What is proven:** every colour value the dark block declares, as arithmetic. Both themes are
+  read out of `ui/src/design/tokens.css` and every pairing the naming convention implies is checked
+  against WCAG 2.2 AA — 4.5:1 for text, 3:1 for borders and focus rings (`adr/0051`). Deleting a
+  dark override fails two tests.
+- **What is not:** that any of it is ever applied. jsdom evaluates no media query and does not
+  compute the cascade, so no test has rendered a single element under
+  `prefers-color-scheme: dark`. A `@media` block with a typo in the query, or a `:root` selector
+  that a later rule outranks, would leave every assertion here passing and every user in light.
+- **What would close it:** the Phase 3 Playwright item, driving a real browser with the media
+  feature emulated, and asserting computed styles rather than declared ones.
+- **Opened:** iteration 59
+
+### The contrast check pairs token *names*, not the backgrounds rules actually draw on
+- **Kind:** partial-coverage
+- **What is proven:** `--color-muted-on-surface` contrasts with `--color-surface`, because the name
+  says it sits there. Every such pairing, in both themes.
+- **What is not:** that a rule using `--color-muted-on-surface` is drawing on a `--color-surface`
+  background. Nothing links a declaration to the element's actual backdrop. This is not
+  hypothetical — a zebra-striped list was written during iteration 59 and then removed *because* it
+  put surface foregrounds on the canvas colour, which is a real pairing the convention cannot see.
+  It was caught by reading the CSS, which is exactly the mechanism `adr/0051` exists to replace.
+- **What would close it:** computed-style contrast in a browser — walk the rendered tree, take each
+  element's resolved colour and its nearest painted background, and check those. That is the only
+  form of this check that is about what a person sees.
+- **Opened:** iteration 59
+
+### The focus ring is proven to be a colour and not to be visible
+- **Kind:** partial-coverage
+- **What is proven:** `--focus-on-canvas` and `--focus-on-surface` clear 3:1 against their named
+  surfaces in both themes, and `:focus-visible` has one rule that uses them.
+- **What is not:** anything about the indicator as a user meets it. jsdom has no layout, so nothing
+  proves the outline is not clipped by an ancestor's `overflow`, not overridden by a later rule, and
+  not obscured by a sticky element — SC 2.4.11 (Focus Not Obscured) is an AA criterion and this
+  repository cannot currently test it at all. `--focus-width: 2px` is a value nothing checks against
+  SC 2.4.13's area requirement either.
+- **What would close it:** the Playwright item, plus an axe-core pass in the same harness.
+- **Opened:** iteration 59
+
+### Two type-scale steps have no rule using them
+- **Kind:** no-production-caller
+- **What is proven:** the scale's invariants — seven steps, ascending in declared order, each a
+  whole pixel at a 16px root, each within a 1.1–1.35 ratio of its neighbour.
+- **What is not:** that `--text-xs` and `--text-2xl` are used by anything. Every colour role is
+  checked for a rule that names it and both of these would fail that check, which is why the check
+  is scoped to colour. `adr/0051` argues a scale is a closed set of permitted values rather than a
+  to-do list, and that a scale with its unpopular steps deleted is no longer a scale — that argument
+  is genuinely weaker than the one for colour, and it is recorded here rather than buried in the
+  file's own comment.
+- **What would close it:** the application shell using them, or their deletion.
+- **Opened:** iteration 59
+
+### Nothing has looked at the interface
+- **Kind:** environment-limited
+- **What is proven:** the tokens are correct as values, the stylesheet is imported, the CSS is
+  emitted by Vite (6.5 kB), linked from `index.html`, and embedded in the release binary.
+- **What is not:** whether it looks like anything. `CLAUDE.md` commits to an interface that is
+  "visually stunning and modern", and this iteration added a design system without a single
+  screenshot — no browser has rendered the page. Spacing, rhythm, the weight of the borders and
+  whether the panel reads as one object are all unassessed. This is the honest floor for a loop with
+  no display, and it is a different kind of gap from the others here: no test closes it, a person
+  looking does.
+- **What would close it:** a human opening the page, or a Playwright screenshot for a human to look
+  at later.
+- **Opened:** iteration 59
