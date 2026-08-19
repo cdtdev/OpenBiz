@@ -14,6 +14,7 @@ mod config;
 mod export;
 mod graphs;
 mod inspect;
+mod mappings;
 mod notes;
 mod shutdown;
 mod sparql;
@@ -27,6 +28,7 @@ pub use cli::{
 pub use config::{Config, ConfigError, Setting, Source};
 pub use graphs::AppState;
 pub use inspect::inspect;
+pub use mappings::mappings;
 pub use notes::notes;
 pub use shutdown::StopSignals;
 

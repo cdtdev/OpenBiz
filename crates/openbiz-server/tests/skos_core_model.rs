@@ -1036,8 +1036,8 @@ fn ancestors_climbs_through_a_mapping_link_off_disk_and_names_s41() {
         "{inspected}"
     );
     assert!(
-        inspected.contains("S45 makes skos:exactMatch transitive and this build does not close it"),
-        "the report states the part of §10 it does not do: {inspected}"
+        inspected.contains("its closure is walked rather than stored"),
+        "the report says what its counts are and are not: {inspected}"
     );
     assert!(
         inspected.contains("no SKOS integrity condition is violated"),
@@ -1077,5 +1077,95 @@ fn inspect_reports_an_exact_and_hierarchical_mapping_clash_off_disk() {
     assert!(
         report.contains("violates a SKOS integrity condition"),
         "{report}"
+    );
+}
+
+/// `openbiz mappings` end to end — the hub shape, read by the real binary off disk.
+///
+/// The house vocabulary maps a concept to a hub, and the hub maps onwards to a third party.
+/// Nothing in the file joins the house concept to the third party, and the operator asks the one
+/// question no serialisation can answer: what is this concept actually equivalent to?
+#[test]
+fn mappings_walks_a_chain_of_exact_matches_and_names_the_statement_that_licensed_each_step() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "hub.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         @prefix hub: <https://hub.example.org/geo/> .\n\
+         @prefix reg: <https://regulator.example.org/geo/> .\n\
+         ex:japan a skos:Concept ; skos:prefLabel \"Japan\"@en ;\n\
+             skos:exactMatch hub:jp ; skos:broadMatch hub:eastasia .\n\
+         hub:jp skos:exactMatch reg:JPN .\n",
+    );
+
+    let output = run(
+        dir.path(),
+        &["mappings", REGIONS, "https://example.org/regions/japan"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = stdout(&output);
+
+    assert!(report.contains("(\"Japan\"@en)"), "{report}");
+    assert!(
+        report.contains("<https://hub.example.org/geo/jp>"),
+        "{report}"
+    );
+    // The link the walk found, which the file states from neither end.
+    assert!(
+        report.contains("joined through a chain of exact matches"),
+        "{report}"
+    );
+    assert!(
+        report.contains("<https://regulator.example.org/geo/JPN>"),
+        "the third party is reachable only by chaining: {report}"
+    );
+    assert!(
+        report.contains("S45: skos:exactMatch is an instance of owl:TransitiveProperty."),
+        "the rule must be quoted, not merely cited: {report}"
+    );
+    // And the hierarchical mapping says it is in the hierarchy `openbiz ancestors` walks.
+    assert!(
+        report.contains("each of these is also a skos:broader link"),
+        "{report}"
+    );
+}
+
+/// The false negative S45's absence used to produce, end to end. The house concept is mapped to a
+/// hub, the hub onwards, and the house concept broad-matches the far end — a violation of S46 in
+/// which **no statement in the file names an exact match and a hierarchical one between the same
+/// pair**. Before the closure was walked this vocabulary was reported as consistent.
+#[test]
+fn inspect_finds_the_clash_that_only_the_exact_match_closure_reveals() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "chain-clash.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         @prefix hub: <https://hub.example.org/geo/> .\n\
+         @prefix reg: <https://regulator.example.org/geo/> .\n\
+         ex:japan a skos:Concept ; skos:prefLabel \"Japan\"@en ;\n\
+             skos:exactMatch hub:jp ; skos:broadMatch reg:JPN .\n\
+         hub:jp skos:exactMatch reg:JPN .\n",
+    );
+
+    let report = stdout(&run(dir.path(), &["inspect", REGIONS]));
+
+    assert!(
+        report.contains("S45: skos:exactMatch is an instance of owl:TransitiveProperty."),
+        "the chain is the derivation and the report must print it: {report}"
+    );
+    assert!(
+        report.contains(
+            "S46: skos:exactMatch is disjoint with each of the properties skos:broadMatch and \
+             skos:relatedMatch."
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("violates a SKOS integrity condition"),
+        "a clash visible only through the closure is still a clash: {report}"
     );
 }

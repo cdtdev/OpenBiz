@@ -1706,24 +1706,24 @@ Do not delete it — the record of what took how long to close is the signal.
   is research and not engineering.
 - **Opened:** iteration 31
 
-### S45 is not applied, so `skos:exactMatch` is a link and not an equivalence class
+### ~~S45 is not applied, so `skos:exactMatch` is a link and not an equivalence class~~
 
-- **Kind:** partial-standard
-- **What is proven:** S38–S44 and S46 of §10, against the specification's Examples 49–61 and
-  63–68, in the model and end to end through the binary. The absence of S45 is pinned by
-  `s45_is_not_applied_so_an_exact_match_chain_does_not_close`, and `openbiz inspect` prints the
-  gap in every report that contains a mapping.
-- **What is not:** Example 62. `<A> skos:exactMatch <B>` and `<B> skos:exactMatch <C>` entails
-  `<A> skos:exactMatch <C>` and we do not conclude it. A customer who mapped their vocabulary to a
-  hub and the hub to a third party will see two links where SKOS licenses three, and **S46 is
-  checked only over the links we hold** — so a clash that is only visible through the closure
-  (`<A> exactMatch <B> exactMatch <C>`, with `<A> broadMatch <C>`) is reported as a consistent
-  vocabulary. That is the sharpest part of this gap: the missing entailment also silences an
-  integrity condition, and a false "no violation" is worse than a missing conclusion.
-- **What would close it:** part 2 of the mapping item in `docs/BUILD-PLAN.md` — the closure as a
-  bounded walk over an undirected cluster, with the path as its derivation, and S46 re-checked
-  across it. `adr/0029` records why it is a walk and why its shape differs from `ancestry`.
-- **Opened:** iteration 32
+**Closed at iteration 33.** `CoreModel::exact_match_cluster` walks the closure, Example 62 is
+entailed, and S46 is checked across it by `check_exact_match_closure_disjointness` — so the
+`<A> exactMatch <B> exactMatch <C>` with `<A> broadMatch <C>` vocabulary this entry named is now
+reported as inconsistent, with the chain as its derivation, end to end through the binary. The
+pinning test was replaced by its opposite rather than deleted. See `adr/0030`.
+
+**What replaced it, narrower:** S42's lift is not applied *across* the closure. A concept reached
+only by chaining is reported as an `skos:exactMatch` and not also as the `skos:closeMatch` S42
+entails from it, so `openbiz mappings` lists the chained concepts under one heading and not two.
+The conclusion is one step from what the report already prints, under a heading it already prints,
+and the cost of stating it would be a second walk per report — but it is a conclusion SKOS licenses
+and this build does not draw, which is what this ledger is for. Closing it means deciding whether
+the close-match section lists walked members or stays the one-step section it is today, and that is
+a report-design question rather than a rule.
+
+- **Opened:** iteration 32, closed iteration 33; the narrower entry above opened iteration 33
 
 ### A mapping link's cost has never been measured, and the scale harness cannot produce one
 
@@ -1742,18 +1742,35 @@ Do not delete it — the record of what took how long to close is the signal.
 - **What would close it:** a mapping row in the scale harness — a vocabulary of N concepts each
   carrying one `skos:broadMatch` and one `skos:exactMatch` to a second namespace — measured at 10k
   and 100k, with the per-link cost compared against `adr/0024`'s number for a stated relation.
-- **Opened:** iteration 32
+- **Widened at iteration 33, and this is now the second iteration running to record it.** The
+  closure sweep added a *second* unmeasured cost, of a different kind: S46-across-S45 walks once
+  per concept holding a `skos:exactMatch`. The arithmetic for the concept-for-concept case — every
+  cluster has two members, so two links per concept — reaches `EquivalenceBound::DEFAULT`'s million
+  at about 500 000 mapped concepts, and that half is still arithmetic and still unmeasured, because
+  `scale.rs` generates no mapping links.
+- **The dense case is measured, and it is worse than the arithmetic suggested.** I wrote the
+  paragraph above as reasoning, then measured it, and the number disagreed with the shape I had
+  assumed. A **hub** — *n* vocabularies all declaring their concept equivalent to one central
+  concept — is a single cluster walked once per member, so the sweep costs about **2n²**: measured
+  at 220 links for 10 members, 20 200 for 100, and 321 200 for 400.
+  `the_sweep_cost_is_quadratic_in_a_cluster_and_not_linear_in_the_vocabulary` now pins it. So a
+  **1 000-member cluster exhausts the default budget on its own**, on a vocabulary of a thousand
+  concepts, and the report would truthfully say S46 is unchecked — which is honest, useless, and
+  would look like a defect to the customer whose vocabulary is the most carefully mapped one we
+  have ever been handed.
+- **What would close the dense half:** walking each *component* once instead of each *member*,
+  which makes the sweep linear — every member of a cluster has the same cluster, so *n* walks
+  recompute one answer *n* times. It was not done here because it changes what the per-concept
+  bound findings mean and the item was already the whole of §10's part 2. It is the obvious next
+  move if any real vocabulary turns out to have dense clusters, **and nothing here can tell us
+  whether one does**: no fixture in this repository has a cluster larger than four.
+- **Opened:** iteration 32, widened and half-measured iteration 33
 
-### There is no per-concept view of what a concept is mapped to
+### ~~There is no per-concept view of what a concept is mapped to~~
 
-- **Kind:** no-production-caller
-- **What is proven:** the vocabulary-level answer. `openbiz inspect` counts mapping links by kind,
-  says how many were inferred and under which statement, and prints every derivation.
-- **What is not:** the concept-level one. `Resource::mappings` and `Resource::mappings_of` are
-  public, tested, and called only by the report's counters — nothing asks "what is *this* concept
-  joined to, and which of those links did we infer?". `openbiz notes` is the shape that answer
-  wants and it does not exist for mappings, so an author reading "4 exact mapping links" in a
-  100k-concept vocabulary has no command that will show them which four.
-- **What would close it:** `openbiz mappings <graph> <resource>`, carried as part 2 of the mapping
-  item in `docs/BUILD-PLAN.md`.
-- **Opened:** iteration 32
+**Closed at iteration 33.** `openbiz mappings <graph> <resource>` prints the five properties, the
+origin and quoted rule for every link the graph did not state, S41's lift per section, and the
+concepts reachable only by chaining exact matches with the chain that reached each. Proven in the
+module's own tests and end to end against the real binary reading a store off disk.
+
+- **Opened:** iteration 32, closed iteration 33

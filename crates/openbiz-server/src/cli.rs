@@ -97,6 +97,13 @@ pub enum Command {
         /// The IRI of the resource to report the documentation of.
         resource: String,
     },
+    /// Report what a vocabulary joins one resource to, and why. Reads and nothing else.
+    Mappings {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+        /// The IRI of the resource to report the mapping links of.
+        resource: String,
+    },
     /// List every proposed change the store holds.
     Candidates,
     /// Show one proposed change, with the statements it would add.
@@ -135,6 +142,8 @@ Usage:
                              report what is above <concept> in the hierarchy, and why
   openbiz notes <graph> <resource>
                              print what <graph> documents <resource> with, and why
+  openbiz mappings <graph> <resource>
+                             print what <graph> joins <resource> to, and why
   openbiz candidates         list the proposed changes waiting for a decision
   openbiz candidate <id>     show one proposed change and the statements it would add
   openbiz approve <id>       apply a proposed change to its vocabulary
@@ -289,6 +298,17 @@ impl Command {
                     resource: Self::text(
                         "notes",
                         "the IRI of a resource to report the documentation of",
+                        &mut args,
+                    )?,
+                },
+            ),
+            "mappings" => (
+                "mappings",
+                Self::Mappings {
+                    graph: Self::text("mappings", "the IRI of a vocabulary to read", &mut args)?,
+                    resource: Self::text(
+                        "mappings",
+                        "the IRI of a resource to report the mapping links of",
                         &mut args,
                     )?,
                 },
@@ -972,6 +992,37 @@ mod tests {
             parse(&["notes", "a", "b", "c"]),
             Err(ArgsError::TooManyArguments {
                 command: "notes",
+                extra: 1
+            })
+        );
+    }
+
+    /// Two arguments, both required, and the second is a *resource* for the same reason
+    /// `notes` takes one: §10 puts no domain on the mapping properties beyond `skos:Concept`
+    /// through S39, and a report is worth printing for anything the model holds.
+    #[test]
+    fn mappings_takes_a_vocabulary_and_a_resource() {
+        assert_eq!(
+            parse(&[
+                "mappings",
+                "https://example.org/regions",
+                "https://example.org/regions/apac"
+            ]),
+            Ok(Command::Mappings {
+                graph: "https://example.org/regions".to_owned(),
+                resource: "https://example.org/regions/apac".to_owned(),
+            })
+        );
+        let error = parse(&["mappings", "https://example.org/regions"])
+            .expect_err("a resource is required");
+        assert!(
+            error.to_string().contains("resource"),
+            "the message must say what was missing: {error}"
+        );
+        assert_eq!(
+            parse(&["mappings", "a", "b", "c"]),
+            Err(ArgsError::TooManyArguments {
+                command: "mappings",
                 extra: 1
             })
         );

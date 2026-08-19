@@ -127,6 +127,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Notes { graph, resource } => one_shot(store, |store| {
             openbiz_server::notes(store, &graph, &resource)
         }),
+        Command::Mappings { graph, resource } => one_shot(store, |store| {
+            openbiz_server::mappings(store, &graph, &resource)
+        }),
         Command::Candidates => one_shot(store, openbiz_server::candidates),
         Command::Show { id } => one_shot(store, |store| openbiz_server::show(store, &id)),
         Command::Approve { id } => one_shot(store, |store| {

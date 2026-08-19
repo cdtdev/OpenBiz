@@ -497,12 +497,15 @@ fn report(graph: &str, model: &CoreModel) -> String {
         out.push_str(&format!(
             "  {mapped} resource(s) in this graph carry at least one mapping link\n"
         ));
-        // Said in every report that has a mapping in it, because it is a gap and not a footnote.
-        // An operator who read "3 exact" as "3 equivalence classes" would under-count a mapped
-        // vocabulary in exactly the way S45 licenses and this build does not compute.
+        // Said in every report that has a mapping in it, because a count of one-step links and a
+        // count of equivalence classes are different numbers and an operator who read the first
+        // as the second would under-count a chained vocabulary. Until iteration 33 this sentence
+        // reported S45 as unimplemented; the closure is now walked rather than counted, so what
+        // it says has changed and the count above has not.
         out.push_str(
-            "  counted as stated links; S45 makes skos:exactMatch transitive and this build does \
-             not close it, so a chain of exact matches is reported as the links it states\n",
+            "  counted as the links held, one step each; S45 makes skos:exactMatch transitive \
+             and its closure is walked rather than stored, so a chain of exact matches is \
+             counted here as the links it states and resolved per concept by openbiz mappings\n",
         );
         // §10.6.1: using the mapping properties only across concept schemes is a convention, and a
         // mapping inside one scheme is consistent. Said out loud so that the count above is never
@@ -965,10 +968,17 @@ ex:Chemistry a skos:Concept ;
             report.contains("4 resource(s) in this graph carry at least one mapping link"),
             "{report}"
         );
+        // The counts are one-step links and the report says so, because a reader who took
+        // "1 exact" for "1 equivalence class" would under-count a chained vocabulary. What the
+        // sentence claims changed at iteration 33 — the closure is now walked — and the count
+        // it qualifies did not.
         assert!(
-            report
-                .contains("S45 makes skos:exactMatch transitive and this build does not close it"),
-            "the gap is stated in the report, not only in the ledger: {report}"
+            report.contains("counted as the links held, one step each"),
+            "{report}"
+        );
+        assert!(
+            report.contains("resolved per concept by openbiz mappings"),
+            "the report must name the command that answers the question it declines: {report}"
         );
         assert!(
             report.contains("no SKOS integrity condition is violated"),
