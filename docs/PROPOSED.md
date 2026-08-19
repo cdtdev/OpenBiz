@@ -775,6 +775,153 @@ Copy this shape exactly; `/openbiz-status` parses the `Status:` line semanticall
 - **Suggested phase:** not a build phase — a research task for a future product-owner pass, listed
   here so the next one does not have to rediscover the gap.
 
+### Adopt a fetch-on-demand real-thesaurus fixture, and stop calling the shape questions unanswerable
+
+- **Status:** proposed. Written at the product owner's direct request (`FEEDBACK-LOG.md`,
+  2026-08-19: *"What I am asking for is a proposal, not a fetch"*), against their four stated
+  criteria — licence, size and location, which questions it answers, air-gapped honesty. Nothing was
+  added to the repository and nothing was built. **The recommendation is yes, and it is smaller than
+  either of us expected.**
+- **The framing correction lands, and it was worse than the note says.** Six consecutive iterations
+  wrote a doubt whose closing line was some variant of *"it cannot be told from inside this
+  repository"*. That sentence was true and it was also a place to stop looking. This iteration spent
+  roughly forty minutes with `curl` and a public SPARQL endpoint and came back with **numbers** for
+  four of the six. `CLAUDE.md` §8 does not list public test data, and it was never the constraint —
+  the constraint was that "I cannot know" reads like diligence and is much cheaper than finding out.
+
+#### What was actually measured, before proposing anything
+
+Two real published vocabularies, no download into the repository (one 763 KB file to `/tmp`, deleted):
+
+| | AGROVOC | LC Genre/Form Terms (LCGFT) |
+|---|---|---|
+| Concepts | 41,825 | 2,685 |
+| Licence | **CC BY 4.0**, asserted by the dataset's own VoID (`dct:license`) | **public domain**, asserted by the publisher |
+| Distribution | `agrovoc_core.nt.zip` **69.8 MiB** / `agrovoc_lod.nt.zip` **91.2 MiB**, 10,089,090 triples | `genreForms.skosrdf.nt.gz` **745 KiB** → **10.8 MiB** N-Triples, 90,890 lines |
+| Concepts with >1 `skos:broader` | **474 (1.1%)**, maximum 2 | **693 (25.8%)**, maximum 4 |
+| Worst-case routes to a summit | not enumerated (endpoint) | **7**, at depth 3 |
+| Mapping links | 36,402 `exactMatch`, 13,888 `closeMatch`, 261 `broadMatch`, 72 `narrowMatch`, 13 `relatedMatch` | none |
+| SKOS-XL | yes — 1,251,722 `skosxl:Label` | yes, **alt labels only**: 6,121 `skosxl:altLabel`, 6,314 `literalForm`, and plain `skos:prefLabel` |
+| `rdfs:subPropertyOf` into SKOS | **21 declared**, of which **2 used** | none |
+
+Method: AGROVOC by SPARQL against `https://agrovoc.fao.org/sparql` and by its VoID descriptor at
+`http://aims.fao.org/aos/agrovoc/void.ttl`; LCGFT by fetching the dump and counting it with a
+throwaway script. Sizes by `curl -I`, read from `content-length`. None of this is a test and none of
+it is in CI — that is the proposal, not the finding.
+
+#### Four findings that change what we believe, independent of whether this is promoted
+
+1. **`PathBound::DEFAULT` is not close to the wire — it is three orders of magnitude away.** The
+   iteration-36 entry reasoned that an ordinary thesaurus sits *near* the 10,000-route ceiling. On
+   the one real polyhierarchy measured — and LCGFT is genuinely polyhierarchical, a quarter of its
+   concepts have more than one parent — the worst concept in the vocabulary has **7 routes to a
+   summit**. AGROVOC cannot exceed 2 broader links on any concept at all. The reasoning was not
+   merely unmeasured; its direction was wrong, because it assumed branching and depth compound and
+   in a real thesaurus **depth is 3–4 and stops them compounding**. This does not close the entry —
+   two vocabularies are not a population, and neither is the deep faceted kind — but it moves the
+   default from "uncomfortably near" to "unmeasured, with the two available measurements far below".
+2. **The SKOS extension point is used, and not where we tested it.** §7.1 work assumed refinements
+   of the *documentation* properties. AGROVOC declares 21 refinements and **not one is a note
+   property**: 8 refine `skos:notation`, 12 refine `skos:related`, and one refines **`skos:broader`**
+   (`agrovoc:IndigenousPeoples-broader`). A refinement of `skos:broader` is a hierarchy link that a
+   reader which does not entail from `rdfs:subPropertyOf` **does not see** — which is exactly the
+   open `UNTESTED.md` entry, now with a real vocabulary behind it instead of an invented one.
+   It also answers the specific unknown that entry named: the declarations are in the **same graph**
+   as the concepts (`http://aims.fao.org/aos/agrovoc/`), not a separate imported ontology. Our first
+   pass looks in the right place.
+3. **A real thesaurus declares far more than it uses.** Of AGROVOC's 21 refinements, **2** appear on
+   any statement (`m49Code`, 284 uses; `hasCodeISO3Country`, 220). `openbiz inspect` would report 21
+   declarations with no hint that 19 are dead, which is a report-design question we have never had
+   the input to ask.
+4. **Publisher checksums exist and one of them lies about what it hashes.** LC publishes a PREMIS
+   SHA-1 beside each dump. Two independent fetches of `genreForms.skosrdf.nt.gz` agree with each
+   other and **disagree** with the published hash — because the hash is attached to the `.gz` URI in
+   the JSON-LD but is in fact the hash of the **decompressed** bytes (`sha1sum lcgft.nt` matches
+   exactly). Usable, then, but only if you decompress first; a fixture harness that verified the
+   `.gz` against the publisher's stated fixity would fail every time and look like tampering.
+
+#### The four criteria, answered
+
+- **Licence.** Three clear, one not.
+  - **AGROVOC — CC BY 4.0**, and this is a real check rather than a recollection: the licence is
+    asserted *by the dataset itself* in its VoID descriptor. **Caveat that matters:** FAO holds
+    copyright for the six FAO languages; content in the other ~34 languages rests with the
+    contributing institutions, so a full-language dump is of mixed provenance and only the FAO-language
+    subset is cleanly CC BY.
+  - **LCSH / LCGFT / LCDGT — public domain.** *"The Library of Congress has prepared this linked data
+    system and is making it available as a public domain data set."*
+  - **Getty AAT/TGN/ULAN — ODC-BY 1.0**, with a prescribed attribution string. Permissive in
+    substance; an attribution obligation is a thing to honour, not a blocker.
+  - **EuroVoc — does not pass a licence check today, and this inverts the note's guess.** The
+    Publications Office copyright page licenses *"the editorial content of this website"* CC BY 4.0
+    and then **explicitly routes the specialised databases (CELLAR, EU Vocabularies) to
+    `op-copyright@publications.europa.eu`**. Secondary sources say CC BY 4.0 under Decision
+    2011/833/EU and they are probably right; *probably right* is what the note itself refused to
+    accept. Resolving it means a human sending an email, which is out of scope for the loop. **Do
+    not use EuroVoc until someone does.**
+- **Size, and where it lives — and the disk figure in the note is off by a factor of thirty-five.**
+  C: is at 26 GB free (95% full) and that is where the *loop state directory* lives; the **repo is
+  on G: with 355 GB free**, and `CARGO_TARGET_DIR`, `~/.cache` and `/tmp` are on the WSL ext4 root
+  with **929 GB free**. So the constraint is real but it is a *placement* constraint: put the cache
+  under `~/.cache/openbiz-fixtures` on the ext4 root and never under the Windows profile. Nothing is
+  committed either way — recommended layout is a cache directory outside the tree, a manifest of
+  URL + expected SHA-256 + expected triple count in the repo, and every fixture test skipping (not
+  failing) when the cache is cold.
+  - **But there is a real problem with pinning, and it is the reason for the recommendation below.**
+    AGROVOC publishes **only a moving URL** (`.../latestAgrovoc/agrovoc_core.nt.zip`); older releases
+    are *"available upon request"* by email, and the dated path guessed from the release date 404s.
+    LC regenerates its dumps **daily** (`dcterms:modified` was today's date on every file checked).
+    Neither publisher offers an immutable, content-addressed URL. A pinned SHA-256 against either
+    therefore breaks on the publisher's schedule, not ours — the fixture would go red for reasons
+    that are not defects, which is the fastest way to teach a team to ignore a red.
+- **Which `UNTESTED.md` questions it actually answers.** Named, and honestly ranked:
+  - *`PathBound::DEFAULT` is a judgement about polyhierarchies nobody here has measured* — **yes,
+    already partly answered above.** LCGFT alone gives a real route enumeration.
+  - *A mapping link's cost has never been measured, and the scale harness cannot produce one* —
+    **yes, AGROVOC only.** 50,636 mapping links over 41,825 concepts, and 36,402 of them
+    `exactMatch`, which is also the input the exact-match closure work has never had.
+  - *No fixture here is a real extended thesaurus* — **yes, AGROVOC only**, and it has already
+    changed the answer (finding 2).
+  - *The SKOS core model is not measured at scale* / *what a note costs is unmeasured* — **partly.**
+    AGROVOC is 10M triples; LCGFT carries 5,933 `changeNote`s with reified `changeset:` provenance,
+    which is a note shape we have never modelled.
+  - *`WalkBound::DEFAULT` going down* and *what an abandoned enumeration costs* — **no.** Neither
+    vocabulary has a cycle or a wide enough subtree, and the second needs a *planted* cycle. **These
+    two still need the branching generator**, and a real fixture does not substitute for it.
+  - So: **four helped, two not**, and the two it does not help are the two the last two iterations
+    said the generator should do. That is an argument for doing *both*, in that order.
+- **Air-gapped honesty.** A test that needs the network fails in the deployments §1.1 exists to
+  serve, so the network must never be on the path of `cargo test`. The rule that keeps it honest:
+  **a fixture test that cannot find its cache skips with a printed reason and does not fetch.**
+  Fetching is a separate, explicit developer command. CI stays hermetic — it will simply skip these
+  — which means they are a *local measurement instrument*, not a gate, and calling them a gate would
+  be the dishonest version. Every question above still has to be answerable without them, and the
+  answer to "what does an air-gapped deployment lose" is "nothing; this is our test harness, not the
+  product".
+
+#### The recommendation, which is narrower than the ask
+
+**Take LCGFT and only LCGFT, as one pinned, decompressed, byte-checked file — and do not build a
+fetch harness for AGROVOC yet.**
+
+- It is **745 KiB compressed**, public domain with no attribution string to thread through, a real
+  ISO-25964-shaped thesaurus with 25.8% polyhierarchy, real SKOS-XL, and real reified change notes.
+  It answers the polyhierarchy question *outright* and it costs nothing.
+- AGROVOC answers more, but it is 70 MiB behind a moving URL with no archival copy and mixed-provenance
+  multilingual content, and every one of those is a reason for a human to decide rather than a loop.
+- The generic "fetch-on-demand with a checksum" machinery is the part to **not** build first: with no
+  immutable URL anywhere, the manifest is the hard problem and the downloader is the easy one.
+
+- **Cost & impact:** one iteration for LCGFT (fetch script, manifest, skip-when-absent harness, and
+  the first two measurements). AGROVOC is a second iteration and should be a separate decision. No
+  runtime impact — nothing here ships in the binary. No new dependency: we already read N-Triples.
+- **Suggested phase:** Phase 2, immediately before or after the branching generator, which this
+  does not replace.
+- **What to decide:** (a) LCGFT yes/no; (b) whether anyone will email `op-copyright@` about EuroVoc;
+  (c) whether a fixture that skips in CI is worth having at all, or whether a measurement nobody is
+  forced to run will simply rot — that last one is a genuine risk and the loop should not pretend
+  otherwise.
+
 ## Parity findings
 
 Items where the honest answer to *"what would be materially better than the incumbents?"* is **"here

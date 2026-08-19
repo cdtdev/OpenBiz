@@ -1701,6 +1701,17 @@ Do not delete it — the record of what took how long to close is the signal.
   the first pass reads the wrong graph and finds nothing, and reports "no declared refinements"
   rather than "the declarations are somewhere I did not look".
 - **How to tell:** it cannot be told from inside this repository.
+- **Partly told at iteration 37, from outside this repository, and the answer was not the one this
+  entry guessed.** AGROVOC's public SPARQL endpoint says its 21 `rdfs:subPropertyOf` declarations
+  into SKOS are **in the same graph as the concepts** (`http://aims.fao.org/aos/agrovoc/`), so the
+  "declarations are in an imported ontology graph we never look at" fear named above **does not
+  hold there** and our first pass reads the right graph. What it found instead is worse for our
+  coverage: **not one of the 21 refines a documentation property.** Eight refine `skos:notation`,
+  twelve refine `skos:related`, and one refines **`skos:broader`** — a hierarchy link invisible to a
+  reader that does not entail from `rdfs:subPropertyOf`. Every fixture here refines a note property.
+  Separately, only **2 of the 21 are used on any statement**, so a report listing declarations says
+  nothing about which are live. See the iteration-37 proposal in `PROPOSED.md` for the method and
+  the numbers; this remains open because one vocabulary is not a population and none of it is a test.
 - **What would close it:** a permissively-licensed published SKOS thesaurus that uses §7.1's
   extension point, read end to end. Recorded as a proposal rather than taken, because finding one
   is research and not engineering.
@@ -1748,6 +1759,13 @@ a report-design question rather than a rule.
   cluster has two members, so two links per concept — reaches `EquivalenceBound::DEFAULT`'s million
   at about 500 000 mapped concepts, and that half is still arithmetic and still unmeasured, because
   `scale.rs` generates no mapping links.
+- **Iteration 37 measured the density a real mapped thesaurus has, though not our cost of it.**
+  AGROVOC carries **36,402 `skos:exactMatch`, 13,888 `closeMatch`, 261 `broadMatch`, 72
+  `narrowMatch` and 13 `relatedMatch`** across 41,825 concepts — about 1.2 mapping links per
+  concept, and the overwhelming majority of them the `exactMatch` that drives the quadratic sweep
+  above. So the concept-for-concept shape this entry calls "an ordinary enterprise artefact" is
+  confirmed ordinary, and the input that would exercise it exists and is CC BY 4.0. What is still
+  unmeasured is ours: no mapping link has ever been through our model.
 - **The dense case is measured, and it is worse than the arithmetic suggested.** I wrote the
   paragraph above as reasoning, then measured it, and the number disagreed with the shape I had
   assumed. A **hub** — *n* vocabularies all declaring their concept equivalent to one central
@@ -1909,6 +1927,15 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** a branching row in the scale harness — N concepts, B broader links each,
   depth D — with `paths_to_root` timed from a leaf at the sizes `adr/0024` used, and the default
   set against those numbers.
+- **Two real vocabularies were counted at iteration 37 and both sit far below the ceiling, in the
+  opposite direction to this entry's reasoning.** LC Genre/Form Terms — 2,685 concepts, **25.8% of
+  them with more than one broader concept**, so a genuine polyhierarchy — has a worst case of
+  **7 routes to a summit, at depth 3**. AGROVOC's 41,825 concepts have **at most 2** broader links
+  each and none has three. The reasoning recorded above assumed branching and depth compound; in a
+  real thesaurus **depth is 3–4 and stops them compounding**. That does not close this entry — two
+  vocabularies are not a population, neither is the deep faceted kind, and neither number came from
+  a test — but "uncomfortably near the ceiling" is no longer the honest way to state the doubt, and
+  the branching generator this entry asks for is still the thing that would close it.
 - **Opened:** iteration 36
 
 ### Nothing measures what an enumeration costs when it is abandoned rather than completed

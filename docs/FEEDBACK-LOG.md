@@ -275,3 +275,75 @@ new repo-wide gate off the back of a one-paragraph correction, and the instructi
 mechanism, not to build one. The design is in `docs/PROPOSED.md` for a human to promote, and
 `docs/UNTESTED.md` records the honest gap in the meantime: this sweep was manual, its completeness
 rests on the phrasings the loop thought to search for, and nothing prevents a recurrence.
+
+## Received 2026-08-19 (iteration 37)
+
+
+## 2026-08-19 — from the product owner: you can go and get a real vocabulary
+
+Five consecutive iterations have recorded the same doubt — note-property placement, mapping density,
+exact-match cluster size, unchecked-condition frequency, and now downward-walk cost — and you named
+it yourself at iteration 34 as "the same blind spot for the fourth time." Every one reduces to: *no
+fixture in this repository resembles a real thesaurus.*
+
+**The framing to correct.** You have written "I cannot find out from inside this repository" more
+than once. That is true and it is not the constraint you think it is. `CLAUDE.md` §8 puts real IdPs,
+paid accounts, releases, pricing, and hardware-bound load testing out of scope. **Public test data
+is not on that list.** EuroVoc, AGROVOC, LCSH, and the Getty vocabularies are published, freely
+downloadable, real ISO 25964-shaped thesauri in the tens to hundreds of thousands of concepts. Using
+one as a fixture is ordinary engineering, not a scope decision, and it would answer four or five of
+your open questions with measurements instead of caveats.
+
+**What I am asking for is a proposal, not a fetch.** Do not download half a gigabyte into the repo
+on the strength of this note. Evaluate it properly and write it up in `docs/PROPOSED.md`:
+
+- **Licence.** Each source has its own terms and §5 governs what enters this repository. EuroVoc and
+  AGROVOC are permissively licensed as far as I know, but *as far as I know* is not a licence check.
+- **Size and where it lives.** A real thesaurus should almost certainly not be committed. A
+  fetch-on-demand fixture with a checksum, cached outside the tree and skipped when absent, keeps CI
+  hermetic and the clone small — and the loop machine is at 26 GB free, so size is not free.
+- **Which questions it actually answers.** Name them against the `UNTESTED.md` entries they would
+  close. If a source answers only one, say so — that changes whether it is worth the machinery.
+- **Air-gapped honesty.** A test that needs the network is a test that fails in the deployments we
+  claim to serve. Say how it degrades.
+
+If after that the answer is "not worth it yet", record that with the reasoning and stop writing the
+doubt as though it were unanswerable. An open question you have decided not to answer is a different
+thing from one you cannot.
+
+**What the loop did (iteration 37, 2026-08-19).** Took this as the whole iteration. Nothing was
+downloaded into the repository and nothing was built; the deliverable is the proposal
+*"Adopt a fetch-on-demand real-thesaurus fixture, and stop calling the shape questions
+unanswerable"* in `PROPOSED.md`, which answers all four criteria with measurements rather than
+recollection.
+
+Four things in the note came back different from how it was written, and they are recorded here
+because a human made a decision on each premise:
+
+- **EuroVoc does not pass a licence check.** Not because it is closed — it is probably CC BY 4.0
+  under Decision 2011/833/EU — but because the Publications Office's own copyright page licenses
+  *"the editorial content of this website"* and then routes the specialised databases (CELLAR, EU
+  Vocabularies) to `op-copyright@publications.europa.eu`. Only secondary sources say CC BY, which is
+  the *"as far as I know is not a licence check"* standard this note itself set. **AGROVOC does
+  pass**, and by the strongest available evidence: `dct:license <…/by/4.0/>` in the dataset's own
+  VoID descriptor. LC's data is public domain by the publisher's own statement. Getty is ODC-BY 1.0.
+- **The disk figure is off by placement, not by amount.** C: is at 26 GB free and holds the loop
+  *state* directory; the repo is on G: with 355 GB free and the build cache, `~/.cache` and `/tmp`
+  are on the WSL ext4 root with **929 GB free**. The constraint is real but it is about *where* the
+  cache goes, not whether it fits.
+- **"Fetch-on-demand with a checksum" has a problem neither of us saw.** Neither AGROVOC nor LC
+  publishes an immutable URL: AGROVOC serves only `.../latestAgrovoc/…` and keeps older releases
+  behind an email request; LC regenerates every dump daily. A pinned checksum therefore goes stale
+  on the publisher's schedule. And LC's own published SHA-1, which looks like the answer, is
+  attached to the `.gz` URI but is actually the hash of the *decompressed* bytes — verified by
+  fetching the file twice and hashing both forms.
+- **The recommendation is smaller than the ask, and the note's own test is the reason.** *"If a
+  source answers only one, say so"* — so: LCGFT (745 KiB, public domain, 25.8% polyhierarchy) is
+  recommended and AGROVOC (70 MiB, moving URL, mixed-provenance multilingual content) is deliberately
+  **not**, as a separate human decision.
+
+The framing correction is accepted without reservation and its effect is already in the ledger:
+three `UNTESTED.md` entries have had *"it cannot be told from inside this repository"* replaced by
+measurements, and one of them — `PathBound::DEFAULT` — turned out to be wrong in its direction, not
+merely unproven. Roughly forty minutes of `curl` and a public SPARQL endpoint did what six
+iterations had called unanswerable.
