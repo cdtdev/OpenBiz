@@ -137,9 +137,13 @@ All four commands only read. A test asserts the store is byte-for-byte unchanged
 openbiz ancestors <graph> <concept>   # what is above it, and by what path
 openbiz paths <graph> <concept>       # every route up to a root, and the cycles they hit
 openbiz tree <graph> <concept>        # what is below it and beside it
-openbiz tree <graph> <concept> --current  # ... leaving out the retired ones, and saying how many
 openbiz search <graph> <text>         # find concepts by a word, not by an IRI
-openbiz search <graph> <text> --current   # ... leaving out the retired ones, and saying how many
+
+# and any of the four with --current, to leave the retired concepts out and be told what that cost
+openbiz ancestors <graph> <concept> --current
+openbiz paths <graph> <concept> --current
+openbiz tree <graph> <concept> --current
+openbiz search <graph> <text> --current
 ```
 
 **The transitive closure is never stored, at any vocabulary size.** A legal 100 000-link SKOS chain
@@ -190,8 +194,25 @@ route to them. Nothing is lifted and nothing is re-parented: every concept the n
 keeps the depth, the parent and the derivation the full tree gave it, so narrowing can never make
 the tree state a link the vocabulary does not. The counts close the report either way, including the
 case where every descendant is retired and the tree would otherwise read as a leaf
-([`adr/0044`](adr/0044-a-branch-goes-only-when-the-whole-branch-is-retired.md)). `ancestors` and
-`paths` still show everything, marked.
+([`adr/0044`](adr/0044-a-branch-goes-only-when-the-whole-branch-is-retired.md)).
+
+**Looking *up*, the flag splits again, and the two halves disagree on purpose.** `ancestors` asks
+which concepts are above one: a concept reachable only *through* a retired one is still above it —
+retiring removes no link — so the retired concept leaves the list and everything above it stays. Its
+**path is printed whole**, because the path is the derivation and cutting a concept out of
+`A → B → C` would state that `C` is directly above `A`. `paths` asks by what *routes*, and a route
+is atomic: it is offered only if every concept on it is current, and one that is not is withheld
+entire rather than shortened past. The cycles are never narrowed — a cycle is why a route reaches no
+summit, so leaving one out deletes the explanation and keeps the problem
+([`adr/0045`](adr/0045-current-concepts-on-routes.md)).
+
+So `--current` is on all four commands under three different rules, because they answer three
+different questions — and every one of them obeys the same single rule: **hide the concepts, never
+the fact that there were concepts.** The case that proves it in each is the one where the flag
+withholds *everything*. An emptied ancestor list would otherwise say a concept has no broader
+concept when the vocabulary puts two over it; an emptied route list would blame a cycle that need
+not exist. Both are a false negative about the hierarchy above a concept, which is how the wrong
+parent gets chosen for the next one.
 
 ---
 

@@ -99,6 +99,10 @@ pub enum Command {
         graph: String,
         /// The IRI of the concept to walk up from.
         concept: String,
+        /// Leave the retired concepts out of the list, keeping the paths whole, and say how many.
+        ///
+        /// Read from the vocabulary beside the model (`docs/adr/0041`), as on `openbiz search`.
+        current_only: bool,
     },
     /// Report every route from one concept up to a root, and why. Reads and nothing else.
     Paths {
@@ -106,6 +110,10 @@ pub enum Command {
         graph: String,
         /// The IRI of the concept to enumerate the routes above.
         concept: String,
+        /// Offer only the routes that are current the whole way up, and say how many were not.
+        ///
+        /// Read from the vocabulary beside the model (`docs/adr/0041`), as on `openbiz search`.
+        current_only: bool,
     },
     /// Report what is below one concept and beside it, and why. Reads and nothing else.
     Tree {
@@ -255,9 +263,9 @@ Usage:
                              propose the file's statements as removals from <graph>
   openbiz inspect <graph>    report what <graph> holds in SKOS terms, and why
   openbiz integrity <graph>  report which SKOS integrity conditions <graph> satisfies
-  openbiz ancestors <graph> <concept>
+  openbiz ancestors <graph> <concept> [--current]
                              report what is above <concept> in the hierarchy, and why
-  openbiz paths <graph> <concept>
+  openbiz paths <graph> <concept> [--current]
                              report every route from <concept> up to a root, and why
   openbiz tree <graph> <concept> [--current]
                              report what is below <concept> and beside it, and why
@@ -300,6 +308,10 @@ Ancestors only reads. It walks `skos:broaderTransitive` up from one concept and 
 concept above it with the path that reached it, which for a link nobody stated is the derivation
 S24 licensed. The closure is never stored — a legal SKOS hierarchy can be arbitrarily deep, and a
 cycle in it is legal too — so this walks it on demand and says so if it stops at its bound.
+  --current                  leave the retired concepts out of the list. A concept above this one
+                             stays whatever lies between them — a retirement removes no link — so
+                             the paths are printed whole and the retired concepts still in them
+                             are named, with the count of what was left out.
 
 Paths only reads. It is the other half of ancestors: not which concepts are above one, but by
 what routes. In a polyhierarchy the number of ancestors is linear and the number of routes is not,
@@ -308,6 +320,10 @@ concept, which is not the same thing as a scheme's top concept — SKOS relates 
 — so both are reported and kept apart. A route that runs into a cycle stops there and the cycle is
 named, including one that does not run through the concept asked about, which is the case an
 upward walk cannot see and is still the reason a breadcrumb has no root to reach.
+  --current                  offer only the routes that are current the whole way up. A route is
+                             atomic, so one through a retired concept is withheld entire and
+                             counted rather than shortened past it; the cycles are never narrowed,
+                             because a cycle is why a route reaches no summit.
 
 Tree only reads. It is ancestors turned round: the concepts one skos:narrower link below, the
 ones sharing a broader concept — our term, not one SKOS states — and everything below under
@@ -576,28 +592,34 @@ impl Command {
                     graph: Self::text("inspect", "the IRI of a vocabulary to read", &mut args)?,
                 },
             ),
-            "ancestors" => (
-                "ancestors",
-                Self::Ancestors {
-                    graph: Self::text("ancestors", "the IRI of a vocabulary to read", &mut args)?,
-                    concept: Self::text(
-                        "ancestors",
-                        "the IRI of a concept to walk up from",
-                        &mut args,
-                    )?,
-                },
-            ),
-            "paths" => (
-                "paths",
-                Self::Paths {
-                    graph: Self::text("paths", "the IRI of a vocabulary to read", &mut args)?,
-                    concept: Self::text(
-                        "paths",
-                        "the IRI of a concept to enumerate the routes above",
-                        &mut args,
-                    )?,
-                },
-            ),
+            "ancestors" => {
+                let graph = Self::text("ancestors", "the IRI of a vocabulary to read", &mut args)?;
+                let concept = Self::text(
+                    "ancestors",
+                    "the IRI of a concept to walk up from",
+                    &mut args,
+                )?;
+                let current_only = Self::current_flag("ancestors", args)?;
+                return Ok(Self::Ancestors {
+                    graph,
+                    concept,
+                    current_only,
+                });
+            }
+            "paths" => {
+                let graph = Self::text("paths", "the IRI of a vocabulary to read", &mut args)?;
+                let concept = Self::text(
+                    "paths",
+                    "the IRI of a concept to enumerate the routes above",
+                    &mut args,
+                )?;
+                let current_only = Self::current_flag("paths", args)?;
+                return Ok(Self::Paths {
+                    graph,
+                    concept,
+                    current_only,
+                });
+            }
             "tree" => {
                 let graph = Self::text("tree", "the IRI of a vocabulary to read", &mut args)?;
                 let concept =
@@ -1050,24 +1072,47 @@ impl Command {
         concept: String,
         args: impl Iterator<Item = OsString>,
     ) -> Result<Self, ArgsError> {
+        let current_only = Self::current_flag("tree", args)?;
+        Ok(Self::Tree {
+            graph,
+            concept,
+            current_only,
+        })
+    }
+
+    /// `--current`, and nothing else, for the browse commands whose only option it is.
+    ///
+    /// One function rather than three, so `docs/adr/0041`'s rule that the flag is never a default
+    /// and `docs/adr/0043`'s that typing it twice is an error hold identically on every command
+    /// that takes it. What the flag *means* differs per command — see `docs/adr/0044` and
+    /// `docs/adr/0045` — but what the parser does with it does not.
+    fn current_flag(
+        command: &'static str,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<bool, ArgsError> {
         let mut current_only: Option<bool> = None;
+        let mut extra = 0usize;
         for arg in args {
             let arg = arg.into_string().map_err(|_| ArgsError::NotUnicode)?;
             match arg.as_str() {
                 "--current" => set(&mut current_only, true, "--current")?,
+                // A stray *positional* is a different mistake from a misremembered option, and
+                // saying "has no option "c"" about a third IRI sends the reader looking for a
+                // flag they never typed. These commands take exactly two positionals, so a word
+                // that is not a flag can only be one too many.
+                other if !other.starts_with('-') => extra += 1,
                 other => {
                     return Err(ArgsError::UnknownOption {
-                        command: "tree",
+                        command,
                         option: other.to_owned(),
                     })
                 }
             }
         }
-        Ok(Self::Tree {
-            graph,
-            concept,
-            current_only: current_only.unwrap_or(false),
-        })
+        if extra > 0 {
+            return Err(ArgsError::TooManyArguments { command, extra });
+        }
+        Ok(current_only.unwrap_or(false))
     }
 
     fn search_query(
@@ -2393,6 +2438,69 @@ mod tests {
         ));
     }
 
+    /// `--current` behaves identically on every browse command that takes it: never a default
+    /// (`docs/adr/0041`), refused twice over (`docs/adr/0043`), and the only option either of
+    /// these two has. What the flag *means* differs per command; what the parser does does not.
+    #[test]
+    fn ancestors_and_paths_take_current_and_nothing_else() {
+        for command in ["ancestors", "paths"] {
+            let parsed = parse(&[command, "http://e.org/v", "http://e.org/c"])
+                .expect("two positionals are enough");
+            let off = match &parsed {
+                Command::Ancestors { current_only, .. } => *current_only,
+                Command::Paths { current_only, .. } => *current_only,
+                other => panic!("{command} parsed as {other:?}"),
+            };
+            assert!(!off, "`docs/adr/0041`: never a default");
+
+            let parsed = parse(&[command, "http://e.org/v", "http://e.org/c", "--current"])
+                .expect("--current is accepted");
+            let on = match &parsed {
+                Command::Ancestors { current_only, .. } => *current_only,
+                Command::Paths { current_only, .. } => *current_only,
+                other => panic!("{command} parsed as {other:?}"),
+            };
+            assert!(on);
+
+            assert!(
+                matches!(
+                    parse(&[
+                        command,
+                        "http://e.org/v",
+                        "http://e.org/c",
+                        "--current",
+                        "--current"
+                    ]),
+                    Err(ArgsError::ConflictingOptions {
+                        option: "--current"
+                    })
+                ),
+                "typing it twice is refused on {command}"
+            );
+            assert!(
+                matches!(
+                    parse(&[command, "http://e.org/v", "http://e.org/c", "--limit", "5"]),
+                    Err(ArgsError::UnknownOption { .. })
+                ),
+                "{command} has no other option"
+            );
+        }
+    }
+
+    /// A stray third IRI is one argument too many, not a flag nobody typed. The shared
+    /// `--current` reader tells the two apart so that adding the flag to a command did not make
+    /// its message about a swapped or duplicated positional worse.
+    #[test]
+    fn a_stray_positional_is_not_reported_as_an_unknown_option() {
+        for command in ["ancestors", "paths", "tree"] {
+            assert_eq!(
+                parse(&[command, "a", "b", "c"]),
+                Err(ArgsError::TooManyArguments { command, extra: 1 }),
+                "on {command}"
+            );
+        }
+    }
+
     /// Two options that narrow the same thing are refused rather than resolved last-wins. A user
     /// who typed both does not know which they asked for, and a report that quietly obeys the
     /// second is narrower than the person reading it believes.
@@ -2578,6 +2686,7 @@ mod tests {
             Ok(Command::Ancestors {
                 graph: "https://example.org/regions".to_owned(),
                 concept: "https://example.org/regions/japan".to_owned(),
+                current_only: false,
             })
         );
         let error = parse(&["ancestors", "https://example.org/regions"])

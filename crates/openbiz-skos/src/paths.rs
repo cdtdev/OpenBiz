@@ -357,6 +357,87 @@ impl RootPaths {
     pub fn summits(&self) -> BTreeSet<&Node> {
         self.paths.iter().map(RootPath::summit).collect()
     }
+
+    /// Which routes may be offered when the caller wants none of `skip` on them.
+    ///
+    /// The enumeration itself is **not** narrowed and this takes no part in it: whether every
+    /// concept on a route is wanted cannot be known until the route exists, so the bound is spent
+    /// exactly as it would be without this. It is a decision about a finished enumeration.
+    ///
+    /// The rule is that **a route is offered whole or not at all.** A route is atomic: removing a
+    /// concept from the middle of `A → B → C` leaves `A → C`, which asserts an adjacency the
+    /// vocabulary does not state. There is no partial route to give, so a route touching `skip`
+    /// anywhere is withheld entire and counted. Nothing is trimmed, merged, or shortened, and
+    /// [`Offered::summits`] therefore reports where the offered routes actually stop rather than
+    /// where the withheld ones did.
+    ///
+    /// The origin is never excluded — a caller asking about a concept by name has already decided
+    /// to see it — so a route is judged on its steps.
+    ///
+    /// The cycles are deliberately not touched. A cycle is not a route offered to anyone; it is
+    /// the reason a route reaches no summit, and withholding one would leave a caller with an
+    /// empty route list and no explanation printed. Ask [`RootPaths::cycles`] for them, narrowed
+    /// or not.
+    ///
+    /// As everywhere else in this crate, the set is of *nodes*: this is told which resources to
+    /// leave out and never why.
+    pub fn excluding<'a>(&'a self, skip: &BTreeSet<Node>) -> Offered<'a> {
+        let mut offered: Vec<&RootPath> = Vec::new();
+        let mut withheld = 0usize;
+        for route in &self.paths {
+            match route
+                .steps()
+                .iter()
+                .any(|step| skip.contains(step.concept()))
+            {
+                true => withheld += 1,
+                false => offered.push(route),
+            }
+        }
+        Offered { offered, withheld }
+    }
+}
+
+/// Which of a [`RootPaths`]'s routes survive once a set of concepts is asked to be kept off them.
+///
+/// One count and it is the point: [`Offered::withheld`] is what a report has to state so that an
+/// empty route list never reads as a concept with no way up. Unsaid, a report whose every route
+/// was withheld prints the sentence reserved for a hierarchy whose every way up runs into a cycle
+/// — blaming a loop that may not exist, about a vocabulary whose routes are all intact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offered<'a> {
+    offered: Vec<&'a RootPath>,
+    withheld: usize,
+}
+
+impl Offered<'_> {
+    /// The routes that may be offered, in the order the enumeration found them.
+    pub fn routes(&self) -> impl Iterator<Item = &RootPath> {
+        self.offered.iter().copied()
+    }
+
+    /// How many routes survived. The size of the answer asked for.
+    pub fn len(&self) -> usize {
+        self.offered.len()
+    }
+
+    /// Whether no route survived.
+    ///
+    /// **Not** the same as [`RootPaths::is_empty`], which means no route exists. Ask
+    /// [`Offered::withheld`] which of the two it is before saying anything about cycles.
+    pub fn is_empty(&self) -> bool {
+        self.offered.is_empty()
+    }
+
+    /// How many routes touch an excluded concept and are therefore not offered.
+    pub fn withheld(&self) -> usize {
+        self.withheld
+    }
+
+    /// The distinct concepts the *offered* routes end at.
+    pub fn summits(&self) -> BTreeSet<&Node> {
+        self.offered.iter().map(|route| route.summit()).collect()
+    }
 }
 
 /// Render a run of concepts as the chain of one-step links that licensed it.
@@ -974,5 +1055,139 @@ mod tests {
                 "a summit has no broader concept"
             );
         }
+    }
+
+    /// `docs/adr/0045` §2. A diamond with one retired shoulder: the route through it goes whole,
+    /// the other stays whole, and neither is edited into the other.
+    #[test]
+    fn excluding_withholds_a_whole_route_and_shortens_none() {
+        let (a, b, c, d) = (ex("A"), ex("B"), ex("C"), ex("D"));
+        let model = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&a, &skos("broader"), &c),
+            s(&b, &skos("broader"), &d),
+            s(&c, &skos("broader"), &d),
+        ]);
+
+        let found = model.paths_to_root(&a, PathBound::DEFAULT);
+        assert_eq!(found.len(), 2);
+
+        let offered = found.excluding(&BTreeSet::from([b.clone()]));
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered.withheld(), 1);
+        assert_eq!(
+            offered
+                .routes()
+                .map(|route| route.concepts().cloned().collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            vec![vec![a.clone(), c.clone(), d.clone()]],
+            "the surviving route is the one the enumeration built, not a repaired one"
+        );
+    }
+
+    /// The failure the rule exists to prevent: a route is never repaired by cutting the excluded
+    /// concept out of the middle, because `A → D` would state an adjacency the graph does not.
+    #[test]
+    fn a_route_through_an_excluded_concept_is_never_shortened_into_a_new_one() {
+        let (a, b, d) = (ex("A"), ex("B"), ex("D"));
+        let model =
+            CoreModel::from_statements([s(&a, &skos("broader"), &b), s(&b, &skos("broader"), &d)]);
+
+        let found = model.paths_to_root(&a, PathBound::DEFAULT);
+        let offered = found.excluding(&BTreeSet::from([b.clone()]));
+
+        assert!(offered.is_empty(), "there is no route that avoids B");
+        assert_eq!(offered.withheld(), 1);
+        assert!(
+            offered.summits().is_empty(),
+            "no route is offered, so nothing is where one stops"
+        );
+        assert!(
+            !offered
+                .routes()
+                .any(|route| route.concepts().cloned().collect::<Vec<_>>()
+                    == vec![a.clone(), d.clone()]),
+            "A → D is not a link this vocabulary states"
+        );
+    }
+
+    /// The origin is never excluded: a caller asking about a concept by name has decided to see
+    /// it, and its own status says nothing about the routes above it.
+    #[test]
+    fn excluding_the_origin_withholds_nothing() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        let found = model.paths_to_root(&a, PathBound::DEFAULT);
+        let offered = found.excluding(&BTreeSet::from([a.clone()]));
+
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered.withheld(), 0);
+    }
+
+    /// The cycles are not the routes and are not narrowed with them. A cycle is why a route
+    /// reaches no summit; withholding it leaves an empty list with no explanation printed.
+    #[test]
+    fn excluding_leaves_the_cycles_alone() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&b, &skos("broader"), &c),
+            s(&c, &skos("broader"), &b),
+        ]);
+
+        let found = model.paths_to_root(&a, PathBound::DEFAULT);
+        assert_eq!(found.cycle_count(), 1);
+
+        let offered = found.excluding(&BTreeSet::from([b.clone(), c.clone()]));
+        assert!(offered.is_empty());
+        assert_eq!(
+            found.cycles().count(),
+            1,
+            "the exclusion takes no part in the cycles"
+        );
+    }
+
+    /// Every route is offered or withheld and nothing else, counted rather than subtracted.
+    #[test]
+    fn every_route_is_offered_or_withheld() {
+        let (a, b, c, d) = (ex("A"), ex("B"), ex("C"), ex("D"));
+        let model = CoreModel::from_statements([
+            s(&a, &skos("broader"), &b),
+            s(&a, &skos("broader"), &c),
+            s(&b, &skos("broader"), &d),
+            s(&c, &skos("broader"), &d),
+        ]);
+
+        let found = model.paths_to_root(&a, PathBound::DEFAULT);
+        for skip in [
+            BTreeSet::new(),
+            BTreeSet::from([b.clone()]),
+            BTreeSet::from([d.clone()]),
+            BTreeSet::from([b.clone(), c.clone(), d.clone()]),
+        ] {
+            let offered = found.excluding(&skip);
+            assert_eq!(
+                offered.len() + offered.withheld(),
+                found.len(),
+                "skipping {skip:?} accounted for {} of {} routes",
+                offered.len() + offered.withheld(),
+                found.len()
+            );
+        }
+    }
+
+    /// Excluding nothing is the unnarrowed answer, which is what makes one code path serve both.
+    #[test]
+    fn excluding_nothing_offers_every_route() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+
+        let found = model.paths_to_root(&a, PathBound::DEFAULT);
+        let offered = found.excluding(&BTreeSet::new());
+
+        assert_eq!(offered.len(), found.len());
+        assert_eq!(offered.withheld(), 0);
+        assert_eq!(offered.summits(), found.summits());
     }
 }

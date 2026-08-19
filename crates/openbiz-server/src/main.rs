@@ -124,11 +124,19 @@ async fn main() -> anyhow::Result<()> {
         Command::Integrity { graph } => {
             one_shot(store, |store| openbiz_server::integrity(store, &graph))
         }
-        Command::Ancestors { graph, concept } => one_shot(store, |store| {
-            openbiz_server::ancestors(store, &graph, &concept)
+        Command::Ancestors {
+            graph,
+            concept,
+            current_only,
+        } => one_shot(store, |store| {
+            openbiz_server::ancestors(store, &graph, &concept, current_only)
         }),
-        Command::Paths { graph, concept } => one_shot(store, |store| {
-            openbiz_server::paths(store, &graph, &concept)
+        Command::Paths {
+            graph,
+            concept,
+            current_only,
+        } => one_shot(store, |store| {
+            openbiz_server::paths(store, &graph, &concept, current_only)
         }),
         Command::Tree {
             graph,

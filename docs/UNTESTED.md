@@ -2565,27 +2565,22 @@ module's own tests and end to end against the real binary reading a store off di
   they are per-resource reports, so the focus rule in `adr/0041` §4 applies rather than the list one.
 - **Opened:** iteration 46
 
-### `openbiz ancestors` and `openbiz paths` cannot be asked for current concepts only
+### ~~No read command can be asked for current concepts only~~ — **closed at iteration 53**
 - **Kind:** partial-coverage
-- **Was:** *"No read command can be asked for current concepts only"*, opened at iteration 46;
-  narrowed at iteration 51 to *"only `openbiz search` can"*. **Narrowed again, not closed**, at
-  iteration 52: `openbiz tree <graph> <concept> --current` exists (`adr/0044`), and it decided the
-  hard case the original entry named rather than letting it fall out of a filter — a retired
-  concept with current concepts below it is **kept and marked** as the route to them, and a branch
-  is dropped only when the whole branch is retired. Nothing is lifted or re-parented, which a test
-  pins by comparing the two reports' indentation. Proven in-process and against the real binary,
-  including the case where every descendant is retired and the tree would otherwise read as a leaf.
-- **What is still not:** `openbiz ancestors` and `openbiz paths` have no such flag. Both answer
-  about *routes*, which is a third question again — not which concepts to drop but what to say
-  about a route that runs through a retired concept, which is neither a route to offer a reader
-  nor a route that has stopped existing. It is its own plan item.
-- **The inconsistency is the live cost, and it is worth stating plainly:** the flag is real on two
-  commands of four, so a curator who learns `--current` on `search` and `tree` and types it on
-  `ancestors` gets an unknown-option error. That is the right failure — better than a silent no-op
-  — but a flag that works on half the browse commands reads as a half-finished tool, which is what
-  it is until that item lands.
-- **What would close it:** that plan item, with the route case decided explicitly.
-- **Opened:** iteration 46 · **Narrowed:** iterations 51, 52
+- **The run, in full:** opened at iteration 46 as *"no read command can be asked for current
+  concepts only"*; narrowed at 51 to *"only `openbiz search` can"* (`adr/0043`); narrowed at 52 to
+  *"`ancestors` and `paths` cannot"* (`adr/0044`); **closed at 53** (`adr/0045`). `--current` now
+  exists on all four browse and search commands, under three rules because they answer three
+  questions: a flat list drops its hits, a tree keeps a retired concept that current ones hang off,
+  a list of ancestors drops the concept but never the derivation, and a route is offered whole or
+  withheld whole. Every one of them ends with what it withheld and the sentence that gets it back,
+  and in each the test that carries the weight is the case where the flag withholds *everything* —
+  the one where an unqualified empty report is a false negative about a term the vocabulary holds.
+  Proven in-process and against the real binary in `tests/retired_concepts_read.rs`.
+- **What this deliberately did not close, and it is not the same thing:** none of it is measured
+  at scale — see the entry below — and `openbiz inspect` has no such flag by design, because its
+  retirement section is a report *about* the retirements. Both are stated in `BUILD-PLAN.md`.
+- **Opened:** iteration 46 · **Narrowed:** iterations 51, 52 · **Closed:** iteration 53
 
 ### Nothing reads the retirement marker at scale, and `inspect`'s section walks the hierarchy again
 - **Kind:** partial-coverage
@@ -2605,7 +2600,13 @@ module's own tests and end to end against the real binary reading a store off di
   subtree, and walks each survivor's chain back to the origin. The `shown` set makes that
   amortised linear in the subtree rather than quadratic, and that argument is reasoning about the
   code and not a measurement — on a tree bounded by `WalkBound::DEFAULT` it is bounded too, and
-  nobody has run it against a real one.
+  nobody has run it against a real one. Iteration 53 added a fifth and a sixth, and the second of
+  them is the largest of the family: `Ancestry::excluding` calls `path_to` once per surviving
+  ancestor and scans each path, so on a hierarchy where the ancestor count and the depth both grow
+  it is quadratic in the ancestry rather than linear in it. `WalkBound::DEFAULT` bounds the
+  ancestor count and therefore bounds this too, but the bound is what makes it safe and not the
+  algorithm, which is a different thing from the other four and is why it is written down
+  separately. `RootPaths::excluding` is the cheap one: one scan of each route's steps.
 - **Note:** the ninth unmeasured cost in this crate, and the second one in a *read* path rather
   than a write. The proposal to replace the whole run of them with measurements is in
   `docs/PROPOSED.md` from iteration 45 and is unpromoted.

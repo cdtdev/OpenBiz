@@ -3945,3 +3945,75 @@ look competent disables the one signal that catches a stuck loop.
   where in a real hierarchy the retirements fall, and this repository has never seen one. The
   measurement that would settle it is the same one nine other entries in `UNTESTED.md` are waiting
   on, which is starting to look less like nine gaps and more like one.
+
+## Iteration 53 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `49743b6`, tree clean, and the CI run for
+  that exact commit was `success` — read from `gh run list --branch main`, not inferred from the
+  previous iteration's claim. Both inboxes empty: `promote-queue.json` is `[]`, `feedback.md` zero
+  bytes. Iteration 37's LCGFT fixture is unpromoted for the seventeenth iteration.
+- **The date disagrees for the third consecutive iteration, same direction, same size.** The harness
+  reports `currentDate` **2026-08-20**; `date -u` on the host said **2026-08-19T13:28Z** at branch
+  creation. Iterations 51 and 52 hit the same gap and 52 said a third occurrence would be worth a
+  human glance. This is it. Everything here is dated from the host clock, because that is what the
+  commits and CI runs are stamped with.
+- **What shipped: `--current` on `openbiz ancestors` and `openbiz paths` (`adr/0045`)**, the last of
+  the three commands iteration 51 split the "current concepts only" item into. Phase 2 is 28 of 30
+  and the `UNTESTED.md` entry opened at iteration 46 is **closed**, not narrowed again.
+- **The two commands got opposite answers, and the trap was giving them the same one.** `ancestors`
+  asks *which concepts*: a concept reachable only through a retired one is still above the origin,
+  because retiring removes no link, so hiding it would suppress a current concept on the strength of
+  another concept's status — `adr/0041`'s false negative seen from underneath. So the *list* is
+  narrowed and the **derivation is not**: the path is printed whole, retired concepts and all,
+  because cutting `B` out of `A → B → C` states that `C` is directly above `A`, which is exactly the
+  claim `adr/0044` rejected "lift the children" to avoid. `paths` asks *by what routes*, and a route
+  is atomic — there is no partial route to give — so it is offered whole or withheld whole, never
+  repaired.
+- **The cycles are deliberately exempt.** A cycle is not a route on offer; it is *why* a route
+  reaches no summit, and §8.6.8 makes it consistent SKOS rather than a defect. Narrowing it would
+  leave an empty route list with its explanation deleted. The report says so under the flag, because
+  a reader told the retired concepts are out reads a retired concept in that section as a bug.
+- **Both hard cases are pinned, and they are the same failure one level apart.** Every ancestor
+  retired: the unqualified report prints "it has no broader concept" about a concept the vocabulary
+  puts two concepts over. Every route withheld: it prints "every way up runs into a cycle" when
+  there is no cycle and every route is intact and obsolete — the opposite diagnosis and the opposite
+  remedy. Both are false negatives about the hierarchy *above* a concept, which is how the wrong
+  parent gets chosen for the next one. Named tests, in-process and end to end.
+- **Two bugs I found by driving the binary, not by testing — both in my own new code, both fixed
+  test-first.** (1) The origin was reported as "a retired concept in the paths not listed as an
+  ancestor", contradicting the line three above it saying the concept asked about is exempt, and
+  giving a false reason: it is the *start* of every path, so it has no two neighbours to be claimed
+  adjacent. (2) The withheld count said "1 **more** concept(s)" directly after naming one, so one
+  retired ancestor read as two — the identical duplicated-count defect iteration 52 found on `tree`,
+  which I reproduced despite having read that entry the same morning. Reordered and reworded to
+  "N concept(s) … are retired and not listed" then "M **of them** appear in the paths above".
+- **Mutation-checked, not just green.** Reverting `RootPaths::excluding` to withhold only when the
+  *summit* is retired fails 3 server tests and 2 skos ones; reverting `Ancestry::excluding` to the
+  tree's rule — drop everything above an excluded concept — fails 4 and 2. Both seams are handed a
+  `BTreeSet<Node>` and never told why the nodes are in it, so `owl:deprecated` stays out of
+  `openbiz-skos` (`adr/0041` §1).
+- **One small thing that got better rather than worse:** the three commands' `--current` parsing is
+  now one shared reader, and it distinguishes a stray positional from a misremembered option, so
+  `openbiz ancestors a b c` still says "one argument too many" instead of gaining `tree`'s
+  "has no option "c"". Adding a flag to a command should not degrade its message about a typo.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1117 Rust tests, 0 failed**, up from 1085: thirty-two new — eleven on the
+  two seams in `openbiz-skos`, sixteen on the two reports, two in the CLI parser, three end to end
+  against the real binary. UI untouched, so no npm run. No new dependency, no build artefact.
+- **Recorded:** `adr/0045`. `UNTESTED.md`'s "current concepts only" entry **closed** with the whole
+  four-iteration run written up, and explicit about what closing it does *not* cover: none of it is
+  measured at scale. The unmeasured-scale entry gained a fifth and sixth allocation, and the honest
+  note that `Ancestry::excluding` is the first of the family that is quadratic rather than linear —
+  bounded only because `WalkBound::DEFAULT` bounds the ancestor count, which is the bound making it
+  safe and not the algorithm. `CAPABILITIES.md` and `BUILD-PLAN.md` updated. Nothing self-promoted.
+- **Still uncertain:** whether "the paths are printed whole" is a decision a curator will read as
+  principled or as the flag half-working. It is right — the alternative states a link the graph does
+  not — but the reader's experience of it is typing `--current` and getting a report with retired
+  IRIs still in it, three lines of prose explaining why, and a count. That is four things to
+  understand in exchange for one hidden list entry, and iteration 52 already worried that a
+  conservative narrowing does too little to be worth typing. This is the same doubt with more text
+  attached, which is the second consecutive iteration reaching it from a different direction. What
+  would settle it is watching somebody use it, and nothing in this repository can do that; what it
+  suggests is that the question is no longer "is each rule right" — I believe each one is — but
+  "does the flag as a whole earn its explanation", and that is a product question a fixture cannot
+  answer and I should not keep re-deriving from a new command each iteration.

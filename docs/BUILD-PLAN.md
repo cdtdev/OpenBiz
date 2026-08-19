@@ -3,20 +3,20 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **57 of 223 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **58 of 223 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 27 of 30; the denominator moved by two at
+wait on authorisation, not on anything else. Phase 2 is 28 of 30; the denominator moved by two at
 iteration 51, which split the "current concepts only" item into one per command. Every count on
 this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was
 left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records
 how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **27 of 30**. Iteration 52 landed
-`openbiz tree --current`, the hard case the "current concepts only" item was split to give room to:
-a narrowed tree drops a branch only when the whole branch is retired. Of the three items left, one
-— the candidate seam over HTTP and in the interface — is **blocked on authentication**
-(`BLOCKED.md`); the next unblocked item is the same flag for `openbiz ancestors` and
-`openbiz paths`, which ask about routes rather than about concepts.
+**Current position:** Phase 2 (SKOS authoring model), **28 of 30**. Iteration 53 landed
+`--current` on `openbiz ancestors` and `openbiz paths`, closing the "current concepts only" run:
+looking up, the list is narrowed but the derivations are not, and a route is offered whole or
+withheld whole. Of the two items left, one — the candidate seam over HTTP and in the interface —
+is **blocked on authentication** (`BLOCKED.md`); the next unblocked item is the `DiscoveryProvider`
+trait wired into concept creation, which is the last item in the phase.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1215,13 +1215,30 @@ the interface is a core differentiator, and building it late means retrofitting 
       > the one that gets a duplicate concept created.
       > **Scope, honestly:** `tree` only. `ancestors` and `paths` are the item below, and until
       > they land `--current` on either is an unknown-option error. In `docs/UNTESTED.md`.
-- [ ] **Asking for current concepts only — `openbiz ancestors` and `openbiz paths`**
+- [x] **Asking for current concepts only — `openbiz ancestors` and `openbiz paths`**
       > Both answer about *routes*, so the question is not which concepts to drop but what to say
       > about a route that runs through a retired one. A path with a retired concept in the middle
       > is not a path a breadcrumb should offer and is also not a path that has stopped existing.
       > `openbiz inspect` deliberately gets no such flag: its retirement section is a report
       > *about* the retirements, and narrowing it to current concepts would empty the one thing it
       > is for.
+      > **The two commands got different answers, which is the substance of the item** (`adr/0045`).
+      > `ancestors` asks *which concepts* are above one: a concept reachable only through a retired
+      > one is still above it, so the retired concept leaves the list and the concepts above it
+      > stay. Its **path is printed whole** — the path is the derivation, and cutting a concept out
+      > of `A → B → C` would state that `C` is directly above `A`. `paths` asks *by what routes*,
+      > and a route is atomic: it is offered only if every concept on it is current, and one that
+      > is not is withheld entire rather than shortened past. The cycles are never narrowed — a
+      > cycle is why a route reaches no summit, so hiding one deletes the explanation and leaves
+      > the problem.
+      > Both obey `adr/0043`'s rule and the tests pin the case where the flag withholds
+      > *everything*, which is where the rule earns its keep: an emptied ancestor list would
+      > otherwise print "it has no broader concept" about a concept the vocabulary puts things
+      > over, and an emptied route list would blame a cycle that need not exist.
+      > **Scope, honestly:** `--current` now exists on all four browse and search commands, under
+      > three different rules because they answer three different questions. Measured on fixtures
+      > only; no claim is made about the incumbents' filters, which this iteration did not measure.
+      > In `docs/UNTESTED.md`.
 - [ ] `DiscoveryProvider` trait plus a local-store implementation, wired into concept creation
       > The hook lands here so the creation path is **built around discovery** rather than
       > retrofitted. Enterprise and public sources arrive in Phase 12 (`adr/0003`).
