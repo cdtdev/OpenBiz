@@ -66,6 +66,10 @@ use std::fmt;
 
 use crate::ancestry::AncestryBound;
 use crate::equivalence::EquivalenceBound;
+use crate::integrity::{
+    self, Caveat, ConditionOutcome, DeclaredRefinements, RefinementScan, RefinementScanBound,
+    CONDITIONS,
+};
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::mapping::{ExactMatchDisjointness, MappingProperty, SKOS_MAPPING_RELATION};
 use crate::notes::{DocumentationCoverage, NoteKind, NoteOrigin};
@@ -1723,6 +1727,7 @@ pub struct CoreModel {
     findings: Vec<Finding>,
     statements_read: usize,
     refinements: PropertyRefinements,
+    refinement_scan: RefinementScan,
 }
 
 impl CoreModel {
@@ -1754,6 +1759,67 @@ impl CoreModel {
     /// leaves an author unable to check it against their own file.
     pub fn refinements(&self) -> &PropertyRefinements {
         &self.refinements
+    }
+
+    /// What the graph's own `rdfs:subPropertyOf` and `rdfs:subClassOf` declarations reach, and
+    /// whether the scan of them got to the end.
+    ///
+    /// Nothing is entailed from these. They are read so that [`CoreModel::integrity`] can say a
+    /// condition is *unchecked* on a vocabulary whose own extension points this build reads past,
+    /// rather than reporting it as held. See the `integrity` module.
+    pub fn refinement_scan(&self) -> &RefinementScan {
+        &self.refinement_scan
+    }
+
+    /// The roll-call: every condition a violation of which makes this build call the graph
+    /// inconsistent, and what this vocabulary had to say about each.
+    ///
+    /// Sixteen rows in [`CONDITIONS`]' order — the specification's six integrity conditions
+    /// first, then the ten statements we classify ourselves. A condition with a counter-example
+    /// is [`Verdict::Violated`](crate::Verdict::Violated); one whose check covered the whole
+    /// vocabulary and found nothing is [`Verdict::Held`](crate::Verdict::Held); one whose check
+    /// did not is [`Verdict::Unchecked`](crate::Verdict::Unchecked), which is not a weaker held.
+    ///
+    /// This is the per-condition form of [`CoreModel::is_consistent`] and
+    /// [`CoreModel::checks_are_complete`], and it is strictly more informative than either: those
+    /// two answer for the whole model, so a single bounded walk clouds every condition at once.
+    pub fn integrity(&self) -> Vec<ConditionOutcome> {
+        CONDITIONS
+            .iter()
+            .map(|condition| {
+                let mut violations = Vec::new();
+                let mut caveats = Vec::new();
+
+                for finding in &self.findings {
+                    if integrity::violated_by(finding) == Some(condition.rule()) {
+                        violations.push(finding.clone());
+                    }
+                    if integrity::left_unchecked_by(finding).contains(&condition.rule()) {
+                        caveats.push(Caveat::BoundReached(finding.clone()));
+                    }
+                }
+
+                for unread in &self.refinement_scan.unread {
+                    if condition
+                        .terms()
+                        .iter()
+                        .any(|term| *term == unread.reaches())
+                    {
+                        caveats.push(Caveat::UnreadRefinement(unread.clone()));
+                    }
+                }
+
+                if let Some((read, unread)) = self.refinement_scan.exhaustion {
+                    caveats.push(Caveat::RefinementScanExhausted { read, unread });
+                }
+
+                ConditionOutcome {
+                    condition: *condition,
+                    violations,
+                    caveats,
+                }
+            })
+            .collect()
     }
 
     /// Every resource the model has something to say about, in a stable order.
@@ -1961,6 +2027,11 @@ pub struct CoreModelBuilder {
     /// What the graph's own `rdfs:subPropertyOf` declarations entail. Empty unless a caller ran
     /// the first pass and handed the result to [`CoreModelBuilder::with_refinements`].
     refinements: PropertyRefinements,
+    /// Every `rdfs:subPropertyOf` and `rdfs:subClassOf` the graph declares, so the roll-call can
+    /// say which integrity conditions are checked over a vocabulary this build reads past. See
+    /// the `integrity` module: it is collected here rather than in the first pass because it
+    /// costs one comparison per statement and saves a third scan of the store.
+    declared: DeclaredRefinements,
     /// The refined properties a statement was actually made with, so an unused declaration does
     /// not produce a derivation for a conclusion nothing reached.
     refinements_used: BTreeSet<String>,
@@ -1990,6 +2061,16 @@ impl CoreModelBuilder {
     /// should be able to hit it without generating a hundred thousand concepts to do it.
     pub fn with_ancestry_bound(mut self, bound: AncestryBound) -> Self {
         self.ancestry_bound = bound;
+        self
+    }
+
+    /// How far the scan of the graph's own RDFS declarations may read before it stops and says so.
+    ///
+    /// [`RefinementScanBound::DEFAULT`] unless a caller sets it, and configurable for the reason
+    /// the ancestry bound is: a test should be able to reach the exhausted path without ten
+    /// thousand declarations.
+    pub fn with_refinement_scan_bound(mut self, bound: RefinementScanBound) -> Self {
+        self.declared = DeclaredRefinements::with_bound(bound);
         self
     }
 
@@ -2026,6 +2107,12 @@ impl CoreModelBuilder {
             predicate,
             object,
         } = statement;
+
+        // Before the match rather than as an arm of it, so that reading the graph's RDFS
+        // declarations cannot change what any existing arm does with a statement. Nothing here
+        // is entailed from — see the `integrity` module for why a declaration is recorded only
+        // to say that its consequences were not drawn.
+        self.declared.push(&subject, &predicate, &object);
 
         match predicate.as_str() {
             RDF_TYPE => {
@@ -2272,6 +2359,7 @@ impl CoreModelBuilder {
             statements_read: self.statements_read,
             findings: std::mem::take(&mut self.findings),
             refinements: self.refinements.clone(),
+            refinement_scan: self.declared.resolve(),
             ..CoreModel::default()
         };
 

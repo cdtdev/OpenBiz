@@ -1774,3 +1774,59 @@ concepts reachable only by chaining exact matches with the chain that reached ea
 module's own tests and end to end against the real binary reading a store off disk.
 
 - **Opened:** iteration 32, closed iteration 33
+
+### `rdfs:subPropertyOf` and `rdfs:subClassOf` are reported but not entailed from, so a vocabulary using SKOS's own extension point reads as substantially unchecked
+- **Kind:** partial-standard
+- **What is proven:** that the gap is *reported*. `openbiz integrity` scans every RDFS declaration
+  a graph makes, walks each declared term up to the SKOS and SKOS-XL terms it reaches, and marks
+  every integrity condition checked over one of those terms `Verdict::Unchecked` rather than held —
+  with the declaration named and the chain printed. Proven against a one-step declaration, a
+  two-step chain, a cycle, `rdfs:subClassOf` as well as `rdfs:subPropertyOf`, and end to end
+  against the binary reading a store off disk. See `adr/0031`.
+- **What is not:** the entailment itself. `ex:seeAlso rdfs:subPropertyOf skos:related` should give
+  every `ex:seeAlso` statement a `skos:related`, under RDFS rule rdfs7, and it does not — the
+  statements are still read as non-SKOS and dropped. `rdfs:subClassOf` is read **only** to raise the
+  caveat; nothing is inferred from it at all. So on a thesaurus that uses §7.1's extension point
+  over a SKOS property — which is ordinary enterprise practice — five of the sixteen conditions come
+  back unchecked, and that is the true state of the build rather than a presentational problem.
+- **Why it was not simply done here:** it is a decision about closure, not a missing line. The
+  `refinement` module resolves note properties precisely because §7 states no integrity condition,
+  so a wrong entailment there cannot make a graph inconsistent. Over `skos:related` it can, in both
+  directions — and B.4.4.1's warning that a sub-property of a symmetric property need not be
+  symmetric is the standing evidence that this reasoning is not uniform across SKOS's properties.
+  It needs its own item.
+- **What would close it:** resolving declared refinements against the semantic-relation, mapping and
+  labelling properties as well as the seven note properties, entailing the SKOS statement with a
+  derivation citing rdfs7 and the chain, and replacing each `Caveat::UnreadRefinement` test with its
+  opposite. The tests that pin the current behaviour carry that instruction in a comment and must
+  not be deleted to make a build pass.
+- **Opened:** iteration 34
+
+### The RDFS declaration scan has never been run against a vocabulary with more than a handful of declarations
+- **Kind:** partial-coverage
+- **What is proven:** the bound behaves. The step budget is shared across the whole scan rather than
+  spent per term — pinned by a test using five separate clusters and a budget for two, which is the
+  only shape that tells a shared budget from a per-walk one — and the ceiling on distinct terms
+  refuses rather than grows. An exhausted scan makes every condition unchecked and says so.
+- **What is not:** any cost measurement. `crates/openbiz-skos/src/scale.rs` generates concepts,
+  hierarchies and associative links, and **no `rdfs:subPropertyOf` at all**. This is the fourth
+  dimension of the model the generator does not produce — after labels and notes (iteration 31),
+  mapping links (32) and cluster density (33) — and it is the third iteration running in which the
+  honest closing line has been "the generator only ever produces the easy shape".
+- **What would close it:** a declarations row in the scale harness — a vocabulary of N concepts
+  whose schema declares M refinements at chain depths 1, 2 and 10 — measured for build time and
+  peak memory at the sizes the other rows use.
+- **Opened:** iteration 34
+
+### The CLI usage list is hand-maintained in one direction only
+- **Kind:** partial-coverage
+- **What is proven:** every command word the test names appears in `USAGE` **and** parses without
+  `ArgsError::UnknownCommand`, which is new at iteration 34 and catches a command documented but
+  never wired.
+- **What is not:** the reverse. A command the parser accepts and the list omits is invisible to the
+  test, which is how `mappings` went undocumented in it for a whole iteration — the second time
+  that list has drifted, after `inspect` and `ancestors` at iteration 26. The test's own docstring
+  warns about exactly this failure and the test still could not catch it.
+- **What would close it:** parsing the command words out of `USAGE` itself, or dispatching the
+  parser through a table both it and the test read, so neither side can be extended alone.
+- **Opened:** iteration 34

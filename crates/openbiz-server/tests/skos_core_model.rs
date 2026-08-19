@@ -1169,3 +1169,119 @@ fn inspect_finds_the_clash_that_only_the_exact_match_closure_reveals() {
         "a clash visible only through the closure is still a clash: {report}"
     );
 }
+
+/// The roll-call against a vocabulary on disk: every condition named, and the one this build
+/// cannot check on this graph reported as unchecked rather than as held.
+///
+/// The fixture is deliberately the awkward shape rather than a broken one. It is a *consistent*
+/// vocabulary — nothing in it violates anything — that also declares `ex:seeAlso` a sub-property
+/// of `skos:related`. `openbiz inspect` says "no SKOS integrity condition is violated", which is
+/// true and which an operator reads as "all of them were checked". They were not: statements made
+/// with `ex:seeAlso` were read as non-SKOS, so §8.4's check ran over a graph missing the author's
+/// own associative links, and S27 has no verdict on this vocabulary at all.
+#[test]
+fn integrity_names_every_condition_and_says_which_one_it_could_not_check() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "extension.ttl",
+        r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://example.org/regions/> .
+
+ex:seeAlso rdfs:subPropertyOf skos:related .
+ex:emea ex:seeAlso ex:apac .
+"#,
+    );
+
+    let output = run(dir.path(), &["integrity", REGIONS]);
+    assert!(
+        output.status.success(),
+        "integrity failed: {}",
+        stderr(&output)
+    );
+    let report = stdout(&output);
+
+    // All sixteen rows, whatever the vocabulary says.
+    for number in [
+        "S9", "S13", "S14", "S27", "S37", "S46", "S3", "S18", "S30", "S38", "S48", "S49", "S52",
+        "S53", "S58", "S59",
+    ] {
+        assert!(report.contains(number), "{number} is missing:\n{report}");
+    }
+
+    // The specification's six are separated from the ten this build classifies itself.
+    assert!(
+        report.contains("the SKOS Reference's own integrity conditions"),
+        "{report}"
+    );
+    assert!(
+        report.contains("statements this build treats as contradictions, by our reading"),
+        "{report}"
+    );
+
+    // S27 has no verdict, and the report says exactly why.
+    assert!(report.contains("UNCHECKED"), "{report}");
+    assert!(
+        report.contains("<https://example.org/regions/seeAlso>"),
+        "the report must name the declaration it read past:\n{report}"
+    );
+    assert!(
+        report.contains("skos:related"),
+        "and the SKOS property it reaches:\n{report}"
+    );
+
+    // And `inspect` on the same store still reports the vocabulary as violating nothing — which
+    // is the sentence this command exists to take apart.
+    let inspected = stdout(&run(dir.path(), &["inspect", REGIONS]));
+    assert!(
+        inspected.contains("no SKOS integrity condition is violated"),
+        "{inspected}"
+    );
+    assert!(
+        inspected.contains("openbiz integrity"),
+        "inspect's summary must name the command that takes it apart:\n{inspected}"
+    );
+}
+
+/// A vocabulary that violates §5.4 is named as such by S-number, with the specification's words.
+#[test]
+fn integrity_quotes_the_condition_a_vocabulary_violates() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "clash.ttl",
+        r#"
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://example.org/regions/> .
+
+ex:emea skos:prefLabel "EMEA region"@en .
+"#,
+    );
+
+    let report = stdout(&run(dir.path(), &["integrity", REGIONS]));
+
+    assert!(report.contains("VIOLATED"), "{report}");
+    assert!(report.contains("not a SKOS vocabulary"), "{report}");
+    assert!(
+        report
+            .contains("A resource has no more than one value of skos:prefLabel per language tag."),
+        "the specification's own words are the point:\n{report}"
+    );
+}
+
+/// An IRI with no registry entry is refused rather than reported as a vocabulary that satisfies
+/// every condition — which it would, vacuously, and which is what a mistyped IRI produces.
+#[test]
+fn integrity_refuses_a_graph_the_store_does_not_hold() {
+    let dir = authored();
+
+    let output = run(dir.path(), &["integrity", "https://example.org/typo"]);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("https://example.org/typo"),
+        "{}",
+        stderr(&output)
+    );
+}

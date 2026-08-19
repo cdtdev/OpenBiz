@@ -547,6 +547,15 @@ fn report(graph: &str, model: &CoreModel) -> String {
         }
     });
 
+    // And the sentence above is a summary, so it names the command that takes it apart. "No
+    // integrity condition is violated" does not say which conditions were *checked*, and a reader
+    // who takes it for "all of them held" has read more into it than it says — which for a
+    // vocabulary using its own extension points is wrong. `openbiz integrity` is per condition.
+    out.push_str(
+        "for the verdict on each SKOS integrity condition separately, and which of them this \
+         build\ncould check over this vocabulary, run `openbiz integrity <graph>`.\n",
+    );
+
     out
 }
 

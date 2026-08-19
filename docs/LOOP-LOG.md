@@ -2507,3 +2507,80 @@ look competent disables the one signal that catches a stuck loop.
   easy shape. So the next blind-spot pass should widen the generator, and it should generate a
   **hub rather than a chain**, because the chain is the shape that makes every one of these numbers
   look safe.
+
+## Iteration 34 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `9eb26ca`.** Took the next unchecked,
+  unblocked Phase 2 item: **all SKOS integrity conditions from the specification, each with a test
+  citing its S-number**.
+- **The item was not what it reads like, and saying so is most of the work.** Every condition the
+  specification states was already implemented, by the item that owned its section, each already
+  with a test citing its S-number: S9 (§4.4), S13 and S14 (§5.4), S27 (§8.4), S37 (§9.4), S46
+  (§10.4). Six, and the count is asserted rather than recalled — §4.4, §5.4, §8.4, §9.4 and §10.4
+  are the only sections headed "Integrity Conditions", which `xl.rs` had already established when
+  it argued that Appendix B has none. So the item could have been closed by ticking a box. What was
+  actually missing was the **coverage claim**: nothing could be asked which conditions this build
+  checks, and nothing could say which of them it managed to check on a given vocabulary.
+- **Sixteen rows and not six, because ten of them are ours.** S48, S58, S52, S49 and the
+  object-property typing rules S3, S18, S30, S38, S53, S59 each make this build call a graph
+  inconsistent, and none sits under an "Integrity Conditions" heading. Printing all sixteen under
+  one heading would put words in the specification's mouth; printing six would let a report say
+  "all six held" about a vocabulary this build calls inconsistent. Two groups, the second labelled
+  as our reading. That split is what buys the property worth having: **every
+  `Severity::Inconsistent` finding is attributed to a row**, asserted over one of every `Finding`
+  variant, so a graph is consistent exactly when no row is violated — and `violated_by`'s match is
+  exhaustive by name, so a finding added later cannot forget to register without failing to compile.
+- **The sharpest half is a false green nothing had ever reported.** `openbiz inspect` closing with
+  "no SKOS integrity condition is violated" is true and is read as "all of them were checked". On a
+  vocabulary declaring `ex:seeAlso rdfs:subPropertyOf skos:related` it is not: those statements are
+  read as non-SKOS, so §8.4's check ran over a graph missing the author's own associative links.
+  Same shape as the S46 defect iteration 33 found — a false negative produced by an entailment we
+  chose not to perform — one level up. The model now scans the graph's `rdfs:subPropertyOf` and
+  `rdfs:subClassOf` declarations, walks each up to the SKOS terms it reaches, and marks the
+  conditions checked over those terms **unchecked**. `rdfs:subClassOf` is read here for the first
+  time in this build, and only to say that nothing is inferred from it.
+- **`Unchecked` is now attributed per condition rather than per model.** An exhausted ancestry walk
+  leaves S27 unanswered and says nothing about S13; `checks_are_complete` answered for the whole
+  model and read as though everything were in doubt. `RefinementBoundReached` leaves **nothing**
+  unanswered, and that is a claim with a test rather than an omission: the refinement pass resolves
+  note properties only, and §7 states no integrity condition.
+- **Running the product changed the output twice, for the seventh iteration running.** With
+  everything green, `openbiz integrity` against a store on disk printed
+  `declares <ex:seeAlso> a sub-property of <ex:seeAlso> → skos:related` — the chain repeated beside
+  its own first element — and then printed the same four-line explanation of what a refinement
+  costs **five times**, once under each condition the one declaration clouds. Both fixed: the
+  chain prints two ends and a middle only when there is one, and the explanation moved to a section
+  of its own that names each declaration once with the S-numbers it leaves unchecked.
+- **The fan-out is deliberate and one-directional.** One `rdfs:subPropertyOf skos:related` leaves
+  five conditions unchecked, because SKOS entails class membership from its own properties and an
+  unread link can produce a class several steps from the property that was written. A caveat naming
+  one condition too many costs a sentence; one naming a condition too few is the false negative the
+  module exists to prevent.
+- **Fixed in passing, and it is the second drift of the same list:** `the_usage_names_every_command_it_can_parse`
+  did not name `mappings`, added an iteration earlier — the test whose own docstring warns that a
+  quietly incomplete completeness test is worse than none. Corrected, and strengthened so a
+  documented command that does not parse now fails too; the reverse direction is still
+  hand-maintained and is in `UNTESTED.md`.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **661 Rust tests, up from 620.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it.
+- **Four mutants, and the fourth is the entry worth keeping.** Collapsing `Unchecked` into `Held`
+  fails five tests across two crates; dropping the `rdfs:subClassOf` half of the scan fails two;
+  stopping the walk after one step fails two. Removing S46's attribution of its bound findings
+  **appeared to survive** — and had not been applied at all: the string had been reformatted by
+  `cargo fmt` since it was copied, and the edit silently matched nothing. Re-applied with an
+  assertion that the replacement matched, it fails its test. This is iteration 33's `git checkout`
+  lesson in a different costume: a mutation you did not verify was applied is not a mutation, and
+  the green suite is then a statement about nothing.
+- **Recorded:** `adr/0031`. Three `UNTESTED.md` entries opened, none closed.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T04:44Z.
+- **Still uncertain:** whether reporting five of sixteen conditions unchecked on an ordinary
+  extended thesaurus is a report a customer can use, or one they will read as a defect in us. It is
+  the true state of the build and I would not soften it — but the honest version of the doubt is
+  that I cannot tell how *common* the trigger is, and that is the same blind spot for the fourth
+  iteration running, on a fourth axis. `scale.rs` generates no labels or notes (iteration 31), no
+  mapping links (32), no dense clusters (33), and now no `rdfs:subPropertyOf` either. Every gap the
+  last four iterations have recorded is a gap in the generator wearing a different rule's clothes,
+  and each iteration has closed the rule and left the generator alone. The next blind-spot pass
+  should widen the generator and nothing else; deepening a fifth rule would be the fifth iteration
+  in a row measuring one dimension of a model that now has five.

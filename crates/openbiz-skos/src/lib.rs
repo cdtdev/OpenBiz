@@ -7,6 +7,7 @@
 
 mod ancestry;
 mod equivalence;
+mod integrity;
 mod labels;
 mod mapping;
 mod model;
@@ -24,6 +25,10 @@ mod scale;
 
 pub use ancestry::{Ancestry, AncestryBound};
 pub use equivalence::{EquivalenceBound, ExactMatchCluster};
+pub use integrity::{
+    Authority, Caveat, ConditionOutcome, Declaration, DeclaredRefinements, IntegrityCondition,
+    RefinementScan, RefinementScanBound, UnreadRefinement, Verdict, CONDITIONS, RDFS_SUB_CLASS_OF,
+};
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
     SKOS_PREF_LABEL, XSD_STRING,

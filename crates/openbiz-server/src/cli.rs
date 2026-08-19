@@ -83,6 +83,11 @@ pub enum Command {
         /// The IRI of the vocabulary graph to read.
         graph: String,
     },
+    /// Report which SKOS integrity conditions the vocabulary satisfies. Reads and nothing else.
+    Integrity {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+    },
     /// Report what is above one concept in the hierarchy, and why. Reads and nothing else.
     Ancestors {
         /// The IRI of the vocabulary graph to read.
@@ -138,6 +143,7 @@ Usage:
   openbiz retract <graph> <file>
                              propose the file's statements as removals from <graph>
   openbiz inspect <graph>    report what <graph> holds in SKOS terms, and why
+  openbiz integrity <graph>  report which SKOS integrity conditions <graph> satisfies
   openbiz ancestors <graph> <concept>
                              report what is above <concept> in the hierarchy, and why
   openbiz notes <graph> <resource>
@@ -169,6 +175,14 @@ including the ones no statement typed — SKOS itself says a resource with conce
 concept scheme — and it names the specification statement behind every fact it inferred. It
 separates a violated SKOS integrity condition, which makes a graph not a SKOS vocabulary, from
 something merely ill-formed, which is our judgement and says so.
+
+Integrity only reads. It is inspect's closing sentence taken apart: every condition whose
+violation makes this build call a graph inconsistent, one row each, with the specification's own
+words and the counter-examples. A condition is held, violated, or **unchecked** — and unchecked is
+not a weaker held. A bounded walk that gave up, or a vocabulary that refines a SKOS property this
+build reads past, leaves a condition genuinely unanswered, and the report says which and why. Six
+of the conditions are the specification's own; the other ten are our reading, printed apart and
+labelled as ours.
 
 Notes only reads. It prints every SKOS documentation property carrying anything for one resource —
 the definition, the scope note, the examples and the rest — and beside each note that SKOS itself
@@ -289,6 +303,12 @@ impl Command {
                         "the IRI of a concept to walk up from",
                         &mut args,
                     )?,
+                },
+            ),
+            "integrity" => (
+                "integrity",
+                Self::Integrity {
+                    graph: Self::text("integrity", "the IRI of a vocabulary to read", &mut args)?,
                 },
             ),
             "notes" => (
@@ -1087,8 +1107,10 @@ mod tests {
             "import",
             "retract",
             "inspect",
+            "integrity",
             "ancestors",
             "notes",
+            "mappings",
             "candidates",
             "candidate",
             "approve",
@@ -1098,6 +1120,13 @@ mod tests {
             assert!(
                 USAGE.contains(command),
                 "usage does not mention {command}, so nobody can discover it"
+            );
+            assert!(
+                !matches!(
+                    parse(&[command, "a", "b"]),
+                    Err(ArgsError::UnknownCommand(_))
+                ),
+                "usage documents {command} and the parser does not know it"
             );
         }
     }

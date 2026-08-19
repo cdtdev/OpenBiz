@@ -121,6 +121,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Inspect { graph } => {
             one_shot(store, |store| openbiz_server::inspect(store, &graph))
         }
+        Command::Integrity { graph } => {
+            one_shot(store, |store| openbiz_server::integrity(store, &graph))
+        }
         Command::Ancestors { graph, concept } => one_shot(store, |store| {
             openbiz_server::ancestors(store, &graph, &concept)
         }),
