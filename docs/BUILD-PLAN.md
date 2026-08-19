@@ -3,19 +3,20 @@
 The backlog and the burn-down. One `- [ ]` per item; check it off only when it meets the
 **definition of done** in `CLAUDE.md` §4 — including having a real production caller.
 
-**Status:** **56 of 223 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
+**Status:** **57 of 223 items done.** Phase 0 is complete (18 of 18). Phase 1 is 12 of 14 and as
 complete as it can be without an identity model — SPARQL Update and the Graph Store Protocol both
-wait on authorisation, not on anything else. Phase 2 is 26 of 30; the denominator moved by two
-because iteration 51 split the "current concepts only" item into one per command. Every count on
+wait on authorisation, not on anything else. Phase 2 is 27 of 30; the denominator moved by two at
+iteration 51, which split the "current concepts only" item into one per command. Every count on
 this line is derived by counting `- [ ]` and `- [x]` in the phase, never from memory of what was
 left; that is a product-owner correction after iteration 4 (`FEEDBACK-LOG.md`), which also records
 how the denominator has moved as items were split.
 
-**Current position:** Phase 2 (SKOS authoring model), **26 of 30**. Iteration 51 landed
-`openbiz search --current`, the first of the three commands the "current concepts only" item was
-split into. Of the four items left, one — the candidate seam over HTTP and in the interface — is
-**blocked on authentication** (`BLOCKED.md`); the next unblocked item is the same flag for
-`openbiz tree`, which is the hard case the split was made to give room to.
+**Current position:** Phase 2 (SKOS authoring model), **27 of 30**. Iteration 52 landed
+`openbiz tree --current`, the hard case the "current concepts only" item was split to give room to:
+a narrowed tree drops a branch only when the whole branch is retired. Of the three items left, one
+— the candidate seam over HTTP and in the interface — is **blocked on authentication**
+(`BLOCKED.md`); the next unblocked item is the same flag for `openbiz ancestors` and
+`openbiz paths`, which ask about routes rather than about concepts.
 
 **These two fields are a glance, not a log.** Two or three sentences each: the phase, the count,
 what is being worked on now, and what is blocking. Nothing older than an iteration. When you find
@@ -1179,15 +1180,41 @@ the interface is a core differentiator, and building it late means retrofitting 
       > Proved end to end against the real binary in `tests/retired_concepts_read.rs`.
       > **Scope, honestly:** `search` only. The two items below are the rest, and until they land
       > `--current` on another command is an unknown-option error. In `docs/UNTESTED.md`.
-- [ ] **Asking for current concepts only — `openbiz tree`**, the case a flat list does not have
-      > The hard one, and the reason the original item was split. A retired concept with current
-      > concepts below it is the *commonest* outcome of a retirement (`adr/0040` §4), so hiding it
-      > cannot simply drop the branch: the children would hang off nothing and the report would
-      > misstate the shape of the vocabulary. Deciding between lifting them, printing the retired
-      > parent as a bare structural line, and refusing the combination is the work. `adr/0043`'s
-      > rule binds it — whatever is hidden, the count of what was hidden is still reported — and
-      > `CoreModel::search_excluding`'s seam is the shape to follow: hand the walk a set of nodes,
-      > not a status.
+- [x] **Asking for current concepts only — `openbiz tree`**, the case a flat list does not have
+      > `openbiz tree <graph> <concept> --current` (`adr/0044`). The hard one, and the reason the
+      > original item was split: a retired concept with current concepts below it is the
+      > *commonest* outcome of a retirement (`adr/0040` §4), so hiding it cannot simply drop the
+      > branch.
+      > **The decision, of the three the item named: keep it, marked.** A branch goes only when the
+      > whole branch is retired; a retired concept lying on the route to a surviving one is kept
+      > and carries `[retired, kept as the route to what is below]`. Lifting the children was
+      > rejected because the tree's own legend makes a concept at depth 1 a *stated* child, so a
+      > lift makes the legend false — and it hides the thing the curator most needs to see, which
+      > is that the route to those children runs through an obsolete concept and somebody has to
+      > decide what to do about it. Refusing the combination was rejected as a command that
+      > disobeys, and a flag whose availability depends on the data.
+      > **The property that makes it safe to reason about is that nothing moves.** Every concept
+      > the narrowed tree shows keeps the depth, the parent and the derivation the full tree gave
+      > it, so the pruning can never make the tree state a link the graph does not.
+      > `the_flag_removes_concepts_and_never_moves_them` compares the two reports' indentation.
+      > **`adr/0043`'s rule binds it**: the children, the siblings and the tree each close with what
+      > they withheld. The case that matters is the one where *every* descendant is retired — the
+      > tree is empty, and without the count that report says a concept is a leaf when the
+      > vocabulary holds a subtree under it.
+      > **Where a hierarchy departs from `adr/0043` §3:** the walk is *not* narrowed. An excluded
+      > concept may be the only route to what the caller wants, so it has to be walked through, and
+      > the bound is spent exactly as the unnarrowed command spends it. The seam is therefore
+      > `Descent::excluding(skip) -> Pruned` over a finished descent — handed a set of nodes and
+      > never told why they are in it.
+      > **Better, not parity, and stated as what we can defend.** Filtering obsolete terms out of
+      > a browse tree is ordinary — the incumbents have some form of it and `COMPETITIVE.md`
+      > records no measurement of theirs, so no claim is made about them here. What is ours is the
+      > pair of rules: the tree never moves a concept in order to hide another, and it never
+      > reports a narrowing without the count of what the narrowing cost. A filter that silently
+      > re-parents, or that empties a subtree and says nothing, is the failure mode — and it is
+      > the one that gets a duplicate concept created.
+      > **Scope, honestly:** `tree` only. `ancestors` and `paths` are the item below, and until
+      > they land `--current` on either is an unknown-option error. In `docs/UNTESTED.md`.
 - [ ] **Asking for current concepts only — `openbiz ancestors` and `openbiz paths`**
       > Both answer about *routes*, so the question is not which concepts to drop but what to say
       > about a route that runs through a retired one. A path with a retired concept in the middle

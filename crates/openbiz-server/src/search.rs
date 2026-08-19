@@ -33,8 +33,6 @@
 //! matches are counted during the scan and the count closes the report, including — especially —
 //! when it is the only thing that matched.
 
-use std::collections::BTreeSet;
-
 use openbiz_skos::{
     CoreModel, LabelKind, LabelOrigin, LabelQuery, LabelSearch, MatchMode, Node, Resource,
     Retirements, SkosClass,
@@ -69,7 +67,7 @@ pub fn search(
     // (`docs/adr/0041`): the model is asked to leave out some resources, and which ones is a
     // status question answered beside it.
     let found = match current_only {
-        true => model.search_excluding(query, &retired_in(&retirements)),
+        true => model.search_excluding(query, &status::retired_in(&retirements)),
         false => model.search(query),
     };
     Ok(report(
@@ -80,19 +78,6 @@ pub fn search(
         current_only,
         found,
     ))
-}
-
-/// Every resource this vocabulary marks `owl:deprecated`, as the set a search is told to skip.
-///
-/// Deliberately [`Retirement::is_retired`] and not "anything the index knows about". The other
-/// state it records — a replacement named with no marker — is a concept every command here reads
-/// as **current**, and dropping it from a search for current concepts would hide a term the
-/// vocabulary has not retired on the strength of a statement that does not retire it.
-fn retired_in(retirements: &Retirements) -> BTreeSet<Node> {
-    retirements
-        .retired()
-        .map(|(node, _)| node.clone())
-        .collect()
 }
 
 /// The report itself, kept apart from the store so it can be tested against a model in hand.

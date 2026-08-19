@@ -113,6 +113,11 @@ pub enum Command {
         graph: String,
         /// The IRI of the concept to walk down from.
         concept: String,
+        /// Leave the retired concepts out of the tree, keeping the ones current concepts sit
+        /// below, and say how many of each.
+        ///
+        /// Read from the vocabulary beside the model (`docs/adr/0041`), as on `openbiz search`.
+        current_only: bool,
     },
     /// Find the concepts a vocabulary labels with some text. Reads and nothing else.
     Search {
@@ -254,7 +259,7 @@ Usage:
                              report what is above <concept> in the hierarchy, and why
   openbiz paths <graph> <concept>
                              report every route from <concept> up to a root, and why
-  openbiz tree <graph> <concept>
+  openbiz tree <graph> <concept> [--current]
                              report what is below <concept> and beside it, and why
   openbiz search <graph> <text> [options]
                              find the concepts <graph> labels with <text>
@@ -309,6 +314,10 @@ ones sharing a broader concept — our term, not one SKOS states — and everyth
 skos:narrowerTransitive, printed as an indented tree in which the indentation is the path S24
 licensed. A concept the graph places below another only transitively is a descendant and not a
 child, and the report says so rather than letting two counts disagree.
+  --current                  leave out the retired concepts. A retired concept with current
+                             concepts below it is kept and marked instead, because dropping it
+                             would take them with it; nothing is lifted or re-parented, and the
+                             report ends with how many were left out either way.
 
 Search only reads. It matches <text> against every label the vocabulary holds — preferred,
 alternative, and hidden, which SKOS §5.1 defines for exactly this — ignoring case, anywhere in the
@@ -589,17 +598,12 @@ impl Command {
                     )?,
                 },
             ),
-            "tree" => (
-                "tree",
-                Self::Tree {
-                    graph: Self::text("tree", "the IRI of a vocabulary to read", &mut args)?,
-                    concept: Self::text(
-                        "tree",
-                        "the IRI of a concept to walk down from",
-                        &mut args,
-                    )?,
-                },
-            ),
+            "tree" => {
+                let graph = Self::text("tree", "the IRI of a vocabulary to read", &mut args)?;
+                let concept =
+                    Self::text("tree", "the IRI of a concept to walk down from", &mut args)?;
+                return Self::tree_command(graph, concept, args);
+            }
             "search" => {
                 let graph = Self::text("search", "the IRI of a vocabulary to read", &mut args)?;
                 let text = Self::text("search", "the text to look for", &mut args)?;
@@ -1037,6 +1041,35 @@ impl Command {
     /// Every option that narrows the search is refused twice over rather than taken last-wins: a
     /// user who typed `--exact --prefix` meant one of them, and quietly obeying the second is how
     /// a report comes back narrower than the person who ran it believes.
+    /// Read the options `openbiz tree` accepts, refusing anything it does not.
+    ///
+    /// One option, and it narrows what the report shows rather than what the walk reads: the walk
+    /// has to go *through* a retired concept to reach what is under it. See `docs/adr/0044`.
+    fn tree_command(
+        graph: String,
+        concept: String,
+        args: impl Iterator<Item = OsString>,
+    ) -> Result<Self, ArgsError> {
+        let mut current_only: Option<bool> = None;
+        for arg in args {
+            let arg = arg.into_string().map_err(|_| ArgsError::NotUnicode)?;
+            match arg.as_str() {
+                "--current" => set(&mut current_only, true, "--current")?,
+                other => {
+                    return Err(ArgsError::UnknownOption {
+                        command: "tree",
+                        option: other.to_owned(),
+                    })
+                }
+            }
+        }
+        Ok(Self::Tree {
+            graph,
+            concept,
+            current_only: current_only.unwrap_or(false),
+        })
+    }
+
     fn search_query(
         text: &str,
         args: impl Iterator<Item = OsString>,
@@ -2310,6 +2343,52 @@ mod tests {
             parse(&["search", "http://e.org/v", "bag", "--current", "--current"]),
             Err(ArgsError::ConflictingOptions {
                 option: "--current"
+            })
+        ));
+    }
+
+    /// The same flag on the browse command, refused the same way. `openbiz tree` took no option at
+    /// all before this, so the arm that reads one has to keep refusing everything else.
+    #[test]
+    fn tree_takes_current_and_nothing_else() {
+        let Ok(Command::Tree {
+            graph,
+            concept,
+            current_only,
+        }) = parse(&["tree", "http://e.org/v", "http://e.org/c"])
+        else {
+            panic!("a tree");
+        };
+        assert_eq!(
+            (graph.as_str(), concept.as_str()),
+            ("http://e.org/v", "http://e.org/c")
+        );
+        assert!(!current_only, "`docs/adr/0041`: never a default");
+
+        let Ok(Command::Tree { current_only, .. }) =
+            parse(&["tree", "http://e.org/v", "http://e.org/c", "--current"])
+        else {
+            panic!("a tree with the flag");
+        };
+        assert!(current_only);
+
+        assert!(matches!(
+            parse(&[
+                "tree",
+                "http://e.org/v",
+                "http://e.org/c",
+                "--current",
+                "--current"
+            ]),
+            Err(ArgsError::ConflictingOptions {
+                option: "--current"
+            })
+        ));
+        assert!(matches!(
+            parse(&["tree", "http://e.org/v", "http://e.org/c", "--limit", "5"]),
+            Err(ArgsError::UnknownOption {
+                command: "tree",
+                ..
             })
         ));
     }
