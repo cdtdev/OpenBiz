@@ -4247,3 +4247,86 @@ look competent disables the one signal that catches a stuck loop.
   record; what would settle it *better* is knowing whether a curator who reads "STOP" acts on it, and
   nothing in this repository can tell me that either — the third iteration in a row to arrive at
   "this needs one usability session", now from the governance side rather than the report-length one.
+
+## Iteration 57 — 2026-08-20 (NZST, UTC+12)
+- **Clean start, verified rather than assumed.** `main` at `bbe6b59`, tree clean, and the CI run for
+  that exact SHA was `success` — read from `gh run list --branch main`, not from the last entry's
+  claim. Both human inboxes empty: `promote-queue.json` is `[]` and `feedback.md` is zero bytes.
+  Iteration 37's LCGFT fixture is unpromoted for the twenty-first iteration.
+- **Split in place again, and the second half is a governance decision rather than a coding one.**
+  The item named one decision and two creation paths. The decision plus `openbiz mint` — the path
+  with nothing at all — is this iteration; `openbiz split` is the next, because a split is *N*
+  creations from one command and raises two questions the mint path does not: whether one reason
+  covers every part, and what a justification means for a part whose candidate is later rejected.
+  Phase 2 is 32 of 34 rather than 31 of 33.
+- **The decision, and why the plan's two options both lost.** The item offered a field on the
+  candidate's provenance or prose in a note. A field cannot say *which* of a split's three parts had
+  a match, and `openbiz mint` has no candidate at all — so a field would have covered only the half
+  of the creation surface that already has a reviewer looking at it. Prose cannot be asked the
+  question. So: a first-class record in the system graph, keyed to the created IRI (`adr/0049`).
+- **The one representational decision that matters, and it is testable.** What was passed over is a
+  **named node in the object position**, not text. Written as prose the record reads identically to a
+  human and answers nothing to an auditor. The test that pins this joins `?passed` to the
+  vocabulary's own `skos:prefLabel` — a literal can never be a subject — and my *first* version of
+  that test did not: it only asserted the IRI's characters appeared in the answer, which a literal
+  satisfies. I found that by mutating the writer to emit literals and watching the test pass. The
+  tightened version fails, along with five others across two suites.
+- **No store format bump, and that is a judgement rather than laziness.** Versions 3 and 4 were
+  additive-only bumps that exist so an older build *refuses* rather than misreads. Nothing here
+  changes the meaning of anything already on disk: an older build ignores a record type it does not
+  know, which is correct — it cannot misreport what it cannot see. The IRI policy was added the same
+  way. Reasoned in `adr/0049` rather than assumed.
+- **The third occurrence of the same whitespace defect, in the same way, one iteration after
+  recording the second.** Five instances this time, all in one function, all from Rust line
+  continuations eaten by the Python heredoc the source was written through. Found by running the
+  binary, not by any test. It also turned out to be **already in `main`** — `openbiz candidate <id>`
+  has printed a misaligned "proposed by" line for some time, from the identical cause, which the
+  sweep found and this iteration fixed.
+- **So I built the crude mechanical guard I declined to build at iteration 55, and its first version
+  was wrong.** Every report every end-to-end test drives now goes through `well_spaced`. Version one
+  forbade a run of three spaces after `trim_start` — and when I re-introduced the real defect to
+  check it, it **passed**, because a continuation swallowed at the *start* of a line is
+  indistinguishable from indentation. Version two also bounds indentation at six spaces, which is
+  three levels of two; the three real occurrences were 19, 22 and 26. Re-mutated: it fails. A guard
+  I had not tried to defeat would have been a guard I believed in for the wrong reason.
+- **The report's closing claim had to split in two.** It said "nothing was written and nothing is
+  reserved". With `--because` that is false, and one existing test failed on it. Weakening the
+  assertion was the wrong repair and so was one vaguer sentence covering both cases: without the
+  flag `mint` writes nothing whatsoever, and "nothing is staged" understates that. So there are two
+  wordings, each the true one, and now two assertions where there was one.
+- **Verification.** `cargo fmt --all --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from exit status and
+  never through a pipe. **1190 Rust tests, 0 failed**, up from 1171: nineteen new — ten in
+  `openbiz-store`, nine end to end. UI untouched, so no npm run. No new dependency, no new crate, no
+  build artefact.
+- **Mutation-checked, not just green.** Five reversions, each run: passed-over resources as literals
+  fails six tests across two suites; dropping the refusal of `--because` without a label fails one;
+  marking every search complete fails the bounded-search test — which did **not** exist until that
+  mutation passed and showed me the flag had no test on the mint path at all; putting the whitespace
+  defect back fails three; and the first version of the whitespace guard failed to fail, which is
+  how it got a second version.
+- **Recorded:** `adr/0049`. Five `UNTESTED.md` entries and they are the honest half. The largest:
+  **nothing is refused** — there is no single-step create to attach a refusal to, so the records are
+  what people chose to write down, and an empty report cannot be told apart from a store where
+  nobody used the flag; both reports say so in the full and the empty case. Also: a justification
+  survives its creation being abandoned and nothing notices, so the report over-states proliferation
+  by an unknown amount; the unreachable-source half of "the search did not finish" has no production
+  caller, this build having one source that always answers; blank-node matches are counted but the
+  branch has no fixture; and reading every justification reads every record, unmeasured — the tenth
+  entry in that family. Iteration 56's "the ladder records nothing" entry is struck through as
+  **half** closed, not closed. Two proposals, unpromoted: an enforcement point at `Store::decide`,
+  and saying whether a justified creation ever happened. `CAPABILITIES.md` and `BUILD-PLAN.md`
+  updated.
+- **Still uncertain:** whether an unenforced record is a mechanism or a better-documented decoration,
+  and I am now the third iteration in a row to end on a version of that question. What is different
+  is that the honest answer moved: 55 and 56 asked whether printing a ladder without a record was
+  the click-through dialog `adr/0003` §3 rules out, and the record now exists and is genuinely
+  queryable, which was the thing §3 actually specified. What has *not* moved is that nothing makes
+  anybody file one. I proposed the enforcement point rather than building it because it changes what
+  `Store::decide` may refuse — a product decision about how strict OpenBiz is by default — and
+  `CLAUDE.md` §7 puts that class of thing in `PROPOSED.md`. But I notice that is also exactly the
+  reasoning that would let me add a fourth unenforced surface next iteration and call it progress,
+  and I cannot tell from inside the loop which of those two I am doing. The thing that would settle
+  it is a human either promoting the enforcement proposal or saying the record is enough — and,
+  again, whether a curator shown "STOP" acts on it, which nothing in this repository can answer and
+  which is now the fourth iteration to arrive at "this needs one usability session".

@@ -2857,7 +2857,7 @@ module's own tests and end to end against the real binary reading a store off di
   (Phase 12) — at which point the degraded path becomes ordinary rather than defensive.
 - **Opened:** iteration 56
 
-### The reuse ladder is printed and still records nothing
+### ~~The reuse ladder is printed and still records nothing~~ — half closed at iteration 57
 - **Kind:** partial-standard
 - **What is proven:** both creation paths print `adr/0003` §3's ladder when something is found, in
   the same words, from one shared constant — and both say in as many words that nothing here records
@@ -2871,4 +2871,85 @@ module's own tests and end to end against the real binary reading a store off di
 - **What would close it:** the next plan item, which has to decide whether the record is a field on
   the candidate's provenance — a store format bump, a migration, a fixture, and validation on read
   like every other field of that record — or prose in the note.
+- **Opened:** iteration 56 · **half closed at iteration 57.** `adr/0049` took the decision — a
+  first-class record in the system graph, keyed to the created IRI, with what was passed over as an
+  IRI in the object position — and `openbiz mint --because "…"` writes one. "Which concepts were
+  created despite an existing match" is now a query and a command. It is **half** closed because
+  `openbiz split` still records nothing, so the sentence above is still true of that path, and
+  because nothing is refused on either. Both remaining halves are below.
 - **Opened:** iteration 56
+
+### A justification is recorded when asked for, and nothing asks
+- **Kind:** partial-standard
+- **What is proven:** `openbiz mint --because "…"` writes a record naming the created IRI, every
+  existing resource discovery found and passed over, the reason, whether the search finished, and
+  who recorded it when. `openbiz justifications` reads them back across the store, and a SPARQL
+  query joins what was passed over to the vocabulary that holds it. Both were mutation-checked by
+  writing the passed-over resources as literals instead of IRIs; six tests across two suites fail.
+- **What is not:** that any of it happens. Nothing in this build refuses a creation that has no
+  justification, because there is no single-step create to attach the refusal to — `openbiz mint`
+  computes an IRI and the concept arrives later through the candidate seam, and the two are not
+  linked. So the records are what people chose to write down. An empty `openbiz justifications`
+  report is consistent with a store where everything was properly reused **and** with one where
+  nobody used the flag, and it says so rather than reading as a clean bill of health — but saying so
+  is not the same as being able to tell them apart.
+- **What would close it:** an enforcement point. The honest candidate is `Store::decide`: an
+  approval that introduces a concept IRI with no justification recorded against it is the moment the
+  question can be asked of somebody who is already deciding. That is a design decision about the
+  seam and is not this item's to take; it is in `docs/PROPOSED.md`.
+- **Opened:** iteration 57
+
+### The unreachable-source half of "the search did not finish" has no production caller
+- **Kind:** no-production-caller
+- **What is proven:** the bounded half. A mint against a vocabulary with thirty concepts sharing a
+  label records `searchWasComplete = false`, both reports mark it, and the summary counts it. Making
+  `complete` unconditionally true fails that test, checked by doing it.
+- **What is not:** `found.unavailable().next().is_none()`, the other half of the same expression.
+  This build has exactly one discovery source — the local store — and it cannot be unavailable, so
+  no test and no deployment can reach that branch. It is the same family as iteration 56's entry on
+  `split`'s degraded path, one level further along: there the branch that could not run was the
+  *report* of an unavailable source, here it is the record of one.
+- **What would close it:** the first source that can genuinely fail — a peer, a catalog, a registry
+  (Phase 12).
+- **Opened:** iteration 57
+
+### A match that is a blank node cannot be named in a justification
+- **Kind:** narrow-proof
+- **What is proven:** the record refuses a considered resource that is not an IRI, and `openbiz
+  mint` counts blank-node matches and prints how many are not named in the record rather than
+  dropping them silently.
+- **What is not:** the case itself, end to end. Every fixture in the repository types its concepts
+  with IRIs, so the counting branch has no test that exercises it through a real vocabulary — it is
+  proven only that the store refuses the value, not that the report prints the right number when a
+  vocabulary genuinely holds a blank-node concept. SKOS does not forbid one, and an import from a
+  tool that generates them would produce exactly this.
+- **What would close it:** a fixture with a blank-node `skos:Concept` carrying a label, driven
+  through `openbiz mint --because`, asserting the count and that the record names the rest.
+- **Opened:** iteration 57
+
+### A justification survives its creation being abandoned, and nothing notices
+- **Kind:** partial-standard
+- **What is proven:** recording appends and never replaces, so an audit trail does not overwrite its
+  own entries.
+- **What is not:** what a justification *means* once the creation it justifies never happened. A
+  curator can run `openbiz mint --because "…"`, file the record, and then never stage the concept —
+  or stage it and have the candidate rejected. The record still says a concept was created despite a
+  match. Nothing joins a justification to whether its IRI ever reached a vocabulary, so
+  `openbiz justifications` over-reports proliferation by an unknown amount.
+- **What would close it:** a line on each entry saying whether the IRI is now in the vocabulary,
+  which is a read the store can already do. It was left out because the interesting version of it —
+  what to do about a *rejected* candidate's justification — is the `openbiz split` item's decision,
+  and taking it here would settle it by accident.
+- **Opened:** iteration 57
+
+### Reading every justification reads every record, unmeasured
+- **Kind:** unmeasured-scale
+- **What is proven:** correctness on stores holding a handful.
+- **What is not:** anything about a store holding thousands. `Store::justifications` lists every
+  record typed as one and then reads each whole, which is one system-graph subject read per record,
+  and `openbiz justifications` filters to a vocabulary *after* that. A governance function that
+  records one per creation for a year is the ordinary case, not the extreme one. This is the tenth
+  entry in the unmeasured-scale family and the second on a read a person waits on.
+- **What would close it:** a benchmark over a store with 10k records, and if it is slow, narrowing
+  in the store rather than in the caller.
+- **Opened:** iteration 57

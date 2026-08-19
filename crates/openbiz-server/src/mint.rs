@@ -14,11 +14,27 @@
 //! label, and a tool that refuses is a tool people work around — but nobody mints one here
 //! without first being shown what is already there.
 //!
-//! So this command answers exactly that question and does nothing else. It reads; it stages
-//! nothing; **it reserves nothing**. Run it twice and it returns the same IRI both times, and the
-//! report says so in as many words, because a minter that looks like an allocator is worse than
-//! no minter at all. The IRI becomes taken when a candidate carrying it is staged — and the next
+//! So this command answers exactly that question and does nothing else. It stages nothing and
+//! **it reserves nothing**. Run it twice and it returns the same IRI both times, and the report
+//! says so in as many words, because a minter that looks like an allocator is worse than no
+//! minter at all. The IRI becomes taken when a candidate carrying it is staged — and the next
 //! mint sees it, because the scan reads staged changes as well as vocabularies.
+//!
+//! # The one thing it writes, and only when asked
+//!
+//! `--because` records the justification `adr/0003` §3 requires: an auditable record naming what
+//! discovery found and why none of it fitted, keyed to the IRI about to be created. It goes to
+//! OpenBiz's own system graph, not to the vocabulary, so none of the three sentences above stops
+//! being true — nothing is staged, nothing is reserved, and the IRI does not move.
+//!
+//! It is captured *here*, at the moment the ladder is printed, rather than in a command of its
+//! own, because `adr/0003` §4 is a requirement with teeth: reuse must be less work than
+//! recreating. A justification that costs a second command is one that gets skipped, and the ADR
+//! is explicit that a mechanism people route around has failed rather than been ignored.
+//!
+//! **`--because` without a label is refused.** §3 asks for a reason *naming what was found*, and
+//! with no label there was no discovery pass, so there is nothing found to name. Recording one
+//! anyway would file the appearance of diligence as evidence of it.
 //!
 //! # Which pattern is used, and why the order matters
 //!
@@ -71,17 +87,30 @@ use openbiz_skos::{
 };
 use openbiz_store::{CandidateState, GraphId, GraphKind, IriPolicy, Store};
 
+use crate::cli::actor;
+
 use crate::cli::CommandError;
 use crate::discovery::StoreCorpus;
 use crate::inspect::convert;
 
-/// Report the IRI a new concept in `graph` would be minted with. Reads and nothing else.
+/// Report the IRI a new concept in `graph` would be minted with, and record why, if asked.
+///
+/// Without `because` this reads and writes nothing. With it, one justification record is written
+/// to the system graph after the IRI is computed — see the module documentation for why it is
+/// captured here and why it is refused when no label was given.
 pub fn mint(
     store: &Store,
     graph: &str,
     label: Option<&str>,
     pattern: Option<&str>,
+    because: Option<&str>,
 ) -> Result<String, CommandError> {
+    // Refused before anything is read, so the operator is told what is wrong with the command
+    // rather than handed a report with a note buried in it.
+    if because.is_some() && label.map(str::trim).unwrap_or_default().is_empty() {
+        return Err(CommandError::JustifyingWithoutLooking);
+    }
+
     let mut builder = CoreModel::builder();
     store.for_each_statement(graph, |statement| builder.push(convert(statement)))?;
     let model = builder.build();
@@ -124,9 +153,70 @@ pub fn mint(
         }
     }
 
+    // After the IRI, because a justification names the IRI it justifies: there is nothing to
+    // attach one to until minting has actually produced something.
+    let recorded = match (because, label, &minted, &found) {
+        (Some(reason), Some(label), Ok(minted), Some(found)) => Some(record_justification(
+            store,
+            graph,
+            &minted.iri,
+            label,
+            reason,
+            found,
+        )?),
+        _ => None,
+    };
+
     Ok(report(
-        graph, label, &chosen, &source, &suggested, &scan, &minted, &found,
+        graph, label, &chosen, &source, &suggested, &scan, &minted, &found, because, &recorded,
     ))
+}
+
+/// Write down what was found and why the operator is creating anyway.
+///
+/// Everything discovery reached is recorded, exact matches and containing ones alike: the question
+/// an auditor asks is "what did this person see and pass over", and a near match a curator looked
+/// at and rejected is exactly as much a part of that as an identical label.
+///
+/// The evidence is marked incomplete when any source could not be reached or the match list stopped
+/// at its bound, because a record that does not say so invites a reader to take a search that was
+/// cut short for one that finished.
+fn record_justification(
+    store: &Store,
+    graph: &str,
+    concept: &str,
+    label: &str,
+    reason: &str,
+    found: &Discovered,
+) -> Result<openbiz_store::Justification, CommandError> {
+    let mut considered: BTreeSet<String> = BTreeSet::new();
+    for hit in found.matches() {
+        // A blank node cannot be named in a record an auditor will look things up in. It is
+        // counted in the report rather than dropped silently — see `unnameable`.
+        if let Some(iri) = hit.resource.as_iri() {
+            considered.insert(iri.to_owned());
+        }
+    }
+    let complete = found.is_complete() && found.unavailable().next().is_none();
+
+    Ok(store.record_justification(
+        &GraphId::vocabulary(graph)?,
+        concept,
+        label,
+        &considered.into_iter().collect::<Vec<_>>(),
+        reason,
+        complete,
+        &actor()?,
+    )?)
+}
+
+/// How many matches could not be named in a justification record, because they are blank nodes.
+fn unnameable(found: &Discovered) -> usize {
+    found
+        .matches()
+        .iter()
+        .filter(|hit| hit.resource.as_iri().is_none())
+        .count()
 }
 
 /// Which pattern a new IRI in `graph` is minted under, and where that pattern came from.
@@ -341,6 +431,8 @@ fn report(
     scan: &MintScan,
     minted: &Result<Minted, openbiz_skos::MintError>,
     found: &Option<Discovered>,
+    because: Option<&str>,
+    recorded: &Option<openbiz_store::Justification>,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("an IRI for a new concept in {graph}\n"));
@@ -390,14 +482,94 @@ fn report(
         }
     }
 
+    out.push_str(&justification_line(because, recorded, found));
+
     // Last, and never omitted. A reader who takes this for an allocator will mint twice and
     // create two concepts on one IRI, which is the exact failure the command exists to prevent.
-    out.push_str(
-        "\nnothing was written and nothing is reserved: run this again and it answers the same. \
-         The IRI becomes taken when a change carrying it is staged — `openbiz import` — and the \
-         next mint sees it there.\n",
-    );
+    //
+    // Two wordings, because one of them would have to be the weaker of the two truths. Without
+    // `--because` this command writes nothing whatsoever, and saying only "nothing is staged"
+    // would understate that; with it, one record was written, and saying "nothing was written"
+    // would be false. A closing claim a reader is meant to rely on has to be the true one.
+    out.push_str(match recorded {
+        None => concat!(
+            "\nnothing was written and nothing is reserved: run this again and it answers the ",
+            "same. The IRI becomes taken when a change carrying it is staged — `openbiz import` ",
+            "— and the next mint sees it there.\n",
+        ),
+        Some(_) => concat!(
+            "\nnothing is staged and nothing is reserved: the justification above is the only ",
+            "thing written, and it is in OpenBiz's own graph rather than in the vocabulary. Run ",
+            "this again and it answers the same IRI. The IRI becomes taken when a change ",
+            "carrying it is staged — `openbiz import` — and the next mint sees it there.\n",
+        ),
+    });
     out
+}
+
+/// What was recorded about creating rather than reusing, or that nothing was.
+///
+/// Three cases, and the middle one is the one that must never be silent: `--because` was given and
+/// no record could be written, because nothing was minted for it to be about. Saying nothing there
+/// would leave an operator believing they had filed a justification they had not.
+fn justification_line(
+    because: Option<&str>,
+    recorded: &Option<openbiz_store::Justification>,
+    found: &Option<Discovered>,
+) -> String {
+    match (because, recorded) {
+        (Some(_), Some(record)) => {
+            let mut out = format!(
+                concat!(
+                    "\njustification {} recorded, in OpenBiz's own graph and not in the ",
+                    "vocabulary:\n  {:?}\n  recorded by {} at {}\n",
+                ),
+                record.id(),
+                record.reason(),
+                record.recorded_by(),
+                record.recorded_at()
+            );
+            match record.considered().len() {
+                0 => out.push_str(concat!(
+                    "  naming nothing passed over, because discovery found nothing under this ",
+                    "label\n",
+                )),
+                count => {
+                    out.push_str(&format!(
+                        concat!(
+                            "  naming {} existing resource(s) passed over, each queryable as ",
+                            "<urn:openbiz:justificationConsidered>\n",
+                        ),
+                        count
+                    ));
+                    for resource in record.considered() {
+                        out.push_str(&format!("    {resource}\n"));
+                    }
+                }
+            }
+            if !record.search_was_complete() {
+                out.push_str(concat!(
+                    "  the search behind it did not finish — a source was unreachable or the ",
+                    "match list stopped at its bound — and the record says so\n",
+                ));
+            }
+            let blank = found.as_ref().map(unnameable).unwrap_or_default();
+            if blank > 0 {
+                out.push_str(&format!(
+                    concat!(
+                        "  {} match(es) are not named in the record: they are blank nodes, which ",
+                        "nothing can look up later\n",
+                    ),
+                    blank
+                ));
+            }
+            out
+        }
+        (Some(_), None) => {
+            "\nno justification was recorded: nothing was minted for one to be about\n".to_owned()
+        }
+        (None, _) => String::new(),
+    }
 }
 
 /// Where the pattern came from: the operator, the vocabulary's recorded policy, or its concepts.
@@ -654,9 +826,9 @@ const STILL_MINTED: &str = concat!(
     "An IRI is still minted below, because two concepts can legitimately share a label — but if ",
     "one of these is the concept you mean, minting a second one is how a vocabulary becomes a ",
     "silo.\n",
-    "nothing here records a justification for creating a new one instead: §3 requires that ",
-    "record, and the only place this build has for it is the note on the change that creates the ",
-    "concept.\n",
+    "if you create one anyway, §3 asks for a recorded reason naming what was found and why none ",
+    "of it fitted: give --because \"…\" and this command files one, which `openbiz ",
+    "justifications` and any SPARQL query over the system graph can then be asked about.\n",
 );
 
 /// One match: what it is, what it is called, how it matched, and where it lives.
@@ -802,7 +974,7 @@ mod tests {
     #[test]
     fn the_pattern_is_read_off_the_vocabulary_and_the_number_goes_above_the_highest() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             report.contains("pattern: https://example.org/energy/c_{n}"),
@@ -825,7 +997,7 @@ mod tests {
     #[test]
     fn an_unpadded_vocabulary_is_not_described_as_padded() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             !report.contains("how this vocabulary writes them"),
@@ -842,7 +1014,7 @@ mod tests {
             r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
                <https://example.org/energy/c_0912> a skos:Concept ."#,
         )]);
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             report.contains("minted: https://example.org/energy/c_0913"),
@@ -862,7 +1034,7 @@ mod tests {
     #[test]
     fn a_worded_vocabulary_mints_a_readable_iri_and_names_the_trade() {
         let (_directory, store) = store_with(&[(VOCABULARY, WORDED)]);
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             report.contains("minted: https://example.org/energy/tidal-power"),
@@ -889,7 +1061,7 @@ mod tests {
                <https://example.org/energy/c_13> a skos:Concept ."#,
         );
 
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             report.contains("minted: https://example.org/energy/c_14"),
@@ -915,7 +1087,7 @@ mod tests {
             ),
         ]);
 
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             report.contains("minted: https://example.org/energy/c_21"),
@@ -932,7 +1104,7 @@ mod tests {
     #[test]
     fn a_label_the_vocabulary_already_uses_stops_the_report_first() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
-        let report = mint(&store, VOCABULARY, Some("Solar power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Solar power"), None, None).expect("a mint");
 
         let stop = report.find("STOP").expect("the §1.7 warning");
         let minted = report.find("minted:").expect("an IRI");
@@ -950,7 +1122,7 @@ mod tests {
     #[test]
     fn a_clean_discovery_pass_says_what_it_consulted_and_what_it_did_not() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED), (OTHER, "")]);
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             report.contains("nothing discovery reached is called \"Tidal power\""),
@@ -986,7 +1158,7 @@ mod tests {
             ),
         ]);
 
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         let stop = report.find("STOP").expect("the §1.7 warning");
         let minted = report.find("minted:").expect("an IRI");
@@ -1019,7 +1191,7 @@ mod tests {
                  skos:prefLabel "Tidal power generation"@en ."#,
         )]);
 
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(
             !report.contains("STOP"),
@@ -1048,7 +1220,7 @@ mod tests {
                  skos:altLabel "Tidal power"@en ."#,
         )]);
 
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(report.contains("STOP"), "{report}");
         assert!(
@@ -1076,7 +1248,7 @@ mod tests {
                  skos:prefLabel "Tidal power"@en ."#,
         );
 
-        let report = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let report = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert!(report.contains("STOP"), "{report}");
         assert!(
@@ -1094,7 +1266,7 @@ mod tests {
     #[test]
     fn no_label_says_the_duplicate_check_did_not_run() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
-        let report = mint(&store, VOCABULARY, None, None).expect("a mint");
+        let report = mint(&store, VOCABULARY, None, None, None).expect("a mint");
 
         assert!(
             report.contains("nothing was checked for an existing concept"),
@@ -1110,7 +1282,7 @@ mod tests {
     #[test]
     fn a_taken_slug_is_refused_and_offers_no_suffix() {
         let (_directory, store) = store_with(&[(VOCABULARY, WORDED)]);
-        let report = mint(&store, VOCABULARY, Some("Solar power"), None).expect("a report");
+        let report = mint(&store, VOCABULARY, Some("Solar power"), None, None).expect("a report");
 
         assert!(report.contains("nothing was minted"), "{report}");
         assert!(report.contains("already in use"), "{report}");
@@ -1129,8 +1301,8 @@ mod tests {
     #[test]
     fn minting_twice_answers_the_same_and_says_nothing_is_reserved() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
-        let first = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
-        let second = mint(&store, VOCABULARY, Some("Tidal power"), None).expect("a mint");
+        let first = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
+        let second = mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect("a mint");
 
         assert_eq!(first, second);
         assert!(
@@ -1152,7 +1324,8 @@ mod tests {
                <https://c.example/three> a skos:Concept ."#,
         )]);
 
-        let error = mint(&store, VOCABULARY, Some("Tidal power"), None).expect_err("no convention");
+        let error =
+            mint(&store, VOCABULARY, Some("Tidal power"), None, None).expect_err("no convention");
 
         assert!(
             error.to_string().contains("give one with --pattern"),
@@ -1170,6 +1343,7 @@ mod tests {
             VOCABULARY,
             Some("Renewable energy"),
             Some("https://example.org/energy/{slug}"),
+            None,
         )
         .expect("a mint");
 
@@ -1194,6 +1368,7 @@ mod tests {
             VOCABULARY,
             Some("Tidal power"),
             Some("https://example.org/energy/{slug}"),
+            None,
         )
         .expect("a mint");
 
@@ -1214,6 +1389,7 @@ mod tests {
             VOCABULARY,
             Some("Tidal power"),
             Some("https://example.org/%zz/{slug}"),
+            None,
         )
         .expect_err("a broken escape");
 
@@ -1232,6 +1408,7 @@ mod tests {
             VOCABULARY,
             Some("Tidal power"),
             Some("https://example.org/energy/tidal"),
+            None,
         )
         .expect_err("no placeholder");
 
@@ -1246,8 +1423,14 @@ mod tests {
     #[test]
     fn an_unregistered_vocabulary_is_refused() {
         let (_directory, store) = store_with(&[(VOCABULARY, NUMBERED)]);
-        let error = mint(&store, "https://example.org/absent", Some("Tidal"), None)
-            .expect_err("no such vocabulary");
+        let error = mint(
+            &store,
+            "https://example.org/absent",
+            Some("Tidal"),
+            None,
+            None,
+        )
+        .expect_err("no such vocabulary");
 
         assert!(
             error.to_string().contains("no graph is registered"),

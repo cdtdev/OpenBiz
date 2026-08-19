@@ -147,6 +147,17 @@ pub enum Command {
         label: Option<String>,
         /// The pattern to mint under, overriding the one the vocabulary suggests.
         pattern: Option<String>,
+        /// Why a new concept is being created rather than an existing one reused.
+        ///
+        /// With it, one justification record is written (`adr/0003` §3). Without it, this command
+        /// writes nothing at all, which is what it did before the record existed.
+        because: Option<String>,
+    },
+    /// Report what has been recorded about creating new concepts rather than reusing existing
+    /// ones. Reads and nothing else.
+    Justifications {
+        /// The vocabulary to narrow to. Without it, every vocabulary in the store.
+        graph: Option<String>,
     },
     /// Propose moving a concept, and everything below it, under a different broader concept.
     Move {
@@ -654,6 +665,31 @@ impl Command {
                 let graph = Self::text("policy", "the IRI of a vocabulary", &mut args)?;
                 return Self::policy_command(graph, args);
             }
+            // The vocabulary is optional and never an option, because the question this command
+            // answers is an organisation-wide one: `openbiz justifications` on its own is the
+            // useful default, and naming a vocabulary is the narrowing.
+            "justifications" => {
+                let graph = match args.next() {
+                    None => None,
+                    Some(arg) => {
+                        let arg = arg.into_string().map_err(|_| ArgsError::NotUnicode)?;
+                        if arg.starts_with("--") {
+                            return Err(ArgsError::UnknownOption {
+                                command: "justifications",
+                                option: arg,
+                            });
+                        }
+                        Some(arg)
+                    }
+                };
+                if let Some(extra) = args.next() {
+                    return Err(ArgsError::UnknownOption {
+                        command: "justifications",
+                        option: extra.into_string().map_err(|_| ArgsError::NotUnicode)?,
+                    });
+                }
+                return Ok(Self::Justifications { graph });
+            }
             "move" => {
                 let graph = Self::text("move", "the IRI of the vocabulary to change", &mut args)?;
                 let concept = Self::text("move", "the IRI of the concept to move", &mut args)?;
@@ -797,6 +833,7 @@ impl Command {
     ) -> Result<Self, ArgsError> {
         let mut label: Option<String> = None;
         let mut pattern: Option<String> = None;
+        let mut because: Option<String> = None;
 
         let mut args = args.map(|arg| arg.into_string()).peekable();
         // The positional, taken only when it cannot be an option.
@@ -822,6 +859,10 @@ impl Command {
                     let given = value("--pattern")?;
                     set(&mut pattern, given, "--pattern")?;
                 }
+                "--because" => {
+                    let given = value("--because")?;
+                    set(&mut because, given, "--because")?;
+                }
                 other => {
                     return Err(ArgsError::UnknownOption {
                         command: "mint",
@@ -835,6 +876,7 @@ impl Command {
             graph,
             label,
             pattern,
+            because,
         })
     }
 
@@ -1296,6 +1338,19 @@ pub enum CommandError {
          or system responsible, or run this where USER or LOGNAME is set"
     )]
     NoActor,
+    /// `--because` was given with no label, so there was no discovery pass to justify anything
+    /// against.
+    ///
+    /// Refused rather than recorded with an empty considered list. `adr/0003` §3 asks for a reason
+    /// "naming what was found and why nothing fitted", and a record written when nothing was
+    /// looked for names nothing — it would file the appearance of diligence as evidence of it,
+    /// which is worse for an auditor than no record at all.
+    #[error(
+        "--because records why nothing that already exists fitted, and with no label nothing was \
+         looked for; give the label the new concept will carry and this command searches every \
+         source first"
+    )]
+    JustifyingWithoutLooking,
     /// The graph IRI given on the command line is not one.
     #[error(transparent)]
     Graph(#[from] GraphIdError),
@@ -1591,7 +1646,10 @@ pub fn show(store: &Store, id: &str) -> Result<String, CommandError> {
     let provenance = candidate.provenance();
 
     let mut out = format!(
-        "candidate {}\n  state:      {}\n  target:     {}\n  source:     {}\n           proposed by: {}\n  proposed at: {}\n  why:        {}\n  effect:     {}\n",
+        concat!(
+            "candidate {}\n  state:      {}\n  target:     {}\n  source:     {}\n",
+            "  proposed by: {}\n  proposed at: {}\n  why:        {}\n  effect:     {}\n",
+        ),
         candidate.id(),
         candidate.state(),
         candidate.target(),
@@ -1811,6 +1869,7 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: Some("Renewable energy".to_owned()),
                 pattern: None,
+                because: None,
             })
         );
         assert_eq!(
@@ -1819,6 +1878,7 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: None,
                 pattern: None,
+                because: None,
             })
         );
     }
@@ -1842,6 +1902,7 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: Some("--peculiar".to_owned()),
                 pattern: None,
+                because: None,
             })
         );
     }
@@ -2224,6 +2285,7 @@ mod tests {
                 graph: "http://e.org/v".to_owned(),
                 label: None,
                 pattern: Some("http://e.org/v/{n}".to_owned()),
+                because: None,
             })
         );
     }

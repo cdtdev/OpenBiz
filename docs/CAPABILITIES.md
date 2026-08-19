@@ -219,8 +219,9 @@ parent gets chosen for the next one.
 ## Creating a concept — what already exists comes first
 
 ```sh
-openbiz mint <graph> [<label>] [--pattern <p>]   # what already exists, then what IRI a new one gets
+openbiz mint <graph> [<label>] [--pattern <p>] [--because <text>]
 openbiz policy <graph> [--pattern <p>]           # show, or record, the pattern
+openbiz justifications [<graph>]                 # what was created despite an existing match
 ```
 
 There is no "create concept" command. A concept is created by staging a change, and to write that
@@ -240,9 +241,25 @@ unavailable and never blocks the mint
 ([`adr/0046`](adr/0046-discovery-runs-on-the-creation-path.md)).
 
 Matching is lexical: case-insensitive, and **not** insensitive to accents, spelling, or Unicode
-normalisation. What `adr/0003` §3 calls the reuse ladder is printed when something is found, and
-the report is honest that this build has nowhere to record a justification for creating a new
-concept anyway, except the note on the change that creates it.
+normalisation. What `adr/0003` §3 calls the reuse ladder is printed when something is found.
+
+**`--because "…"` files the record that ladder is for.** §3 asks for more than a warning — "not a
+warning dialog, those get clicked through, but an auditable record that makes proliferation visible
+to the people accountable for it" — and the test of that is whether an auditor can *ask* which
+concepts were created despite an existing match. So it is a record and not a note: the IRI that was
+created, the label it was created under, every existing resource that was found and passed over **as
+an IRI you can join to**, the reason, whether the search behind it finished, and who filed it when.
+`openbiz justifications` reads them back across every vocabulary at once, because proliferation
+happens between vocabularies rather than inside one; a SPARQL query over the system graph asks
+anything else. It is written to OpenBiz's own graph and never to the vocabulary, so it does not
+travel to another tool as a statement no standard defines
+([`adr/0049`](adr/0049-the-justification-is-a-record-not-a-note.md)).
+
+Two things the report says about itself rather than leaving you to find out. **Nothing is refused**:
+there is no single-step create to attach a refusal to, so these records are what people chose to
+write down and an empty report cannot be told apart from a store where nobody used the flag. And a
+record whose search stopped at its bound is **marked and counted**, because evidence from a search
+that did not finish says less than evidence from one that did.
 
 **`openbiz split` is the other creation path, and the same pass runs on it** — under *every* part
 name, because a split names several concepts at once and each one of them is a creation. The check
@@ -254,7 +271,12 @@ parts are named. A part named after one of the original's own labels is shown an
 concept being divided rather than offered as a concept to reuse
 ([`adr/0048`](adr/0048-discovery-on-every-name-a-split-creates.md)).
 
-`mint` **reads and reserves nothing** — run it twice, get the same answer, and it says so. A number
+`openbiz split`, the other creation path, prints the ladder and does not yet file the record; it is
+the next item and the report says so rather than implying otherwise.
+
+`mint` **stages and reserves nothing** — run it twice, get the same answer, and it says so. Without
+`--because` it writes nothing whatsoever, and the closing line of the report says the stronger of
+the two truths in each case. A number
 goes above the highest in use and never fills a gap; a slug already taken is *refused* rather than
 given a disambiguating suffix. Collisions are checked across every vocabulary in the store and every
 change staged against one ([`adr/0035`](adr/0035-an-iri-is-minted-from-what-the-vocabulary-already-does.md)).
