@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 13 of 24 items done — 24 and not 23 because the mapping-properties item was split in two at iteration 32. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 14 of 24 items done — 24 and not 23 because the mapping-properties item was split in two at iteration 32. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -228,6 +228,16 @@ merely present.
 
 Phases are ordered by dependency, not importance. Phase 3 (the interface) is deliberately early:
 the interface is a core differentiator, and building it late means retrofitting every API to it.
+
+**And the conformance claim itself is now checkable.** `openbiz integrity <graph>` is the
+roll-call: every condition whose violation makes this build call a graph inconsistent, one row
+each — the specification's six under the heading it gives them, and the ten this build classifies
+itself printed apart and labelled as ours. Each is **held, violated, or unchecked**, and the third
+is not a weaker first: a bounded walk that stopped, or a vocabulary whose own `rdfs:subPropertyOf`
+extension point this build reads past, leaves a named condition genuinely unanswered and the report
+says which and why. A test asserts the roll-call is complete with respect to consistency — every
+inconsistent finding is attributed to a row — so a graph is consistent exactly when no row is
+violated. See `adr/0031`.
 
 ---
 
@@ -983,7 +993,39 @@ the interface is a core differentiator, and building it late means retrofitting 
       > and the sweep's cost is unmeasured on a mapped vocabulary of any size, which is now the
       > second iteration running to record that the scale harness generates no mapping links.
       > See `adr/0030`.
-- [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number
+- [x] All SKOS integrity conditions from the specification, each with a test citing its S-number
+      > **Done at iteration 34**, and the item turned out to be about the *coverage claim* rather
+      > than about a missing rule: all six conditions the specification states — S9 (§4.4), S13 and
+      > S14 (§5.4), S27 (§8.4), S37 (§9.4), S46 (§10.4) — were already implemented by the item that
+      > owned each section, and each already had a test citing its S-number. What did not exist was
+      > anything that could be asked *which* conditions this build checks, or which of them it
+      > managed to check on a given vocabulary.
+      > **`openbiz-skos`'s `CONDITIONS` is the enumeration**, sixteen rows in two groups: the
+      > specification's six, and the ten statements whose violation this build calls an
+      > inconsistency by its own reading — the SKOS-XL disjointness pair, the "exactly one literal
+      > form" restriction, and the object- and datatype-property typing rules. The second group is
+      > printed apart and labelled as ours, because a report saying "all six held" about a
+      > vocabulary this build calls inconsistent is worse than a longer table. The split buys a
+      > property a test asserts: **every `Severity::Inconsistent` finding is attributed to a row**,
+      > so a graph is consistent exactly when no row is violated.
+      > **The sharpest half is the third verdict.** Held, violated, and **unchecked** — and
+      > unchecked is not a weaker held. Incompleteness is now attributed *per condition*: an
+      > exhausted ancestry walk leaves S27 unanswered and says nothing about S13, where
+      > `checks_are_complete` answered for the whole model and read as though everything were in
+      > doubt. And a second cause was found that nothing had ever reported: a vocabulary declaring
+      > `ex:seeAlso rdfs:subPropertyOf skos:related` has its own associative links read as
+      > non-SKOS, so §8.4 was checked over a graph missing them and the report said "no integrity
+      > condition is violated". The model now scans the graph's `rdfs:subPropertyOf` and
+      > `rdfs:subClassOf` declarations — `rdfs:subClassOf` is read here for the first time — walks
+      > each up to the SKOS terms it reaches, and marks the conditions checked over those terms
+      > unchecked, naming the declaration. **Nothing is entailed from it**; that is a decision about
+      > closure and an item of its own.
+      > **Production caller:** `openbiz integrity <graph>`, and `openbiz inspect`'s closing summary
+      > now names it. See `adr/0031`.
+      > **Not done, and in `docs/UNTESTED.md`:** the sub-property entailment itself, so an ordinary
+      > extended thesaurus reads as five-of-sixteen unchecked; and the scan's cost is unmeasured,
+      > because `scale.rs` generates no `rdfs:subPropertyOf` — the fourth dimension of the model
+      > the generator does not produce.
 - [ ] Concept tree query API: children, ancestors, siblings, paths-to-root, with cycle detection
 - [ ] Full-text search across labels with language filtering and prefix/infix matching
 - [ ] Concept IRI minting: configurable patterns, collision detection, opaque-vs-readable policy
