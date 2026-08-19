@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 12 of 24 items done — 24 and not 23 because the mapping-properties item was split in two at iteration 32. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 13 of 24 items done — 24 and not 23 because the mapping-properties item was split in two at iteration 32. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -91,9 +91,16 @@ S41 lifts `skos:broadMatch`, `skos:narrowMatch` and `skos:relatedMatch` into §8
 those are closed, so `openbiz ancestors` climbs through a mapping into another vocabulary's concept
 and §8.4's S27 catches §10.6.2's Examples 59–61 with no rule of §10's own. S46, §10's only
 integrity condition, is reported once per pair and cites §10.4's note where the specification
-argues by inversion rather than naming the property. **S45 is deliberately not applied** — the
-transitive closure of `skos:exactMatch` is a walk we have not built, and every report that contains
-a mapping says so rather than leaving the reader to assume. See `adr/0029`.
+argues by inversion rather than naming the property. See `adr/0029`.
+**And S45's closure is now walked too**, which closed a false negative rather than only adding a
+conclusion: `skos:exactMatch` is transitive, so `<A> exactMatch <B> exactMatch <C>` with
+`<A> broadMatch <C>` violates §10.4 — and no statement in that vocabulary names both properties for
+one pair, so it was reported as *consistent* until iteration 33. That is the **hub** shape an
+enterprise actually produces. The walk is over an undirected **cluster** rather than a path
+upwards, because S44 puts every link at both ends, so cycles are ordinary (§10.6.6 requires coping
+with them) and a mapped concept is its own exact match (Example 66, consistent, printed rather than
+hidden). `openbiz mappings <graph> <resource>` is the per-concept view, printing what one concept
+is joined to with the rule behind every link the graph did not state. See `adr/0030`.
 
 **And we now know what that costs, which changed the design of the next item before it was
 written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
@@ -948,20 +955,34 @@ the interface is a core differentiator, and building it late means retrofitting 
       > line calling a link lifted under S41 "stated as skos:narrower", which is a statement the
       > author never wrote; the two origins are now counted apart.
       > **Acceptance:** §10's Examples 49–61 and 63–68, plus a test pinning S45's absence.
-- [ ] Mapping properties, part 2 — S45's transitivity, walked rather than stored, and a
+- [x] Mapping properties, part 2 — S45's transitivity, walked rather than stored, and a
       per-concept view of what a vocabulary is mapped to
-      > `skos:exactMatch` is an `owl:TransitiveProperty` and this build does **not** close it, so
-      > Example 62's entailment does not follow and `openbiz inspect` says so in every report that
-      > has a mapping in it. `adr/0025`'s rule says the closure is a walk and not a table, and
-      > `adr/0029` records why the walk is a different shape from `ancestry`: an exact-match
-      > cluster is undirected, so it is a connected component rather than a path upwards, and
-      > §10.6.6 warns outright that "applications must be able to cope with cycles in
-      > skos:exactMatch and skos:closeMatch".
-      > Also here: **S46 across that closure** (an exact-match chain that reaches a concept the
-      > first one broad-matches is a clash nobody wrote), and an `openbiz mappings <graph>
-      > <resource>` command — the analogue of `openbiz notes`, printing what one concept is joined
-      > to, with the origin and quoted rule for every link the graph did not state. The counts in
-      > `openbiz inspect` are the vocabulary-level answer; there is no per-concept one yet.
+      > **Done at iteration 33.** `CoreModel::exact_match_cluster` walks the closure and nothing
+      > stores it, so Example 62 is entailed and `Resource::mappings_of` still means "one-step
+      > links" — both halves are asserted, so a later build that materialises the closure fails a
+      > test. The walk's shape is a **connected component and not a path upwards**, because S44 has
+      > already put every link at both ends: cycles are ordinary rather than pathological (§10.6.6
+      > requires an application to cope with them), and a concept with any exact match is its own
+      > exact match, which §10.6.6's Example 66 marks consistent and the report prints rather than
+      > hides.
+      > **The sharpest half is S46 across that closure.** A vocabulary stating
+      > `<A> exactMatch <B>`, `<B> exactMatch <C>` and `<A> broadMatch <C>` violates §10.4, and no
+      > statement in it names both properties for one pair — so it was reported as *consistent*
+      > until this landed. That is the hub shape an enterprise actually produces, and a false "no
+      > violation" is worse than a missing conclusion. The two S46 passes cannot double-report,
+      > because only chains of two links or more reach the second.
+      > **Production caller:** `openbiz mappings <graph> <resource>` for the walk, and the model's
+      > own build for the sweep. The command prints the five properties, the origin and quoted rule
+      > for every link the graph did not state, S41's lift per section, and the chained concepts
+      > with the chain that reached each.
+      > `openbiz inspect`'s sentence claiming S45 was unimplemented became false with this commit
+      > and was replaced rather than deleted: the counts are still one-step links, and the report
+      > says so and names the command that resolves them.
+      > **Not done, and in `UNTESTED.md`:** S42's lift is not applied across the closure, so a
+      > chained concept is listed as an exact match and not also as the close match S42 entails;
+      > and the sweep's cost is unmeasured on a mapped vocabulary of any size, which is now the
+      > second iteration running to record that the scale harness generates no mapping links.
+      > See `adr/0030`.
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number
 - [ ] Concept tree query API: children, ancestors, siblings, paths-to-root, with cycle detection
 - [ ] Full-text search across labels with language filtering and prefix/infix matching

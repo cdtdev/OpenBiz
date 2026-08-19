@@ -2428,3 +2428,82 @@ look competent disables the one signal that catches a stuck loop.
   labels or notes, and it produces no mappings either. The next blind-spot pass should widen the
   generator rather than deepen one more rule, because four dimensions of the model are now measured
   along one of them.
+
+## Iteration 33 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `91ed8ea`.** Took the next unchecked,
+  unblocked Phase 2 item: **mapping properties, part 2** — the item iteration 32 split out.
+- **The item is not "add a missing entailment", it is "close a false negative", and that reframing
+  is the whole of `adr/0030`.** S45 makes `skos:exactMatch` transitive. Without it, a vocabulary
+  stating `<A> exactMatch <B>`, `<B> exactMatch <C>` and `<A> broadMatch <C>` violates §10.4 and
+  **no statement in it names both properties for one pair** — so the direct S46 check saw nothing
+  and `openbiz inspect` printed "no SKOS integrity condition is violated". A false "no violation"
+  is worse than a missing conclusion, because the operator has been told something. And the shape
+  is the ordinary enterprise artefact: house vocabulary → industry hub → regulator's list, with the
+  house vocabulary never mentioning the regulator. There is now an end-to-end test that runs the
+  binary against exactly that graph on disk.
+- **The walk is a cluster, not a path, and the argument for not storing it is stronger than S24's
+  rather than the same.** `skos:broaderTransitive` is directed, so a chain of *n* closes to
+  *n(n−1)/2* pairs. `skos:exactMatch` is symmetric **and** transitive, so the same chain closes to
+  all *n²*, each required in both directions by S44. A hub with a thousand vocabularies pointed at
+  it is one cluster and a million links from two thousand statements. Two consequences are asserted
+  rather than inferred: cycles are ordinary (§10.6.6 requires an application to cope with them, and
+  after S44 *every* link is one), and a mapped concept is its own exact match — Example 66 marks
+  that consistent, so it is printed rather than hidden.
+- **`openbiz mappings <graph> <resource>` is the per-concept view**, the analogue of `openbiz
+  notes`: the five properties, the origin and quoted rule for every link the graph did not state,
+  S41's lift said once per section, and the chained concepts each with the chain that reached them.
+- **The sharpest finding is a test of mine that could not observe the failure it was written to
+  catch.** `the_closure_budget_is_shared_across_the_sweep` protects `adr/0027`'s lesson — a
+  per-walk budget times one walk per concept is not a bound. Its first draft used one three-concept
+  chain and a budget that one walk exhausts, and **the per-walk mutant passed it**, because either
+  reading reports the sweep giving up when the first walk is the one that runs out. It is now five
+  separate two-concept clusters with a budget for two and a half walks, which is the only shape the
+  two readings disagree about. Nothing but mutating the code the test exists to protect would have
+  found this — the suite was green, the test name was right, and the assertion was true. I then
+  mutated the equivalent S27 test the same way; that one is sound.
+- **Running the product changed the output again, for the sixth iteration running.** With
+  everything passing I ran `openbiz mappings` against a store on disk and the report opened by
+  telling the author they are equivalent to themselves — the reflexive conclusion sorts by IRI and
+  landed first among the chains. Moved to its own heading after the concepts the author asked
+  about, with §10.6.6 quoted beside it so an unexplained self-link does not read as a defect. Not
+  dropped: it is a conclusion this build draws, and it is what makes `<A> exactMatch <B>` plus
+  `<A> broadMatch <A>` an S46 violation.
+- **The `openbiz inspect` sentence claiming S45 was unimplemented was false the moment this
+  landed.** Replaced, not deleted: the counts are still one-step links, the report says so, and it
+  names the command that resolves them. Both tests pinning the old wording were updated to pin what
+  is true now.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **620 Rust tests, up from 592.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it. Five mutants run: disabling the closure sweep fails four tests across two
+  crates, widening `entailed`'s threshold from `>= 3` to `>= 2` fails three, and removing the
+  reflexive split fails two. The per-walk-budget mutant **survived** until the test was rewritten —
+  recorded above and in `adr/0030` §5.
+- **Recorded:** `adr/0030`. Two `UNTESTED.md` entries closed (S45's absence, and the missing
+  per-concept view), one **widened** and one **opened**: the sweep's cost is unmeasured on any
+  mapped vocabulary, which is the second iteration running to say the scale harness generates no
+  mapping links; and S42's lift is not applied across the closure, so a chained concept is listed
+  as an exact match and not also as the close match S42 entails from it. No proposals.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T04:02Z.
+- **I wrote an arithmetic claim into the ADR, then measured it, and it was the wrong shape.** The
+  draft said the sweep costs two links per concept and reaches the million-link default at about
+  500 000 mapped concepts. True — for the concept-for-concept mapping, where every cluster has two
+  members. But the sweep walks once per *member* and every member of a cluster has the **same**
+  cluster, so a hub of *n* vocabularies pointing at one concept is one cluster walked *n* times:
+  measured at **220 links for 10 members, 20 200 for 100, 321 200 for 400** — about 2n². A
+  1 000-member cluster exhausts the default on a vocabulary of a thousand concepts. That is now a
+  test pinning the complexity as a band, not a comment. The fix (walk each component once, not each
+  member) is linear and was **not** taken: it changes what the per-concept bound finding means, and
+  the item was already the whole of §10's part 2. It is in `UNTESTED.md` as the next move.
+- **Still uncertain:** whether that quadratic matters, and I cannot find out from inside this
+  repository. A dense cluster means *n* vocabularies all asserting the same concept — plausible at
+  ten for something like "Country", implausible at a thousand — and the whole risk turns on a
+  distribution nobody here has seen. **No fixture in this repository has a cluster larger than
+  four**, `scale.rs` still generates no mapping links at all, and this is the third axis on which
+  the same doubt has been recorded: labels and notes at iteration 31, per-link cost at 32, cluster
+  density here. The uncomfortable part is that I nearly shipped the arithmetic as the answer, and
+  it was wrong not because the sum was wrong but because I had assumed the easy shape — which is
+  exactly what the other two entries are also doing, since the generator only ever produces the
+  easy shape. So the next blind-spot pass should widen the generator, and it should generate a
+  **hub rather than a chain**, because the chain is the shape that makes every one of these numbers
+  look safe.

@@ -38,12 +38,17 @@
 //!   `skos:mappingRelation` through S42 rather than directly, because S40 does not name it, and
 //!   the derivation prints that step rather than skipping it.
 //!
-//! **Not applied here: S45**, which makes `skos:exactMatch` an `owl:TransitiveProperty`. The set
-//! of links this module produces is the graph's own plus the one-step entailments above; the
-//! closure of `skos:exactMatch` over a chain is not in it. That is the same decision `adr/0025`
-//! records for S24 — a transitive closure is walked, not stored — and until the walk exists the
-//! honest position is that Example 62's entailment is **not** supported. `docs/UNTESTED.md` says
-//! so, and `docs/BUILD-PLAN.md` carries it as part 2 of this item rather than as done.
+//! **Not applied here, and applied elsewhere: S45**, which makes `skos:exactMatch` an
+//! `owl:TransitiveProperty`. The set of links this module produces is the graph's own plus the
+//! one-step entailments above; the closure of `skos:exactMatch` over a chain is not in it, and
+//! never will be. That is the same decision `adr/0025` records for S24 — a transitive closure is
+//! walked, not stored — and [`ExactMatchCluster`](crate::ExactMatchCluster) is the walk. Example 62's entailment therefore
+//! *is* supported, by [`CoreModel::exact_match_cluster`](crate::CoreModel::exact_match_cluster)
+//! rather than by anything in here.
+//!
+//! This paragraph said the opposite until iteration 33, when the walk landed and made it false.
+//! It is corrected rather than left reading well, because a module note describing what the
+//! module does *not* do is the one place a reader checks before concluding a rule is missing.
 //!
 //! # What §10 states no condition against, and what we therefore do not report
 //!
@@ -99,8 +104,10 @@ pub enum MappingProperty {
     /// §10.1 says so outright, to avoid "compound errors" when mappings are chained across more
     /// than two schemes.
     CloseMatch,
-    /// `skos:exactMatch` — interchangeable across a wide range of applications. Symmetric and,
-    /// under S45, transitive — which this build does not yet close. See the module note.
+    /// `skos:exactMatch` — interchangeable across a wide range of applications. Symmetric under
+    /// S44 and transitive under S45; the transitivity is answered by walking
+    /// ([`ExactMatchCluster`](crate::ExactMatchCluster)) and is deliberately not in the links held here. See the module
+    /// note.
     ExactMatch,
 }
 

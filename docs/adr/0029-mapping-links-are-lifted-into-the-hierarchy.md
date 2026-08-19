@@ -3,6 +3,10 @@
 - **Status:** accepted
 - **Date:** 2026-08-19
 - **Iteration:** 32
+- **Extended by `adr/0030`**, which took the S45 deferral recorded below and closed it. Where
+  this document says the closure is not computed and that the report says so, read `adr/0030`:
+  both stopped being true at iteration 33, and the sentence it quotes from `openbiz inspect` has
+  been replaced.
 - **Supersedes nothing.** Extends `adr/0023` (semantic relations) and `adr/0025` (transitive
   ancestry by walking) with SKOS Reference §10, and defers one part of §10 to the rule `adr/0025`
   set.

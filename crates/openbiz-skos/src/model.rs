@@ -65,6 +65,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::ancestry::AncestryBound;
+use crate::equivalence::EquivalenceBound;
 use crate::labels::{LabelKind, LanguageCoverage, LexicalLabel};
 use crate::mapping::{ExactMatchDisjointness, MappingProperty, SKOS_MAPPING_RELATION};
 use crate::notes::{DocumentationCoverage, NoteKind, NoteOrigin};
@@ -227,6 +228,7 @@ pub enum SkosRule {
     S42,
     S43,
     S44,
+    S45,
     S46,
     S3,
     S30,
@@ -286,6 +288,7 @@ impl SkosRule {
             SkosRule::S42 => "S42",
             SkosRule::S43 => "S43",
             SkosRule::S44 => "S44",
+            SkosRule::S45 => "S45",
             SkosRule::S46 => "S46",
             SkosRule::S48 => "S48",
             SkosRule::S49 => "S49",
@@ -401,6 +404,7 @@ impl SkosRule {
                 "skos:relatedMatch, skos:closeMatch and skos:exactMatch are each instances of \
                  owl:SymmetricProperty."
             }
+            SkosRule::S45 => "skos:exactMatch is an instance of owl:TransitiveProperty.",
             SkosRule::S46 => {
                 "skos:exactMatch is disjoint with each of the properties skos:broadMatch and \
                  skos:relatedMatch."
@@ -1063,6 +1067,64 @@ pub enum Finding {
         /// established, and how S46 reaches it.
         clashes: Vec<(MappingProperty, RelationOrigin, ExactMatchDisjointness)>,
     },
+    /// Two concepts are joined by a **chain** of exact mapping links and by a hierarchical or
+    /// associative one. S45 then S46.
+    ///
+    /// The clash nobody wrote, and §10's counterpart to [`Finding::RelatedAndBroaderTransitive`].
+    /// `<A> skos:exactMatch <B>`, `<B> skos:exactMatch <C>` and `<A> skos:broadMatch <C>` is
+    /// inconsistent, and no statement in the file names both the exact match and the hierarchical
+    /// one between the same pair — S45 supplies the first. It is exactly the shape a hub mapping
+    /// produces, which is why it is worth the walk: a house vocabulary mapped to a hub and the
+    /// hub mapped onwards is the ordinary enterprise case, not a contrived one.
+    ///
+    /// The `chain` is carried rather than the endpoints alone, for the reason S27's `path` is: an
+    /// author told "these two clash" for a link they never wrote has been given a verdict; one
+    /// shown the chain has been given the edit to make.
+    ExactMatchChainClash {
+        /// The concept the walk started from — the first of the pair, since the far end holds the
+        /// same clash.
+        concept: Node,
+        /// The concept at the other end.
+        other: Node,
+        /// The exact-match chain from `concept` to `other`, `concept` first. Three entries or
+        /// more, always: a one-step link is [`Finding::ExactMatchClash`]'s and not this one's.
+        chain: Vec<Node>,
+        /// Every property disjoint with `skos:exactMatch` that also links the pair, how each was
+        /// established, and how S46 reaches it.
+        clashes: Vec<(MappingProperty, RelationOrigin, ExactMatchDisjointness)>,
+    },
+    /// The walk of one concept's exact-match cluster hit its bound, so S46 was not checked
+    /// across it.
+    ///
+    /// [`Severity::Unchecked`], because it says nothing about whether the graph is consistent —
+    /// the direct S46 check still ran over that concept's own links. What is unchecked is the
+    /// part S45 would have added.
+    ExactMatchClusterBoundReached {
+        /// The concept whose cluster was being walked.
+        concept: Node,
+        /// How many members had been reached when it stopped.
+        reached: usize,
+        /// How many links had been followed when it stopped.
+        links_walked: usize,
+    },
+    /// §10's transitive check ran out of budget with concepts left to walk, so S46-across-S45 is
+    /// unchecked for those.
+    ///
+    /// [`Severity::Unchecked`], and distinct from [`Finding::ExactMatchClusterBoundReached`] for
+    /// the reason [`Finding::DisjointnessSweepExhausted`] is distinct from
+    /// [`Finding::AncestryBoundReached`]: that one names *one* concept in a cluster too large to
+    /// walk, this one says the **check itself stopped** and the concepts it never reached are
+    /// unchecked without anything being wrong with them individually. Reporting the second as the
+    /// first would name one concept and stay silent about the rest, which reads exactly like
+    /// "the others were checked and were fine".
+    ExactMatchSweepExhausted {
+        /// How many concepts holding an exact match the check got through.
+        checked: usize,
+        /// How many it did not reach. S46 says nothing about these either way.
+        unchecked: usize,
+        /// Links followed across every walk the check made, which is the budget it spent.
+        links_walked: usize,
+    },
     /// The walk of a concept's ancestors hit its bound, so S27 was not checked for it.
     ///
     /// [`Severity::Unchecked`], because it says nothing about whether the graph is consistent.
@@ -1133,13 +1195,20 @@ impl Finding {
             // Section 10.4 is headed "Integrity Conditions" and the specification marks Examples
             // 52 and 53 "(not consistent)", so this one is settled by the document rather than by
             // us.
-            Finding::ExactMatchClash { .. } => Severity::Inconsistent,
+            // And the same condition reached through S45's closure rather than through the links
+            // the graph holds. The severity is the condition's, not the walk's: a violation only
+            // an entailment makes visible is still a violation.
+            Finding::ExactMatchClash { .. } | Finding::ExactMatchChainClash { .. } => {
+                Severity::Inconsistent
+            }
             Finding::DefectiveMemberList { .. }
             | Finding::MultipleMemberLists { .. }
             | Finding::NonPlainLiteralLabel { .. }
             | Finding::NoLiteralForm { .. }
             | Finding::NonPlainLiteralForm { .. } => Severity::IllFormed,
-            Finding::AncestryBoundReached { .. }
+            Finding::ExactMatchClusterBoundReached { .. }
+            | Finding::ExactMatchSweepExhausted { .. }
+            | Finding::AncestryBoundReached { .. }
             | Finding::DisjointnessSweepExhausted { .. }
             | Finding::RefinementBoundReached { .. } => Severity::Unchecked,
         }
@@ -1311,6 +1380,57 @@ impl fmt::Display for Finding {
                     .map(|(_, _, disjointness)| disjointness.to_string())
                     .collect::<Vec<_>>()
                     .join("\n    and "),
+            ),
+            Finding::ExactMatchChainClash {
+                concept,
+                other,
+                chain,
+                clashes,
+            } => write!(
+                f,
+                "{concept} skos:exactMatch {other} through {}\n    and {}\n    and the same pair \
+                 is also linked by {}\n    and {}",
+                chain
+                    .windows(2)
+                    .map(|step| format!("{} skos:exactMatch {}", step[0], step[1]))
+                    .collect::<Vec<_>>()
+                    .join(", then "),
+                SkosRule::S45,
+                clashes
+                    .iter()
+                    .map(|(property, origin, _)| format!("{property} ({origin})"))
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                clashes
+                    .iter()
+                    .map(|(_, _, disjointness)| disjointness.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n    and "),
+            ),
+            Finding::ExactMatchClusterBoundReached {
+                concept,
+                reached,
+                links_walked,
+            } => write!(
+                f,
+                "the exact-match cluster around {concept} stopped after {reached} concept(s) and \
+                 {links_walked} link(s) without closing, so S46 was **not** checked across \
+                 {}\n    and {}\n    this says nothing about whether the graph violates it",
+                SkosRule::S45,
+                SkosRule::S46,
+            ),
+            Finding::ExactMatchSweepExhausted {
+                checked,
+                unchecked,
+                links_walked,
+            } => write!(
+                f,
+                "the exact-match closure check stopped after {checked} concept(s) and \
+                 {links_walked} link(s), leaving {unchecked} concept(s) unwalked\n    and \
+                 {}\n    S46 was **not** checked across {} for those, and this says nothing \
+                 about whether they violate it",
+                SkosRule::S46,
+                SkosRule::S45.number(),
             ),
             Finding::AncestryBoundReached {
                 concept,
@@ -1543,7 +1663,8 @@ impl Resource {
     /// The mapping links it holds under one property, and how each was established.
     ///
     /// One-step links only: the graph's own plus what S42, S43 and S44 entail from them. S45's
-    /// transitive closure of `skos:exactMatch` is **not** in here — see [`crate::mapping`].
+    /// transitive closure of `skos:exactMatch` is **not** in here and never will be — it is
+    /// answered by [`CoreModel::exact_match_cluster`], which walks it. See `docs/adr/0030`.
     pub fn mappings_of(
         &self,
         property: MappingProperty,
@@ -1836,6 +1957,7 @@ pub struct CoreModelBuilder {
     lifted_relations: BTreeMap<SemanticRelation, BTreeMap<(Node, Node), String>>,
     notes: BTreeMap<Node, BTreeMap<Term, BTreeMap<NoteKind, NoteSource>>>,
     ancestry_bound: AncestryBound,
+    equivalence_bound: EquivalenceBound,
     /// What the graph's own `rdfs:subPropertyOf` declarations entail. Empty unless a caller ran
     /// the first pass and handed the result to [`CoreModelBuilder::with_refinements`].
     refinements: PropertyRefinements,
@@ -1868,6 +1990,19 @@ impl CoreModelBuilder {
     /// should be able to hit it without generating a hundred thousand concepts to do it.
     pub fn with_ancestry_bound(mut self, bound: AncestryBound) -> Self {
         self.ancestry_bound = bound;
+        self
+    }
+
+    /// How far S46's transitive check may walk an exact-match cluster before it gives up and says
+    /// so.
+    ///
+    /// [`EquivalenceBound::DEFAULT`] unless a caller sets it, for the same two reasons
+    /// [`CoreModelBuilder::with_ancestry_bound`] gives. Separate from the ancestry bound rather
+    /// than shared with it because the two sweeps walk different properties over different
+    /// shapes: a vocabulary can be deep and unmapped, or flat and mapped into a hub, and one
+    /// number for both would make the cheaper sweep pay for the other's ceiling.
+    pub fn with_equivalence_bound(mut self, bound: EquivalenceBound) -> Self {
+        self.equivalence_bound = bound;
         self
     }
 
@@ -2205,6 +2340,11 @@ impl CoreModelBuilder {
         // off the graph, because Example 52 states one direction of each property and the clash
         // is only visible once S43 and S44 have supplied the other.
         Self::check_mapping_disjointness(&mut model);
+        // And S46 again, across the closure S45 licenses but no pass materialises. It is separate
+        // from the pass above rather than folded into it because the two cost different things:
+        // that one is a lookup over links already held, this one is a walk per mapped concept,
+        // and a vocabulary with no exact match at all pays nothing for either.
+        Self::check_exact_match_closure_disjointness(&mut model, self.equivalence_bound);
         // S27 last, and after `close_semantic_relations` by necessity rather than by taste: it is
         // the only condition read off a *derived* structure that no pass materialises, so it has
         // to run when `skos:broaderTransitive` and `skos:related` are both final. It is also the
@@ -2411,9 +2551,11 @@ impl CoreModelBuilder {
     ///
     /// A direction the graph stated is never overwritten by one we derived.
     ///
-    /// **S45 is not applied here**, and is the one part of section 10 this build does not yet
-    /// support: `skos:exactMatch` comes out of this holding one-step links only, so Example 62's
-    /// chained entailment does not follow. See [`crate::mapping`] and `docs/UNTESTED.md`.
+    /// **S45 is not applied here, and never will be**, which is a different statement from the
+    /// one this comment made until iteration 33. `skos:exactMatch` comes out of this pass holding
+    /// one-step links only; Example 62's chained entailment is answered by
+    /// [`CoreModel::exact_match_cluster`] on read, because a closure that is symmetric as well as
+    /// transitive is *n²* in its cluster and unbounded on legal input. See `docs/adr/0030`.
     fn close_mappings(&mut self, model: &mut CoreModel) {
         for (property, links) in &self.mappings {
             for (from, to) in links {
@@ -2597,6 +2739,113 @@ impl CoreModelBuilder {
                     other: other.clone(),
                     exact: *exact_origin,
                     clashes,
+                });
+            }
+        }
+        model.findings.extend(found);
+    }
+
+    /// S46 across S45's closure — the clash that is only visible once the exact matches chain.
+    /// Section 10.2 and 10.4.
+    ///
+    /// The pass above checks S46 over the links the model **holds**, which are the graph's own
+    /// and the one-step entailments of S42, S43 and S44. That is not the whole condition:
+    /// `skos:exactMatch` is transitive under S45, so a pair joined by a chain is joined by the
+    /// property, and a hierarchical or associative mapping between the same pair violates S46
+    /// exactly as a stated exact match would. Before this pass existed, such a vocabulary was
+    /// reported as consistent — a false negative on an integrity condition, which
+    /// `docs/UNTESTED.md` recorded as the sharpest part of S45's absence.
+    ///
+    /// **The walk, not a table.** [`CoreModel::exact_match_cluster`] is the walk and
+    /// `docs/adr/0030` records why the closure is never stored.
+    ///
+    /// **One finding per pair, not one per end**, as the direct pass does and for the same
+    /// reason: S44 and S43 put the whole clash at both ends, so it is reported from the
+    /// lexicographically first. A pair the graph joins directly *and* through a chain is reported
+    /// once, by the pass above — [`ExactMatchCluster::entailed`] yields only the chains of two
+    /// steps or more, so the two passes cannot both report the same pair.
+    ///
+    /// **The budget is spent across the whole sweep**, not per concept. A per-walk budget
+    /// multiplied by one walk per concept is not a bound at all, which is the lesson
+    /// `docs/adr/0027` paid for in the §8.4 sweep.
+    fn check_exact_match_closure_disjointness(model: &mut CoreModel, bound: EquivalenceBound) {
+        let mut found: Vec<Finding> = Vec::new();
+        {
+            // The concepts the check owes an answer for, counted before it starts, so a sweep
+            // that runs out can say how many it never reached.
+            let owed: Vec<&Node> = model
+                .resources()
+                .filter(|(_, resource)| resource.mappings_of(MappingProperty::ExactMatch).is_some())
+                .map(|(node, _)| node)
+                .collect();
+
+            let mut remaining = bound.max_links;
+            let mut checked = 0usize;
+
+            for node in &owed {
+                let cluster = model
+                    .exact_match_cluster(node, EquivalenceBound::new(bound.max_members, remaining));
+                // `exact_match_cluster` never follows more links than the bound it was handed, so
+                // this cannot go below zero. Saturating rather than resting a panic in a library
+                // on that invariant holding for ever.
+                remaining = remaining.saturating_sub(cluster.links_walked());
+                checked += 1;
+
+                // Whatever the walk did reach is a real answer, so a clash found on the way out is
+                // reported even when the budget then runs out. It is the *absence* that an
+                // abandoned check may not be read from.
+                if let Some(resource) = model.resource(node) {
+                    for (other, chain) in cluster.entailed() {
+                        // The far end holds the same clash. A self-link — which every member of a
+                        // non-trivial cluster has, under S44 then S45 — is its own first end and
+                        // is examined here.
+                        if *node > other {
+                            continue;
+                        }
+                        let clashes: Vec<(
+                            MappingProperty,
+                            RelationOrigin,
+                            ExactMatchDisjointness,
+                        )> = MappingProperty::ALL
+                            .into_iter()
+                            .filter_map(|property| {
+                                let disjointness = property.disjoint_with_exact_match()?;
+                                let origin = *resource.mappings_of(property)?.get(other)?;
+                                Some((property, origin, disjointness))
+                            })
+                            .collect();
+                        if clashes.is_empty() {
+                            continue;
+                        }
+                        found.push(Finding::ExactMatchChainClash {
+                            concept: (*node).clone(),
+                            other: other.clone(),
+                            chain,
+                            clashes,
+                        });
+                    }
+                }
+
+                if cluster.is_complete() {
+                    continue;
+                }
+                if remaining == 0 {
+                    // The sweep, not this concept. A walk stops on `max_links` with exactly that
+                    // many links followed, so an empty remainder is the sweep's budget and
+                    // nothing about the concept it happened to be on.
+                    found.push(Finding::ExactMatchSweepExhausted {
+                        checked,
+                        unchecked: owed.len() - checked,
+                        links_walked: bound.max_links,
+                    });
+                    break;
+                }
+                // Budget left, so it was `max_members`: this one concept sits in a cluster larger
+                // than a single walk may cover, and the rest of the sweep continues.
+                found.push(Finding::ExactMatchClusterBoundReached {
+                    concept: (*node).clone(),
+                    reached: cluster.len(),
+                    links_walked: cluster.links_walked(),
                 });
             }
         }
@@ -7598,15 +7847,17 @@ mod tests {
         }
     }
 
-    /// **Example 62 is not supported**, and this test exists to say so rather than to let a green
-    /// suite imply otherwise. S45 makes `skos:exactMatch` an `owl:TransitiveProperty` and this
-    /// build does not close it: `adr/0025`'s rule is that a transitive closure is walked and not
-    /// stored, and the walk is part 2 of this item. `docs/UNTESTED.md` carries the gap.
+    /// **Example 62** — `<A> exactMatch <B> . <B> exactMatch <C> .` entails
+    /// `<A> skos:exactMatch <C>`, and this build now concludes it. Iteration 33 replaced this
+    /// test's predecessor, `s45_is_not_applied_so_an_exact_match_chain_does_not_close`, by hand
+    /// and with the walk in place — never by deleting it to make a build pass.
     ///
-    /// When part 2 lands, this assertion is expected to be **replaced** by its opposite — by
-    /// hand, deliberately, with the walk in place. It must never be deleted to make a build pass.
+    /// The **stored** links are unchanged and that is the point of asserting both halves here:
+    /// [`Resource::mappings_of`] still means "one-step links", S45's conclusion is reached by
+    /// [`CoreModel::exact_match_cluster`], and `adr/0025`'s rule — materialise what the schema
+    /// bounds, walk what the data bounds — is the reason.
     #[test]
-    fn s45_is_not_applied_so_an_exact_match_chain_does_not_close() {
+    fn example_62_closes_by_walking_and_not_by_storing() {
         let (a, b, c) = (ex("A"), ex("B"), ex("C"));
         let model = CoreModel::from_statements([
             maps(&a, MappingProperty::ExactMatch, &b),
@@ -7617,8 +7868,209 @@ mod tests {
             .into_iter()
             .map(|(other, _)| other)
             .collect();
-        assert_eq!(from_a, vec![b.clone()], "S45 is not applied");
+        assert_eq!(
+            from_a,
+            vec![b.clone()],
+            "the closure is walked, so the stored links are still the one-step ones"
+        );
+
+        let cluster = model.exact_match_cluster(&a, crate::EquivalenceBound::DEFAULT);
+        assert!(
+            cluster.contains(&c),
+            "S45 licenses the link Example 62 names"
+        );
+        assert_eq!(
+            cluster
+                .derivation_to(&c)
+                .expect("a two-step chain is S45's conclusion")
+                .rule,
+            SkosRule::S45
+        );
         assert!(model.is_consistent(), "{:?}", model.findings());
+        assert!(model.checks_are_complete(), "{:?}", model.findings());
+    }
+
+    /// The false negative S45's absence used to produce, now caught. `<A> exactMatch <B>`,
+    /// `<B> exactMatch <C>` and `<A> broadMatch <C>`: nothing in the file names an exact match
+    /// and a hierarchical mapping between the same pair, so the direct S46 pass sees nothing, and
+    /// the vocabulary was reported consistent until the closure was walked.
+    ///
+    /// This is the hub shape — a house vocabulary mapped to a hub, the hub mapped onwards — and
+    /// it is why the walk is worth its cost rather than a completeness exercise.
+    #[test]
+    fn a_clash_only_the_closure_reveals_is_reported_with_the_chain_that_found_it() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&b, MappingProperty::ExactMatch, &c),
+            maps(&a, MappingProperty::BroadMatch, &c),
+        ]);
+
+        let clash = model
+            .findings()
+            .iter()
+            .find(|finding| matches!(finding, Finding::ExactMatchChainClash { .. }))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| panic!("S46 across S45: {:?}", model.findings()));
+        assert!(clash.contains("S45"), "{clash}");
+        assert!(clash.contains("S46"), "{clash}");
+        assert!(clash.contains("skos:broadMatch"), "{clash}");
+        // The chain is the derivation, and the author wrote neither end of it as an exact match.
+        assert!(
+            clash.contains(&format!("<{EX}A> skos:exactMatch <{EX}B>"))
+                && clash.contains(&format!("<{EX}B> skos:exactMatch <{EX}C>")),
+            "{clash}"
+        );
+        assert!(!model.is_consistent());
+    }
+
+    /// The same pair joined directly *and* through a chain is one violation, reported once — by
+    /// the direct pass, which has the statement the author wrote. Two findings for one pair would
+    /// double-count a vocabulary's inconsistencies in the report's own summary.
+    #[test]
+    fn a_pair_clashing_both_directly_and_through_a_chain_is_reported_once() {
+        let (a, b) = (ex("A"), ex("B"));
+        let model = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&a, MappingProperty::BroadMatch, &b),
+        ]);
+
+        let clashes: Vec<&Finding> = model
+            .findings()
+            .iter()
+            .filter(|finding| {
+                matches!(
+                    finding,
+                    Finding::ExactMatchClash { .. } | Finding::ExactMatchChainClash { .. }
+                )
+            })
+            .collect();
+        assert_eq!(clashes.len(), 1, "{clashes:?}");
+        assert!(matches!(clashes[0], Finding::ExactMatchClash { .. }));
+    }
+
+    /// A vocabulary with no exact match at all pays nothing for the sweep, and one with a chain
+    /// and no disjoint link is consistent. The second half is the control: a pass that reported
+    /// every chain would make Example 62 an error.
+    #[test]
+    fn the_closure_sweep_is_silent_on_a_vocabulary_it_has_nothing_to_say_about() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let unmapped = CoreModel::from_statements([s(&a, &skos("broader"), &b)]);
+        assert!(unmapped.findings().is_empty(), "{:?}", unmapped.findings());
+
+        let chained = CoreModel::from_statements([
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&b, MappingProperty::ExactMatch, &c),
+        ]);
+        assert!(chained.findings().is_empty(), "{:?}", chained.findings());
+    }
+
+    /// The sweep's budget is spent **across** the concepts it walks, not handed to each of them
+    /// fresh — the lesson `adr/0027` paid for in the §8.4 sweep, asserted here before it could be
+    /// got wrong again.
+    ///
+    /// **Five separate two-concept clusters, not one chain**, and that shape is the whole test.
+    /// A budget large enough for one walk and too small for all of them is the only arrangement
+    /// the two readings disagree about: sharing it stops the sweep partway with concepts left
+    /// unwalked, while a fresh copy per walk finishes every one of them and reports nothing at
+    /// all. The first draft of this test used a single three-concept chain and **a per-walk
+    /// budget passed it**, because one oversized walk exhausts the remainder either way. That was
+    /// caught by mutating the code the test was written to protect, which is the only thing that
+    /// would have caught it.
+    #[test]
+    fn the_closure_budget_is_shared_across_the_sweep() {
+        // Each walk costs two links: out to the other concept, and back along S44's converse.
+        // Ten owed concepts, twenty links in total, and a budget for two and a half walks.
+        const PAIRS: usize = 5;
+        const BUDGET: usize = 5;
+
+        let pairs = || {
+            (0..PAIRS).map(|pair| {
+                maps(
+                    &ex(&format!("A{pair}")),
+                    MappingProperty::ExactMatch,
+                    &ex(&format!("B{pair}")),
+                )
+            })
+        };
+
+        let mut builder = CoreModel::builder()
+            .with_equivalence_bound(crate::EquivalenceBound::new(usize::MAX, BUDGET));
+        for statement in pairs() {
+            builder.push(statement);
+        }
+        let model = builder.build();
+
+        let (checked, unchecked, links_walked) = model
+            .findings()
+            .iter()
+            .find_map(|finding| match finding {
+                Finding::ExactMatchSweepExhausted {
+                    checked,
+                    unchecked,
+                    links_walked,
+                } => Some((*checked, *unchecked, *links_walked)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the sweep must report giving up: {:?}", model.findings()));
+        assert_eq!(links_walked, BUDGET, "the budget is what was spent");
+        assert!(
+            checked < PAIRS * 2,
+            "a shared budget cannot reach every concept: {checked} of {}",
+            PAIRS * 2
+        );
+        assert_eq!(
+            checked + unchecked,
+            PAIRS * 2,
+            "every concept holding an exact match is either checked or counted as not"
+        );
+        assert!(
+            !model.checks_are_complete(),
+            "an abandoned check must never read as a finished one"
+        );
+
+        // And the same vocabulary with room finishes silently, so the difference is the budget
+        // and not the graph.
+        assert!(CoreModel::from_statements(pairs()).checks_are_complete());
+    }
+
+    /// One concept in a cluster too wide to walk is not the sweep giving up, and the two findings
+    /// say different things. `max_members` stops one walk with budget left over; the sweep goes
+    /// on to the next concept.
+    #[test]
+    fn one_oversized_cluster_is_not_the_sweep_running_out() {
+        let (a, b, c) = (ex("A"), ex("B"), ex("C"));
+        let mut builder = CoreModel::builder()
+            .with_equivalence_bound(crate::EquivalenceBound::new(1, usize::MAX));
+        for statement in [
+            maps(&a, MappingProperty::ExactMatch, &b),
+            maps(&b, MappingProperty::ExactMatch, &c),
+        ] {
+            builder.push(statement);
+        }
+        let model = builder.build();
+
+        let reached: Vec<String> = model
+            .findings()
+            .iter()
+            .filter(|finding| matches!(finding, Finding::ExactMatchClusterBoundReached { .. }))
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            reached.len(),
+            3,
+            "one per concept in the cluster: {reached:?}"
+        );
+        assert!(reached[0].contains("without closing"), "{:?}", reached[0]);
+        assert!(
+            !model
+                .findings()
+                .iter()
+                .any(|finding| matches!(finding, Finding::ExactMatchSweepExhausted { .. })),
+            "the sweep had budget left: {:?}",
+            model.findings()
+        );
+        assert!(!model.checks_are_complete());
     }
 
     /// **Example 66** — a reflexive mapping, marked consistent: none of the five properties is

@@ -6,6 +6,7 @@
 //! requirements. See `docs/COMPETITIVE.md`.
 
 mod ancestry;
+mod equivalence;
 mod labels;
 mod mapping;
 mod model;
@@ -22,6 +23,7 @@ mod xl;
 mod scale;
 
 pub use ancestry::{Ancestry, AncestryBound};
+pub use equivalence::{EquivalenceBound, ExactMatchCluster};
 pub use labels::{
     LabelKind, LanguageCoverage, LexicalLabel, RDF_LANG_STRING, SKOS_ALT_LABEL, SKOS_HIDDEN_LABEL,
     SKOS_PREF_LABEL, XSD_STRING,
