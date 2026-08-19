@@ -1705,3 +1705,55 @@ Do not delete it — the record of what took how long to close is the signal.
   extension point, read end to end. Recorded as a proposal rather than taken, because finding one
   is research and not engineering.
 - **Opened:** iteration 31
+
+### S45 is not applied, so `skos:exactMatch` is a link and not an equivalence class
+
+- **Kind:** partial-standard
+- **What is proven:** S38–S44 and S46 of §10, against the specification's Examples 49–61 and
+  63–68, in the model and end to end through the binary. The absence of S45 is pinned by
+  `s45_is_not_applied_so_an_exact_match_chain_does_not_close`, and `openbiz inspect` prints the
+  gap in every report that contains a mapping.
+- **What is not:** Example 62. `<A> skos:exactMatch <B>` and `<B> skos:exactMatch <C>` entails
+  `<A> skos:exactMatch <C>` and we do not conclude it. A customer who mapped their vocabulary to a
+  hub and the hub to a third party will see two links where SKOS licenses three, and **S46 is
+  checked only over the links we hold** — so a clash that is only visible through the closure
+  (`<A> exactMatch <B> exactMatch <C>`, with `<A> broadMatch <C>`) is reported as a consistent
+  vocabulary. That is the sharpest part of this gap: the missing entailment also silences an
+  integrity condition, and a false "no violation" is worse than a missing conclusion.
+- **What would close it:** part 2 of the mapping item in `docs/BUILD-PLAN.md` — the closure as a
+  bounded walk over an undirected cluster, with the path as its derivation, and S46 re-checked
+  across it. `adr/0029` records why it is a walk and why its shape differs from `ancestry`.
+- **Opened:** iteration 32
+
+### A mapping link's cost has never been measured, and the scale harness cannot produce one
+
+- **Kind:** partial-coverage
+- **What is proven:** nothing about cost. The arithmetic is that a stated `skos:broadMatch` now
+  produces a mapping entry, its S43 converse, a lifted `skos:broader`, that link's converse, both
+  transitive variants, and a derivation for each — more per statement than the 3.9 KiB per stated
+  `skos:broader` that `adr/0024` measured, which was already the largest per-statement cost in the
+  model.
+- **What is not:** any of it. `crates/openbiz-skos/src/scale.rs` generates concepts, hierarchies
+  and associative links, and **no mapping links at all**, so every shape it measures is a
+  vocabulary with no outward links. A thesaurus mapped concept-for-concept to a second one is an
+  ordinary enterprise artefact and is exactly the shape nothing here has ever been run against.
+  This is the same finding iteration 31 recorded about labels and notes, on a third axis: the
+  generator has one dimension and the model now has four.
+- **What would close it:** a mapping row in the scale harness — a vocabulary of N concepts each
+  carrying one `skos:broadMatch` and one `skos:exactMatch` to a second namespace — measured at 10k
+  and 100k, with the per-link cost compared against `adr/0024`'s number for a stated relation.
+- **Opened:** iteration 32
+
+### There is no per-concept view of what a concept is mapped to
+
+- **Kind:** no-production-caller
+- **What is proven:** the vocabulary-level answer. `openbiz inspect` counts mapping links by kind,
+  says how many were inferred and under which statement, and prints every derivation.
+- **What is not:** the concept-level one. `Resource::mappings` and `Resource::mappings_of` are
+  public, tested, and called only by the report's counters — nothing asks "what is *this* concept
+  joined to, and which of those links did we infer?". `openbiz notes` is the shape that answer
+  wants and it does not exist for mappings, so an author reading "4 exact mapping links" in a
+  100k-concept vocabulary has no command that will show them which four.
+- **What would close it:** `openbiz mappings <graph> <resource>`, carried as part 2 of the mapping
+  item in `docs/BUILD-PLAN.md`.
+- **Opened:** iteration 32

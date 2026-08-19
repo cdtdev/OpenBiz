@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 11 of 23 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 12 of 24 items done — 24 and not 23 because the mapping-properties item was split in two at iteration 32. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -84,6 +84,16 @@ cost the graph in memory. `openbiz inspect` names the declared properties rather
 them, because a number an author cannot check against their own file is not a report. See
 `adr/0028`, and note that `Derivation` can now cite RDFS as well as SKOS, because citing an
 S-number for something SKOS does not state would be a guess wearing a citation.
+
+**And a vocabulary can now say what it is joined to.** §10's five mapping properties are read and
+closed (S38–S44), and the load-bearing decision is that a mapping is **not** a section of its own:
+S41 lifts `skos:broadMatch`, `skos:narrowMatch` and `skos:relatedMatch` into §8's relations before
+those are closed, so `openbiz ancestors` climbs through a mapping into another vocabulary's concept
+and §8.4's S27 catches §10.6.2's Examples 59–61 with no rule of §10's own. S46, §10's only
+integrity condition, is reported once per pair and cites §10.4's note where the specification
+argues by inversion rather than naming the property. **S45 is deliberately not applied** — the
+transitive closure of `skos:exactMatch` is a walk we have not built, and every report that contains
+a mapping says so rather than leaving the reader to assume. See `adr/0029`.
 
 **And we now know what that costs, which changed the design of the next item before it was
 written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
@@ -905,7 +915,53 @@ the interface is a core differentiator, and building it late means retrofitting 
       > be the same mechanism and the resolution is written to accept it, but B.4.4.1 forbids
       > closing a refinement of a symmetric property, which is a decision this item does not make.
       > `UNTESTED.md`'s iteration-23 entry stays open and it is a proposal.
-- [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
+- [x] Mapping properties, part 1 — the five properties, the sub-property lattice, and §10's
+      only integrity condition: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`,
+      `relatedMatch`
+      > Split from one item at iteration 32 and the first half landed there. §10's S38–S44 and S46
+      > are applied; **S45 is not** and is part 2 below, so the split is visible rather than
+      > implied.
+      > **The load-bearing decision is that a mapping is not a section of its own.** S41 makes
+      > `skos:broadMatch` a sub-property of `skos:broader`, so the mapping links are closed
+      > *before* §8's pass and lifted into it — which means `openbiz ancestors` climbs through a
+      > mapped concept into another vocabulary's, and §8.4's S27 catches Examples 59, 60 and 61
+      > with no rule of §10's own. A build that kept them apart would report every mapped
+      > thesaurus as flat and every mapped vocabulary as an island, which is the silo
+      > `CLAUDE.md` §1.7 exists to prevent. See `adr/0029`.
+      > **S43 and S44 are closed, S42 lifts every exact match to a close match, and S40 then S39
+      > carry both ends up to `skos:Concept`** — through `skos:mappingRelation`, in two printed
+      > steps, because S19 constrains a property no author writes. `skos:exactMatch` reaches the
+      > super-property through S42 rather than directly, since S40 does not name it, and the
+      > derivation prints that step rather than skipping it. Examples 54–57.
+      > **S46 is one finding per pair, not one per end**, and it distinguishes the two arguments
+      > the specification makes: S46 names `skos:broadMatch` and `skos:relatedMatch` outright, and
+      > §10.4's note reaches `skos:narrowMatch` through symmetry and inversion. Quoting S46 flatly
+      > at a `skos:narrowMatch` clash would cite a statement that does not mention the property in
+      > front of the reader.
+      > **What §10 permits, we do not report**, each with a test asserting the silence: a mapping
+      > inside one concept scheme (Example 58), a reflexive mapping (Example 66), and cycles and
+      > alternate paths in `skos:broadMatch` (Examples 67, 68) — which after S41 are cycles in
+      > `skos:broader` that the ancestry walk has to survive rather than complain about.
+      > **Production callers: two, and one of them found a defect.** `openbiz inspect` gains a
+      > mapping section, and `openbiz ancestors` now walks through a mapping link — both proven
+      > against the binary on disk. Running the report showed the *existing* semantic-relations
+      > line calling a link lifted under S41 "stated as skos:narrower", which is a statement the
+      > author never wrote; the two origins are now counted apart.
+      > **Acceptance:** §10's Examples 49–61 and 63–68, plus a test pinning S45's absence.
+- [ ] Mapping properties, part 2 — S45's transitivity, walked rather than stored, and a
+      per-concept view of what a vocabulary is mapped to
+      > `skos:exactMatch` is an `owl:TransitiveProperty` and this build does **not** close it, so
+      > Example 62's entailment does not follow and `openbiz inspect` says so in every report that
+      > has a mapping in it. `adr/0025`'s rule says the closure is a walk and not a table, and
+      > `adr/0029` records why the walk is a different shape from `ancestry`: an exact-match
+      > cluster is undirected, so it is a connected component rather than a path upwards, and
+      > §10.6.6 warns outright that "applications must be able to cope with cycles in
+      > skos:exactMatch and skos:closeMatch".
+      > Also here: **S46 across that closure** (an exact-match chain that reaches a concept the
+      > first one broad-matches is a clash nobody wrote), and an `openbiz mappings <graph>
+      > <resource>` command — the analogue of `openbiz notes`, printing what one concept is joined
+      > to, with the origin and quoted rule for every link the graph did not state. The counts in
+      > `openbiz inspect` are the vocabulary-level answer; there is no per-concept one yet.
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number
 - [ ] Concept tree query API: children, ancestors, siblings, paths-to-root, with cycle detection
 - [ ] Full-text search across labels with language filtering and prefix/infix matching

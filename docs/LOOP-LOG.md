@@ -2362,3 +2362,69 @@ look competent disables the one signal that catches a stuck loop.
   graphs this loop wrote", which is weaker than the checked box implies, and the same doubt applies
   to every §2 standard we claim, because **nothing in this repository has ever been read against a
   vocabulary somebody else published.**
+
+## Iteration 32 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `9149ae0`.** Took the next unchecked,
+  unblocked Phase 2 item: **mapping properties**, §10. (The two unchecked items above it are
+  Phase 1's SPARQL Update and Graph Store Protocol, both deferred at iteration 11 on charter
+  grounds, and the candidate seam part 3, which is in `BLOCKED.md` on authentication.)
+- **Split in place, because §10 is two items wearing one bullet.** Part 1 — the five properties,
+  the sub-property lattice, S46 — landed here. Part 2 — S45's transitivity and a per-concept view
+  — is now its own `- [ ]` with the reasoning on it. The split is on the same line `adr/0025`
+  drew for §8: what is bounded by the schema is materialised, what is bounded by the data is
+  walked, and the walk is an item.
+- **The decision worth the ADR is that a mapping is not a section of its own.** S41 makes
+  `skos:broadMatch` a sub-property of `skos:broader`, so §10 is closed *before* §8 and its links
+  are lifted into it. Three things fall out and all three are the point: `openbiz ancestors`
+  climbs through a mapping into another vocabulary's concept; §8.4's S27 catches §10.6.2's
+  Examples 59, 60 and **61** — a clash two `skos:broadMatch` steps apart that only the transitive
+  walk finds — with no rule of §10's own; and the hierarchy counts stop reporting a heavily-mapped
+  thesaurus as a flat list. The tempting parallel structure would have been wrong for a reason
+  §10.6.1 states in its own words: "an intimate connection between the SKOS semantic relation
+  properties and the SKOS mapping properties".
+- **Running the product found a defect the green suite did not, again — and this time in code the
+  item was not touching.** With everything passing I read an actual `openbiz inspect` report and
+  saw `1 hierarchical link(s), 1 of them stated as skos:narrower` for a vocabulary whose only
+  statement was a `skos:broadMatch`. That line counted *any* entailed `skos:broader` as one the
+  author wrote as `skos:narrower`, which was true until this commit gave S41 a second way to
+  produce one. Fixed by counting the origins apart, with the lifted ones on their own line. This
+  is the fifth iteration running to find prose falsified by the commit reading it, and the second
+  found by running the binary rather than by reading the file being edited.
+- **What §10 permits is asserted as silence, not left to chance.** A mapping inside one concept
+  scheme (Example 58), a reflexive mapping (Example 66), and cycles and alternate paths in
+  `skos:broadMatch` (Examples 67, 68) each have a test. The last two are the interesting ones:
+  after S41 they are cycles in `skos:broader`, so the ancestry walk has to terminate on them and
+  stay quiet, and §10 is where that gets proven rather than assumed.
+- **S45 is not applied and the product says so, not just the ledger.** Every report containing a
+  mapping prints that `skos:exactMatch` is transitive and this build does not close it. The gap is
+  sharper than a missing conclusion: S46 is checked over the links we hold, so a clash visible only
+  through the closure is currently reported as a consistent vocabulary. `UNTESTED.md` says that in
+  those words, and the test pinning S45's absence carries a comment saying it is to be replaced by
+  its opposite when the walk lands, never deleted to make a build pass.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **592 Rust tests, up from 558.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it. Three mutants run and all three caught: disabling the S41 lift fails three
+  tests, reporting S46 from both ends fails two, and restoring the old "any entailed `skos:broader`
+  was stated as `skos:narrower`" count fails one.
+- **A self-inflicted scare worth recording.** A `git checkout` of one file, used to revert a
+  deliberate mutant, silently reverted every change in that file — the whole `inspect.rs` half of
+  the item. It was noticed immediately and reconstructed, but the lesson is that a mutation test
+  must be reverted from a copy taken for that purpose and never with a command that also discards
+  real work.
+- **Recorded:** `adr/0029`. Three `UNTESTED.md` entries opened, none closed. No proposals.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T03:35Z.
+- **Still uncertain:** whether lifting mapping links into §8 will hold up under a real mapped
+  vocabulary, for a reason that is about size rather than correctness. Every entailment here is
+  proven against the specification's own examples, which are two and three concepts long, and the
+  cost is arithmetic nobody has measured: a stated `skos:broadMatch` now produces a mapping entry,
+  its converse, a lifted `skos:broader`, that link's converse, both transitive variants, and a
+  derivation for each — more per statement than the 3.9 KiB `adr/0024` measured for a stated
+  relation, which was already the most expensive thing in the model. `scale.rs` generates no
+  mapping links at all, so a thesaurus mapped concept-for-concept to a second one — an ordinary
+  enterprise artefact, and the exact shape this item exists to serve — has never been read by this
+  build at any size. The honest claim is "§10's examples pass and a 100k-concept mapped vocabulary
+  is untried", and the doubt is now on its third axis: iteration 31 said the generator produces no
+  labels or notes, and it produces no mappings either. The next blind-spot pass should widen the
+  generator rather than deepen one more rule, because four dimensions of the model are now measured
+  along one of them.
