@@ -83,6 +83,13 @@ pub enum Command {
         /// The IRI of the vocabulary graph to read.
         graph: String,
     },
+    /// Report what is above one concept in the hierarchy, and why. Reads and nothing else.
+    Ancestors {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+        /// The IRI of the concept to walk up from.
+        concept: String,
+    },
     /// List every proposed change the store holds.
     Candidates,
     /// Show one proposed change, with the statements it would add.
@@ -117,6 +124,8 @@ Usage:
   openbiz retract <graph> <file>
                              propose the file's statements as removals from <graph>
   openbiz inspect <graph>    report what <graph> holds in SKOS terms, and why
+  openbiz ancestors <graph> <concept>
+                             report what is above <concept> in the hierarchy, and why
   openbiz candidates         list the proposed changes waiting for a decision
   openbiz candidate <id>     show one proposed change and the statements it would add
   openbiz approve <id>       apply a proposed change to its vocabulary
@@ -131,6 +140,11 @@ Neither import nor retract writes to a vocabulary. Each reads the file — the s
 the file extension — stages the statements where you can read them, and records who proposed what
 and why. `openbiz approve` is what applies them, and it records who approved them. Approving and
 rejecting need a name to record: OPENBIZ_ACTOR if it is set, otherwise USER or LOGNAME.
+
+Ancestors only reads. It walks `skos:broaderTransitive` up from one concept and prints every
+concept above it with the path that reached it, which for a link nobody stated is the derivation
+S24 licensed. The closure is never stored — a legal SKOS hierarchy can be arbitrarily deep, and a
+cycle in it is legal too — so this walks it on demand and says so if it stops at its bound.
 
 Inspect only reads. It reports the concepts, concept schemes, and collections a vocabulary holds,
 including the ones no statement typed — SKOS itself says a resource with concepts in it is a
@@ -240,6 +254,17 @@ impl Command {
                 "inspect",
                 Self::Inspect {
                     graph: Self::text("inspect", "the IRI of a vocabulary to read", &mut args)?,
+                },
+            ),
+            "ancestors" => (
+                "ancestors",
+                Self::Ancestors {
+                    graph: Self::text("ancestors", "the IRI of a vocabulary to read", &mut args)?,
+                    concept: Self::text(
+                        "ancestors",
+                        "the IRI of a concept to walk up from",
+                        &mut args,
+                    )?,
                 },
             ),
             "candidates" => ("candidates", Self::Candidates),
@@ -376,6 +401,18 @@ pub enum CommandError {
     /// The store refused the operation, or failed during it.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// The vocabulary does not mention the concept that was asked about.
+    ///
+    /// Refused rather than answered with "nothing is above it", which is what a root concept
+    /// says. The two are indistinguishable in the output and opposite in meaning, and at a
+    /// command line a mistyped IRI is far likelier than a genuine root.
+    #[error("{graph} says nothing about {concept}, so there is nothing to walk up from")]
+    NoSuchConcept {
+        /// The concept IRI that was asked about.
+        concept: String,
+        /// The vocabulary that was read.
+        graph: String,
+    },
 }
 
 /// Environment variable naming who is responsible for a decision taken on the command line.
@@ -834,6 +871,36 @@ mod tests {
             parse(&["candidates", "7"]),
             Err(ArgsError::TooManyArguments {
                 command: "candidates",
+                extra: 1
+            })
+        );
+    }
+
+    /// Two arguments, both required, in that order — and a third refused, because an unquoted
+    /// IRI is not the mistake here but a swapped pair would be silently wrong.
+    #[test]
+    fn ancestors_takes_a_vocabulary_and_a_concept() {
+        assert_eq!(
+            parse(&[
+                "ancestors",
+                "https://example.org/regions",
+                "https://example.org/regions/japan"
+            ]),
+            Ok(Command::Ancestors {
+                graph: "https://example.org/regions".to_owned(),
+                concept: "https://example.org/regions/japan".to_owned(),
+            })
+        );
+        let error = parse(&["ancestors", "https://example.org/regions"])
+            .expect_err("a concept is required");
+        assert!(
+            error.to_string().contains("concept"),
+            "the message must say what was missing: {error}"
+        );
+        assert_eq!(
+            parse(&["ancestors", "a", "b", "c"]),
+            Err(ArgsError::TooManyArguments {
+                command: "ancestors",
                 extra: 1
             })
         );

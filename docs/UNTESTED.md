@@ -75,34 +75,56 @@ Do not delete it — the record of what took how long to close is the signal.
   phase rather than a discovery inside it.
 - **Opened:** iteration 25 (product-owner pass)
 
-### S24 and S27 are not implemented, so `skos:broaderTransitive` is one step and §8.4 is unchecked
+### ~~S24 and S27 are not implemented, so `skos:broaderTransitive` is one step and §8.4 is unchecked~~
 - **Kind:** partial-standard
-- **What is proven:** S18–S23, S25 and S26 are applied and each has a test naming its number. A
-  `skos:broader` link is closed into all four of `skos:broader`, `skos:narrower`,
-  `skos:broaderTransitive` and `skos:narrowerTransitive`, in whichever direction the author wrote
-  it, and a test asserts the two directions give identical models. Both ends are typed
-  `skos:Concept` through S22, S21 and then S19/S20, and the whole chain is printed by
-  `openbiz inspect`.
-- **What is not:** **S24** — `skos:broaderTransitive` and `skos:narrowerTransitive` are
-  `owl:TransitiveProperty` — is not applied. So `Resource::relations(BroaderTransitive)` holds
-  one-step links only: the ones S22 lifted and the ones the graph stated. A caller that reads it
-  as "the ancestors of this concept" gets a wrong answer for any hierarchy deeper than one level,
-  and a test (`the_transitive_closure_is_not_taken_and_stops_at_one_step`) pins that this is the
-  current behaviour rather than leaving it to be discovered. **S27** — §8.4's only integrity
-  condition, `skos:related` disjoint with `skos:broaderTransitive` — is therefore not applied
-  either, because two of the four examples the specification gives for it (Examples 27 and 29) are
-  inconsistent *only* through the closure. So §8's examples stand as follows today: Example 25 is
-  consistent and we say so; Examples 26, 27, 28 and 29 are marked "not consistent" by the
-  specification and **we report all four as clean**. `example_26_is_not_yet_reported_and_its_links_are_both_present`
-  asserts that, so the gap is a red test the day it is closed and not a silent one.
-- **The risk while it is open** is a false green, and it is the sharpest kind: a vocabulary that
-  violates §8.4 gets "no SKOS integrity condition is violated by this graph" from `openbiz inspect`.
-  That sentence is true of every condition we have implemented and misleading about the one we
-  have not. Nothing in the report says which conditions were checked.
-- **What would close it:** the next build-plan item — the transitive closure with cycle
-  containment, and S27 read off it with a derivation path that names each step. Until then this
-  entry is the only place that says the report's closing sentence is narrower than it reads.
+- **Closed, iteration 28.** S24 is applied by walking (`CoreModel::ancestry`) and S27 is read off
+  the walk at build time. §8.5's Examples 25–29 each come out to the consistency the
+  specification prints beside it, in one test that asserts all five; Examples 33, 36 and 37 are
+  consistent as marked; and `openbiz ancestors <graph> <concept>` is the production caller, proven
+  end to end against the binary on disk. See `docs/adr/0025`.
+- **What replaced it, and it is not nothing:** the entry below on the *cost* of not storing the
+  closure, and the entry below that on what the report still does not enumerate. The false green
+  this entry named — "no SKOS integrity condition is violated by this graph" reading as a
+  complete check — is now a three-way sentence, so a check that gave up says so; but the report
+  still does not list *which* conditions it checked, so the sentence remains narrower than it
+  reads for every condition this build has not implemented at all.
 - **Opened:** iteration 24
+
+### The walk's cost is unmeasured, which is the other half of `adr/0024`'s question
+- **Kind:** unproven-at-scale
+- **What is proven:** the walk is bounded and terminates on a cyclic hierarchy, and the bound is
+  reported rather than silently truncating. Correctness is covered by §8.5's and §8.6's own
+  examples.
+- **What is not:** anything about time or memory at size. `adr/0024` measured what *storing* the
+  closure costs and this build stores nothing, so the open number is now the cost of **not**
+  storing it: the S27 pass is one walk per concept with a `skos:related`, run inside every
+  `openbiz inspect`, and `scale.rs` does not exercise it. A hierarchy that is deep and densely
+  cross-linked associatively is the shape that would hurt, and no fixture in the tree is one.
+- **The risk while it is open:** a vocabulary where `openbiz inspect` becomes slow or hits the
+  bound, discovered by a customer rather than by us. The bound makes the failure honest — the
+  report says the check was abandoned — but a validator that declines to answer is still one
+  that declines to answer.
+- **What would close it:** extending `crates/openbiz-skos/src/scale.rs` to the walk, at the same
+  10k/100k/1M sizes and across the same four hierarchy shapes, plus a shape it does not yet have:
+  a deep hierarchy with associative links on every concept. Proposed rather than done, because
+  iteration 26 established that measuring a traversal that does not exist yet produces a number
+  that agrees with you, and the same argument says the measurement belongs in its own iteration
+  rather than in the one that built the thing.
+- **Opened:** iteration 28
+
+### The default ancestry bound has never been hit outside a test that lowered it
+- **Kind:** partial-coverage
+- **What is proven:** that hitting a bound is reported as `Severity::Unchecked` rather than read as
+  a pass, and that the same graph with room comes out inconsistent — so the difference is
+  demonstrably the bound and not the data. `AncestryBound::new(1, 8)` is how the test reaches it.
+- **What is not:** the actual default, `AncestryBound::DEFAULT` — 100 000 ancestors and
+  1 000 000 links. Nothing in the repository comes within three orders of magnitude of either, so
+  the numbers are a judgement about vocabularies we have not seen. If they are too low a real
+  thesaurus is refused an answer it should get; if they are too high the walk is the reason a
+  request hangs, which is what the bound exists to prevent.
+- **What would close it:** the scale measurement above, which would say what a walk of each size
+  actually costs and turn the two numbers from a guess into a budget.
+- **Opened:** iteration 28
 
 ### ~~The semantic relation model holds four entries per stated link, and the ceiling is unmeasured~~
 - **Kind:** partial-coverage

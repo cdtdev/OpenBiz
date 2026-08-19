@@ -22,7 +22,7 @@
 //! but a federated one might. That statement is read — S18 refuses a literal on it and S19/S20
 //! type both ends — and then it stops, because there is no sub-property it could be filed under.
 //!
-//! # What is closed, and what is not yet
+//! # What is closed here, and what is answered by walking instead
 //!
 //! Closed here, each entailed link carrying a [`RelationOrigin`] that names the statement that
 //! licensed it:
@@ -34,20 +34,20 @@
 //!   of `skos:narrowerTransitive`. So every asserted link is also a transitive-variant link.
 //! - **S23** — `skos:related` is an `owl:SymmetricProperty`, so a relation entails its converse.
 //!
-//! **Not yet closed: S24**, which makes the two transitive variants `owl:TransitiveProperty`. So
-//! `skos:broaderTransitive` here holds the one-step links S22 lifted and the ones the graph stated,
-//! and *not* their closure. It is the next build-plan item, together with the integrity condition
-//! S27 that needs it — §8.6's Examples 27 and 29 are inconsistent only once the closure exists, so
-//! neither the closure nor the condition is claimed until both land. In `docs/UNTESTED.md`.
+//! **Deliberately not closed here: S24**, which makes the two transitive variants
+//! `owl:TransitiveProperty`. `skos:broaderTransitive` in this module holds the one-step links S22
+//! lifted and the ones the graph stated, and *not* their closure. That is not a gap — it is
+//! `docs/adr/0025`, and it is permanent. A caller reading
+//! [`SemanticRelation::BroaderTransitive`] out of a [`Resource`](crate::Resource) will always get
+//! one-step links, which is why the accessor is named for the property and never for "ancestors".
 //!
-//! **And when it does land, it will not be stored here.** `docs/adr/0024` measured what the
-//! closure would cost and decided against materialising it at any size: a chain of 100 000 links
-//! is a legal SKOS graph and licenses five thousand million pairs, and a stored
-//! `(Node, RelationOrigin)` can cite S24 but cannot name the path it took, which
-//! `CLAUDE.md` §3 requires of every inference. Ancestry is therefore a traversal answered on read.
-//! A caller reading [`SemanticRelation::BroaderTransitive`] out of a [`Resource`](crate::Resource)
-//! will keep getting one-step links after S24 lands, permanently and by design — which is why the
-//! accessor is named for the property and never for "ancestors".
+//! **S24 is applied by walking**, in [`ancestry`](crate::Ancestry). `docs/adr/0024` measured what
+//! storing the closure would cost and ruled it out at any size: a chain of 100 000 links is a
+//! legal SKOS graph and licenses five thousand million pairs, and a stored
+//! `(Node, RelationOrigin)` can cite S24 but cannot name the path it took, which `CLAUDE.md` §3
+//! requires of every inference. §8.4's integrity condition **S27** — `skos:related` is disjoint
+//! with `skos:broaderTransitive` — is read off that walk, so §8.5's Examples 26 through 29 all
+//! come out inconsistent as the specification marks them.
 //!
 //! # Polyhierarchy is not a defect and is not treated as one
 //!
@@ -86,7 +86,8 @@ pub enum SemanticRelation {
     /// `skos:narrower` — the subject has the object as a narrower concept.
     Narrower,
     /// `skos:broaderTransitive`. Holds S22's lifted links and the graph's own; **not** closed
-    /// under S24 yet.
+    /// under S24, which is a walk ([`CoreModel::ancestry`](crate::CoreModel::ancestry)) and not a
+    /// table.
     BroaderTransitive,
     /// `skos:narrowerTransitive`. As above.
     NarrowerTransitive,

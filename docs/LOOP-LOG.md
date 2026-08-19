@@ -2066,3 +2066,78 @@ look competent disables the one signal that catches a stuck loop.
   do not know how many others are outstanding, and the honest way to find out is to re-read
   iteration 25's output against the live documents once, deliberately — which is a smaller job than
   the CI check and would tell you whether the CI check is worth building.
+
+## Iteration 28 — 2026-08-19
+- **Started dirty, and that was the finding before any code was read.** `main` was green on
+  `54549e3`, both inboxes empty — but the tree was on `item/phase2-transitive-ancestry` with 12
+  modified files and 3 untracked ones, ~850 lines of new code and an ADR, all uncommitted. A
+  previous invocation built Phase 2 item **2b** and exited before landing it. The standing rule
+  says inspect and then either commit honestly or reset; it builds, it is coherent, and it is the
+  item the plan asks for next, so this iteration **verified it end to end and landed it** rather
+  than starting over. That is the whole item: no second item was taken.
+- **What it does.** S24 — `skos:broaderTransitive` and `skos:narrowerTransitive` are
+  `owl:TransitiveProperty` — is applied by a **bounded breadth-first walk** in
+  `crates/openbiz-skos/src/ancestry.rs`, computed on read and never stored, exactly as `adr/0024`
+  bound it. `Resource::relations` still means "links under this property" and always will.
+  §8.4's S27 (`skos:related` disjoint with `skos:broaderTransitive`) is read off that walk at
+  build time, one walk per concept that has a `skos:related` — a vocabulary with no associative
+  links pays nothing. `adr/0025` records both.
+- **Production caller:** `openbiz ancestors <graph> <concept>`, which prints every concept above
+  one with the path that reached it, proven against the binary on disk. **The path is the
+  derivation** — for a link nobody wrote, the chain is the difference between a verdict and an
+  explanation, which is `CLAUDE.md` §3's requirement and `COMPETITIVE.md`'s record of the
+  incumbents' weakest ground. S27 reaches the operator through `openbiz inspect`, which now
+  reports **Example 27's indirect clash — a graph it called clean until this iteration**.
+- **Acceptance, as the plan set it.** §8.5's Examples 25–29, all five, in **one** test, because the
+  point of the set is the contrast: 25 is consistent and 26–29 are not, and a build that got them
+  all wrong in the same direction would pass four of five split tests. §8.6's Examples 33, 36 and
+  37 too — related to itself, broader than itself, and a cycle are each consistent and none is a
+  finding. A cycle terminates and comes back as the origin being its own ancestor, with a path
+  that names it.
+- **The sharpest thing in the diff is one enum variant.** `Severity::Unchecked`, and
+  `CoreModel::checks_are_complete()` beside `is_consistent()`, so `openbiz inspect` closes with one
+  of **three** sentences instead of two. A bounded check that gave up and reported nothing is
+  otherwise indistinguishable from one that ran to the end and found nothing — a false green on
+  exactly the vocabularies most likely to be broken. That closes half of the `UNTESTED.md` entry
+  iteration 24 opened; the report still does not enumerate *which* conditions it checked, and that
+  half is open and now a proposal.
+- **A stale claim the diff also carried, of the shape iteration 27 was worried about.** `README.md`
+  still said "`skosxl:labelRelation` is not read yet" — untrue since iteration 26 landed
+  `adr/0022`. Nobody reported it; it was found while reading the inherited diff. Iteration 27's
+  closing doubt was "does a recorded correction reach the places that publish it", and this is a
+  second data point saying not reliably. It is not a `COMPETITIVE.md` retired *research* claim, so
+  it does not belong in that table, but it is the same failure with a different origin: a status
+  sentence that was true when written and nobody re-read when the status changed.
+- **Scope, honestly.** The walk goes **up** only. Descendants are the same function with the
+  inverse property and have no caller, so they arrive with the concept-tree item —
+  `CLAUDE.md` §4 calls that not-done rather than ahead. And nothing measures what the walk *costs*:
+  `adr/0024` measured storing and this stores nothing, so the repository now has a hard number for
+  the option it rejected and none for the one it shipped.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **502 Rust tests, up from 478.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it.
+- **Recorded:** `adr/0025`. One `UNTESTED.md` entry struck through and closed, **two opened** — the
+  walk's unmeasured cost, and that `AncestryBound::DEFAULT` (100 000 ancestors, 1 000 000 links)
+  has never been hit outside a test that lowered it, so the two numbers are a judgement about
+  vocabularies nobody here has seen. Two `PROPOSED.md` entries, neither promoted.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T01:40Z.
+- **One doubt I closed instead of writing down.** Drafting the line below, the concrete worry was
+  that the S27 pass walks **up** only and I had convinced myself one direction suffices from a doc
+  comment and §8.4's note, with no test where the associative link is stated at the end the
+  hierarchy does *not* climb from. Naming it made it cheap, so I wrote it rather than recorded it:
+  `s27_is_found_from_whichever_end_the_hierarchy_climbs_from` asserts both orientations with the
+  link stated once, and each reports the pair exactly once. It passed first time — S23 does put
+  the link at both ends before the pass runs — so the argument was right and is now checked.
+- **Still uncertain:** whether an iteration that inherits a finished-looking tree can actually
+  audit it, or only re-check that it compiles. I read every line of the diff and every new test,
+  and everything I could *name* checked out — the bound arithmetic is off-by-one-free, the
+  predecessor map terminates, `derivation_to` correctly declines to credit S24 with a one-step
+  link, and the one gap I could articulate is now a passing test. But the failure mode of
+  reviewing a coherent diff is not the check you run and fail; it is the test you never think to
+  name, and a reviewer is systematically worse at that than the author who chose the coverage.
+  Closing the one hole I could see tells me nothing about how many I could not, and I have no way
+  from inside this iteration to estimate that number. What would actually settle it is a second
+  pass over `ancestry.rs` by an iteration with no memory of having read it — which is what the
+  next blind-spot pass is for, and it should treat this file as inherited-and-unaudited rather
+  than as landed-and-green.

@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), 8 of 19 items done. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), 9 of 19 items done. **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -58,10 +58,16 @@ that a sub-property of a symmetric property is not necessarily symmetric — see
 **And the vocabulary now has a shape**: §8's semantic relations are read and closed, so a
 hierarchy an author wrote in one direction reads in both, polyhierarchy is counted rather than
 complained about, and a `skos:broader` pointing at a collection is caught by a domain rule on a
-property nobody writes — see `adr/0023`. What is **not** there is the transitive closure, so
-`skos:broaderTransitive` is one step deep and §8.4's integrity condition is unchecked; that is the
-next item and `docs/UNTESTED.md` says exactly which of the specification's examples read as clean
-to us in the meantime.
+property nobody writes — see `adr/0023`. **And the hierarchy can now be read all the way up**: S24's
+transitive closure is applied by a bounded walk rather than stored — `openbiz ancestors <graph>
+<concept>` prints every concept above one with the path that reached it, which for a link nobody
+wrote *is* the derivation — and §8.4's integrity condition S27 is read off that walk, so §8.5's
+Examples 25–29 all come out to the consistency the specification prints beside them. Example 27's
+clash, between two concepts the author never linked directly, was reported as a clean vocabulary
+until iteration 28. A cycle stays consistent, terminates, and is named rather than complained
+about. See `adr/0025`.
+**And a check that gave up no longer reads as a check that passed:** `Severity` gained `Unchecked`
+and `openbiz inspect` closes with one of three sentences instead of two.
 
 **And we now know what that costs, which changed the design of the next item before it was
 written.** Iteration 26 measured the relation model at 10k, 100k and 1M links across four
@@ -766,7 +772,7 @@ the interface is a core differentiator, and building it late means retrofitting 
       > took **62.66 s** to build. That is against §1.5 and it is about what is already shipped,
       > not about what comes next. Two `UNTESTED.md` entries and three proposals; **not** fixed
       > here, because each fix changes a shipped public type and is its own item.
-- [ ] Semantic relations, part 2b — the transitive traversal and §8.4's integrity condition (S24,
+- [x] Semantic relations, part 2b — the transitive traversal and §8.4's integrity condition (S24,
       S27)
       > Split out of the item above at iteration 24, and split again at iteration 26. S24 makes `skos:broaderTransitive` and
       > `skos:narrowerTransitive` `owl:TransitiveProperty`; S27 makes `skos:related` disjoint with
@@ -783,8 +789,32 @@ the interface is a core differentiator, and building it late means retrofitting 
       > "ancestors" — permanently, and by design. The traversal is bounded and an answer that hit
       > its bound is distinguishable from one that ran out of ancestors, because `Some(0)` from an
       > abandoned walk reads as "this concept has no ancestors" for the concept that has most.
-      > Acceptance: §8.6's Examples 25–29, all five, each asserted to the consistency the
+      > Acceptance: §8.5's Examples 25–29, all five, each asserted to the consistency the
       > specification prints beside it.
+      > **Done at iteration 28**, and the acceptance test is one test asserting all five, because
+      > the point of the set is the contrast: 25 is consistent and 26–29 are not, and a build that
+      > got them all wrong in the same direction would pass four of five split tests. §8.6's
+      > Examples 33, 36 and 37 are covered too — a concept related to itself, broader than itself,
+      > and a cycle are each consistent and none is a finding.
+      > **The closure is a walk and is never stored**, exactly as `adr/0024` bound it:
+      > `CoreModel::ancestry` is a bounded breadth-first traversal, `Resource::relations` still
+      > means "links under this property", and the path falls out of the walk so a transitive
+      > conclusion cites the chain rather than asserting the endpoint. See `adr/0025`.
+      > **A bound that was hit is now sayable.** `Severity` gained `Unchecked` and
+      > `CoreModel::checks_are_complete()` sits beside `is_consistent()`, so `openbiz inspect`
+      > closes with one of three sentences instead of two — a check that gave up no longer reads
+      > as a check that passed. That closes half of the `UNTESTED.md` entry iteration 24 opened;
+      > the report still does not enumerate which conditions it checked, and that half is still
+      > open.
+      > **Production caller:** `openbiz ancestors <graph> <concept>`, which prints every concept
+      > above one and the path that reached it, proven end to end against the binary on disk. S27
+      > reaches the operator through `openbiz inspect`, which now reports Example 27's indirect
+      > clash — a graph it called clean until this iteration.
+      > **Scope, honestly:** the walk goes **up** only. Descendants are the same function with the
+      > inverse property and have no caller, so they arrive with the concept-tree item. Nothing
+      > measures what the walk costs at size — `adr/0024` measured storing and this stores nothing
+      > — which is `UNTESTED.md`'s replacement entry and the reason the default bound is a
+      > judgement rather than a budget.
 - [ ] Documentation properties: `definition`, `scopeNote`, `example`, `historyNote`, `editorialNote`
 - [ ] Mapping properties: `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch`
 - [ ] All SKOS integrity conditions from the specification, each with a test citing its S-number

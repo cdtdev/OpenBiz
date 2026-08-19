@@ -8,6 +8,7 @@ use axum::{routing::get, Json, Router};
 use openbiz_api::Health;
 
 mod accept;
+mod ancestors;
 mod cli;
 mod config;
 mod export;
@@ -17,6 +18,7 @@ mod shutdown;
 mod sparql;
 mod ui;
 
+pub use ancestors::ancestors;
 pub use cli::{
     back_up, candidates, decide, import, restore, retract, show, ArgsError, Command, CommandError,
     ACTOR_VARIABLE, USAGE,
