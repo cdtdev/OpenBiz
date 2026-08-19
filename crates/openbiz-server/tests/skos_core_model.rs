@@ -1285,3 +1285,149 @@ fn integrity_refuses_a_graph_the_store_does_not_hold() {
         stderr(&output)
     );
 }
+
+/// Every route to a root, end to end against the real binary and a store on disk.
+///
+/// The fixture is the shape this command exists for and the one `openbiz ancestors` cannot
+/// describe: Tokyo sits under two concepts that meet again at Asia-Pacific, so it has **one**
+/// ancestor set and **two** ways up, and Asia-Pacific is both a summit and the scheme's own top
+/// concept. Everything in between — the file, the proposal, the approval, the store, the model,
+/// the enumeration — has to work for this to read.
+#[test]
+fn paths_enumerates_both_ways_up_off_disk_and_names_the_scheme_at_the_top() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "routes.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:tokyo a skos:Concept ; skos:prefLabel \"Tokyo\"@en ;\n\
+             skos:broader ex:japan, ex:worldcities .\n\
+         ex:japan a skos:Concept ; skos:prefLabel \"Japan\"@en ; skos:broader ex:apac .\n\
+         ex:worldcities a skos:Concept ; skos:prefLabel \"World cities\"@en ;\n\
+             skos:broader ex:apac .\n",
+    );
+
+    let output = run(
+        dir.path(),
+        &["paths", REGIONS, "https://example.org/regions/tokyo"],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(report.contains("2 route(s) up to a concept"), "{report}");
+    assert!(
+        report.contains(
+            "<https://example.org/regions/tokyo>  (\"Tokyo\"@en) → \
+             <https://example.org/regions/japan>  (\"Japan\"@en) → \
+             <https://example.org/regions/apac>  (\"Asia-Pacific\"@en)"
+        ),
+        "the route through Japan is printed with its labels: {report}"
+    );
+    assert!(
+        report.contains("(\"World cities\"@en) → <https://example.org/regions/apac>"),
+        "and so is the route through World cities: {report}"
+    );
+    assert!(
+        report.contains("1 concept(s) the routes stop at"),
+        "two routes, one summit: {report}"
+    );
+    assert!(
+        report.contains("it is a top concept of <https://example.org/regions/scheme>"),
+        "the summit is the scheme's entry point, which the fixture states with skos:topConceptOf \
+         and S8 turns round: {report}"
+    );
+    assert!(report.contains("[S24]"), "{report}");
+
+    // And `ancestors`, against the same store, reports three ancestors and cannot say there are
+    // two ways to reach the last one. That difference is the reason this command exists.
+    let above = stdout(&run(
+        dir.path(),
+        &["ancestors", REGIONS, "https://example.org/regions/tokyo"],
+    ));
+    assert!(above.contains("3 concept(s) are above it"), "{above}");
+    assert!(
+        !above.contains("route"),
+        "ancestors answers the set, not the routes: {above}"
+    );
+}
+
+/// A cycle above a concept, off disk. The route stops, the loop is named with the statement that
+/// licensed it, and the exit status is still zero — §8.6.8 marks a cycle **consistent**, so this
+/// is a report about the vocabulary and not a failure of the command.
+#[test]
+fn paths_names_a_cycle_it_ran_into_and_still_exits_zero() {
+    let dir = authored();
+    import_and_approve(
+        dir.path(),
+        "loop.ttl",
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+         @prefix ex: <https://example.org/regions/> .\n\
+         ex:shibuya a skos:Concept ; skos:prefLabel \"Shibuya\"@en ; skos:broader ex:wards .\n\
+         ex:wards a skos:Concept ; skos:prefLabel \"Wards\"@en ; skos:broader ex:districts .\n\
+         ex:districts a skos:Concept ; skos:prefLabel \"Districts\"@en ; skos:broader ex:wards .\n",
+    );
+
+    let output = run(
+        dir.path(),
+        &["paths", REGIONS, "https://example.org/regions/shibuya"],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(
+        report.contains("no route from it reaches a concept with no broader concept"),
+        "{report}"
+    );
+    assert!(report.contains("1 cycle(s) in the hierarchy"), "{report}");
+    assert!(
+        report.contains(
+            "<https://example.org/regions/districts>  (\"Districts\"@en) → \
+             <https://example.org/regions/wards>  (\"Wards\"@en) → \
+             <https://example.org/regions/districts>"
+        ),
+        "the loop closes back on itself in the print: {report}"
+    );
+    assert!(
+        report.contains("§8.6.8 of the SKOS Reference marks a cycle consistent"),
+        "{report}"
+    );
+    // The approach is Shibuya alone: the loop begins at Wards, so Wards is in the cycle and not
+    // on the way to it. That boundary is the difference between naming which branch ends nowhere
+    // and printing the loop twice.
+    assert!(
+        report.contains("reached from <https://example.org/regions/shibuya>  (\"Shibuya\"@en)\n"),
+        "the way up that runs into the loop is named: {report}"
+    );
+
+    // And the same store reports no integrity violation, because there is none. Asserted on the
+    // condition rows rather than on the word: the closing summary says "none is violated", which
+    // a naive substring search reads as the opposite of what it means.
+    let integrity = stdout(&run(dir.path(), &["integrity", REGIONS]));
+    let violations: Vec<&str> = integrity
+        .lines()
+        .filter(|line| line.trim_start().starts_with('S') && line.contains("violated"))
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "a cycle is legal SKOS and must not be reported as a violation: {violations:?}"
+    );
+    assert!(integrity.contains("HELD"), "{integrity}");
+}
+
+/// The command refuses a concept the vocabulary does not hold, with a non-zero status.
+///
+/// Sharper here than anywhere else: an unknown concept has no broader concept, so without the
+/// refusal the answer to a typo would be a confident "it is its own root".
+#[test]
+fn paths_refuses_a_concept_the_vocabulary_does_not_hold() {
+    let dir = authored();
+    let output = run(
+        dir.path(),
+        &["paths", REGIONS, "https://example.org/regions/atlantis"],
+    );
+
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let message = stderr(&output);
+    assert!(message.contains("atlantis"), "{message}");
+}

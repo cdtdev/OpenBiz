@@ -1868,7 +1868,7 @@ module's own tests and end to end against the real binary reading a store off di
   against numbers rather than against `adr/0024`'s upward reasoning.
 - **Opened:** iteration 35
 
-### Paths to a root, and naming a cycle, are not implemented
+### ~~Paths to a root, and naming a cycle, are not implemented~~ — CLOSED, iteration 36
 - **Kind:** not-built
 - **What is proven:** nothing, and this entry exists so that the backlog item's own wording does not
   read as done. `openbiz tree` shows *one* route to each descendant — the breadth-first shortest —
@@ -1881,3 +1881,60 @@ module's own tests and end to end against the real binary reading a store off di
   merely large.
 - **What would close it:** part 2 of the concept tree item.
 - **Opened:** iteration 35
+- **Closed:** iteration 36. `CoreModel::paths_to_root` enumerates every simple route up under its
+  own `PathBound`, `HierarchyCycle` names each loop with the way up that ran into it, and
+  `openbiz paths <graph> <concept>` is the production caller. The two readings of "root" are kept
+  apart rather than collapsed — see the entry below, which is what this one turned into.
+
+### `PathBound::DEFAULT` is a judgement about polyhierarchies nobody here has measured
+- **Kind:** untested-boundary
+- **What is proven:** each of the three ceilings refuses rather than truncating, and an incomplete
+  enumeration is distinguishable from a complete one — pinned by a test that hits the route ceiling
+  and the step ceiling separately on a lattice of sixteen routes, and by one that hits the cycle
+  ceiling on a hierarchy with two loops and no routes at all. The same test asserts the thing the
+  bound exists for: on that lattice the *ancestry* is complete at eight concepts while the route
+  list is not, from the same hierarchy at the same moment.
+- **What is not:** the numbers. 10 000 routes, 10 000 cycles and 1 000 000 steps were chosen by
+  reasoning — an ISO 25964 thesaurus is a handful of levels deep and a concept in one has one to
+  three broader concepts, which puts an ordinary worst case in the low thousands — and **not by
+  measurement**. That reasoning puts a real vocabulary uncomfortably near the route ceiling rather
+  than safely below it, which is the opposite of `WalkBound::DEFAULT`'s position going up. Nothing
+  here has ever enumerated routes on a vocabulary large enough to find out, and the step ceiling
+  was taken from `adr/0024`'s link measurement, which measured a *walk* and not an enumeration.
+- **And the generator still cannot produce the shape:** `crates/openbiz-skos/src/scale.rs` builds a
+  chain, in which every concept has exactly one broader concept and therefore exactly one route up.
+  It cannot generate a polyhierarchy at all, so the one input shape that would exercise this bound
+  is the one shape the harness has never been able to make. That is the sixth consecutive iteration
+  to record a gap that is really a gap in the generator.
+- **What would close it:** a branching row in the scale harness — N concepts, B broader links each,
+  depth D — with `paths_to_root` timed from a leaf at the sizes `adr/0024` used, and the default
+  set against those numbers.
+- **Opened:** iteration 36
+
+### Nothing measures what an enumeration costs when it is abandoned rather than completed
+- **Kind:** partial-coverage
+- **What is proven:** the step ceiling stops the enumeration and reports it, and the tests hit it.
+- **What is not:** the cost of the case the ceiling is for. A hierarchy in which every way up runs
+  into a cycle records **no routes at all** while still spending steps building and abandoning them,
+  so `max_paths` never fires and only `max_steps` can stop it. Every cyclic fixture here is three or
+  four concepts, so the abandoned-work path has been proven correct and never proven affordable —
+  and a million steps of it is a million `BTreeSet` insertions and removals on the route, which is
+  the one part of this code whose constant factor nobody has looked at.
+- **What would close it:** the same branching row as the entry above, with a cycle planted near the
+  top so that the enumeration completes nothing, timed against the same vocabulary without it.
+- **Opened:** iteration 36
+
+### A route names its transitive-only steps and no export or endpoint carries that distinction
+- **Kind:** partial-coverage
+- **What is proven:** `RouteStep::is_stated` tells a stated `skos:broader` step from one licensed
+  only by `skos:broaderTransitive`, `openbiz paths` draws the two differently and explains the
+  difference, and a mutation collapsing them fails two tests.
+- **What is not:** anything outside that one report. The distinction is the difference between "this
+  concept is somewhere above that one" and "this concept is its parent", which is exactly what a
+  breadcrumb in the interface will have to render — and Phase 3 has no way to ask for it, because
+  there is no endpoint. The risk is that the interface reimplements the walk over `skos:broader`
+  alone, silently drops every route through a transitive-only link, and shows a shorter breadcrumb
+  than the vocabulary supports.
+- **What would close it:** the concept-tree endpoint of Phase 3, carrying the flag, with a test that
+  a route through a transitive-only step survives the JSON round trip.
+- **Opened:** iteration 36

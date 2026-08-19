@@ -13,6 +13,7 @@ mod labels;
 mod mapping;
 mod model;
 mod notes;
+mod paths;
 mod refinement;
 mod relations;
 mod tree;
@@ -50,6 +51,7 @@ pub use notes::{
     DocumentationCoverage, NoteKind, NoteOrigin, SKOS_CHANGE_NOTE, SKOS_DEFINITION,
     SKOS_EDITORIAL_NOTE, SKOS_EXAMPLE, SKOS_HISTORY_NOTE, SKOS_NOTE, SKOS_SCOPE_NOTE,
 };
+pub use paths::{HierarchyCycle, PathBound, RootPath, RootPaths, RouteStep};
 pub use refinement::{
     PropertyRefinements, PropertyRefinementsBuilder, RefinementBound, RefinementExhaustion,
     RDFS_SUB_PROPERTY_OF,
