@@ -265,7 +265,7 @@ impl DeprecationScanBuilder {
 /// [`CoreModel::deprecate`] produces — but a vocabulary that arrived from another tool carrying a
 /// plain `"true"` is still telling us the concept is deprecated, and reading that as "not
 /// deprecated" would make this command propose a second marker for a concept that already has one.
-fn says_true(term: &Term) -> bool {
+pub(crate) fn says_true(term: &Term) -> bool {
     match term {
         Term::Literal(literal) => {
             literal.value == "true"

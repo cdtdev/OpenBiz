@@ -25,8 +25,8 @@
 
 use openbiz_skos::{
     ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, MappingProperty, Node, NoteKind,
-    PropertyRefinements, RelationOrigin, Resource, SemanticRelation, SkosClass, SkosRule,
-    Statement, Term,
+    PropertyRefinements, RelationOrigin, Resource, Retirement, Retirements, SemanticRelation,
+    SkosClass, SkosRule, Statement, Term,
 };
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
@@ -41,7 +41,8 @@ use crate::cli::CommandError;
 /// store draws that distinction (see [`Store::for_each_statement`]) and losing it here would turn
 /// a typo into a report of a well-formed empty thesaurus.
 pub fn inspect(store: &Store, graph: &str) -> Result<String, CommandError> {
-    Ok(report(graph, &read(store, graph)?))
+    let (model, retirements) = read_with_retirements(store, graph)?;
+    Ok(report(graph, &model, &retirements))
 }
 
 /// Read a vocabulary into the core model — **two passes over the store, not one**.
@@ -56,12 +57,31 @@ pub fn inspect(store: &Store, graph: &str) -> Result<String, CommandError> {
 ///
 /// Shared with `openbiz notes` so the two commands cannot disagree about what a vocabulary says.
 pub(crate) fn read(store: &Store, graph: &str) -> Result<CoreModel, CommandError> {
+    Ok(read_with_retirements(store, graph)?.0)
+}
+
+/// The same two passes, also collecting what the vocabulary says is no longer current.
+///
+/// `owl:deprecated` is not SKOS, so [`CoreModel`] has nothing to say about it and a
+/// [`Retirements`] index is built beside it — from the **same** second pass, so a browse command
+/// that marks its retired concepts costs no extra scan of the store. Every command that shows a
+/// concept to a person goes through this one rather than through [`read`], which is what stops a
+/// new read path from quietly forgetting that some of what it prints is obsolete.
+pub(crate) fn read_with_retirements(
+    store: &Store,
+    graph: &str,
+) -> Result<(CoreModel, Retirements), CommandError> {
     let mut refinements = PropertyRefinements::builder();
     store.for_each_statement(graph, |statement| refinements.push(convert(statement)))?;
 
     let mut builder = CoreModel::builder().with_refinements(refinements.build());
-    store.for_each_statement(graph, |statement| builder.push(convert(statement)))?;
-    Ok(builder.build())
+    let mut retirements = Retirements::builder();
+    store.for_each_statement(graph, |statement| {
+        let statement = convert(statement);
+        retirements.push(statement.clone());
+        builder.push(statement);
+    })?;
+    Ok((builder.build(), retirements.build()))
 }
 
 /// The store's borrowed statement as the domain crate's owned one.
@@ -124,7 +144,7 @@ fn term(value: StatementTerm<'_>) -> Term {
 /// language plus the one number a governance team asks for first: how many concepts have no
 /// preferred label at all. Listing the labels themselves is the concept tree's job, and that is
 /// its own item.
-fn report(graph: &str, model: &CoreModel) -> String {
+fn report(graph: &str, model: &CoreModel, retirements: &Retirements) -> String {
     let mut out = format!(
         "<{graph}>\n  {} statement(s) read\n\n",
         model.statements_read()
@@ -516,6 +536,8 @@ fn report(graph: &str, model: &CoreModel) -> String {
         );
     }
 
+    retirements_section(&mut out, model, retirements);
+
     let derivations = model.derivations();
     if !derivations.is_empty() {
         out.push_str(&format!(
@@ -557,6 +579,114 @@ fn report(graph: &str, model: &CoreModel) -> String {
     );
 
     out
+}
+
+/// What the vocabulary says is no longer current, and what a retirement left behind.
+///
+/// Left out entirely for a vocabulary that retires nothing, which is most of them and the whole of
+/// one that has never used `openbiz deprecate`. A row of zeroes on every report would be the noise
+/// the SKOS-XL section above is omitted to avoid.
+///
+/// It is **not** phrased as findings. A retired concept with current children is the ordinary and
+/// intended aftermath of a retirement — `openbiz deprecate` moves nothing, deliberately, because
+/// whether each child should follow the replacement, be retired too, or stay where it is is a
+/// decision only a person can take (`docs/adr/0040`). So these are counts of work outstanding,
+/// which is what a governance function opens this report for, and not complaints about a
+/// defective vocabulary.
+fn retirements_section(out: &mut String, model: &CoreModel, retirements: &Retirements) {
+    if retirements.is_empty() {
+        return;
+    }
+
+    out.push_str("\nretirements:\n");
+
+    let concepts = model.count_of(SkosClass::Concept);
+    let retired: Vec<(&Node, &Retirement)> = retirements.retired().collect();
+    let as_concepts = retired
+        .iter()
+        .filter(|(node, _)| {
+            model
+                .resource(node)
+                .is_some_and(|resource| resource.is_a(SkosClass::Concept))
+        })
+        .count();
+    out.push_str(&format!(
+        "  {} resource(s) marked owl:deprecated, {as_concepts} of them concepts, out of \
+         {concepts} concept(s)\n",
+        retired.len()
+    ));
+    // OWL 2 §5.5 gives owl:deprecated no logical consequences, and a reader meeting a status
+    // count in a SKOS report is entitled to think the marker changed something. It changed
+    // nothing — that is what makes a retirement safe, and it is why every number below it is not
+    // zero.
+    out.push_str(
+        "  owl:deprecated is an OWL 2 annotation with no logical consequences (\u{a7}5.5), and \
+         SKOS defines no status term of its own; nothing about what these resources mean has \
+         changed\n",
+    );
+
+    let dead_ends = retired
+        .iter()
+        .filter(|(_, retirement)| retirement.is_dead_end())
+        .count();
+    out.push_str(&format!(
+        "  {} record what supersedes them with dcterms:isReplacedBy; {dead_ends} record nothing, \
+         which is a term gone out of use with no successor and not an omission\n",
+        retired.len() - dead_ends
+    ));
+
+    // The two things a retirement leaves standing, asked of the whole vocabulary at once. The
+    // write half reports them one concept at a time, at the moment of retiring it, which is the
+    // one moment nobody is looking at the backlog they add up to.
+    let mut with_current_children = 0usize;
+    let mut heading_schemes = 0usize;
+    for (node, _) in &retired {
+        if model
+            .children(node)
+            .any(|(child, _)| !retirements.is_retired(child))
+        {
+            with_current_children += 1;
+        }
+        if model
+            .resource(node)
+            .is_some_and(|resource| !resource.top_concept_of().is_empty())
+        {
+            heading_schemes += 1;
+        }
+    }
+    if with_current_children > 0 {
+        out.push_str(&format!(
+            "  {with_current_children} of them still have concepts directly below them that are \
+             not retired\n"
+        ));
+    }
+    if heading_schemes > 0 {
+        out.push_str(&format!(
+            "  {heading_schemes} of them are still a scheme's top concept, so a browse of that \
+             scheme still starts at a retired concept\n"
+        ));
+    }
+
+    let unmarked: Vec<&Node> = retirements.unmarked().map(|(node, _)| node).collect();
+    if !unmarked.is_empty() {
+        out.push_str(&format!(
+            "  {} resource(s) record a replacement without being marked owl:deprecated, so every \
+             command here reads them as current:\n",
+            unmarked.len()
+        ));
+        for node in unmarked {
+            out.push_str(&format!("    {node}{}\n", named_of(model, node)));
+        }
+        out.push_str(
+            "    openbiz deprecate writes both statements or neither, so this came from \
+             elsewhere; it is the half of a retirement that has no visible effect\n",
+        );
+    }
+}
+
+/// A resource's label in parentheses, or nothing — for a node that may not be in the model at all.
+fn named_of(model: &CoreModel, node: &Node) -> String {
+    model.resource(node).map(named).unwrap_or_default()
 }
 
 /// The note properties this vocabulary declared for itself, one line each, or nothing.
@@ -1070,5 +1200,122 @@ ex:Chemistry a skos:Concept ;
             ),
             "the lift must explain itself with the statement that licensed it: {report}"
         );
+    }
+
+    /// A vocabulary mid-retirement: one concept retired with a successor and current concepts
+    /// still under it, one retired with no successor while heading a scheme, and one carrying the
+    /// half-retirement `openbiz deprecate` cannot produce.
+    const RETIRING: &str = r#"
+        @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix dcterms: <http://purl.org/dc/terms/> .
+        @prefix ex: <http://example.org/> .
+
+        ex:scheme a skos:ConceptScheme ; skos:hasTopConcept ex:wireless .
+
+        ex:wireless a skos:Concept ; skos:prefLabel "Wireless"@en ;
+            skos:topConceptOf ex:scheme ;
+            owl:deprecated true .
+        ex:aerials a skos:Concept ; skos:prefLabel "Aerials"@en ; skos:broader ex:wireless ;
+            owl:deprecated true ; dcterms:isReplacedBy ex:antennas .
+        ex:masts a skos:Concept ; skos:prefLabel "Masts"@en ; skos:broader ex:aerials .
+        ex:antennas a skos:Concept ; skos:prefLabel "Antennas"@en .
+        ex:telegraphy a skos:Concept ; skos:prefLabel "Telegraphy"@en ;
+            dcterms:isReplacedBy ex:antennas .
+    "#;
+
+    /// The whole-vocabulary view of a retirement backlog, which is the thing `openbiz deprecate`
+    /// reports one concept at a time and nobody sees added up.
+    #[test]
+    fn the_report_counts_what_the_vocabulary_has_retired() {
+        let (_directory, store) = store_with(RETIRING);
+        let report = inspect(&store, VOCABULARY).expect("a registered vocabulary");
+
+        assert!(report.contains("\nretirements:\n"), "{report}");
+        assert!(
+            report.contains(
+                "2 resource(s) marked owl:deprecated, 2 of them concepts, out of 5 \
+                             concept(s)"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "1 record what supersedes them with dcterms:isReplacedBy; 1 record \
+                             nothing"
+            ),
+            "{report}"
+        );
+    }
+
+    /// OWL 2 §5.5 gives the marker no logical consequences, and a count in a SKOS report is
+    /// exactly where a reader would assume otherwise.
+    #[test]
+    fn the_report_says_the_marker_changed_no_meaning() {
+        let (_directory, store) = store_with(RETIRING);
+        let report = inspect(&store, VOCABULARY).expect("a registered vocabulary");
+
+        assert!(
+            report.contains("an OWL 2 annotation with no logical consequences"),
+            "{report}"
+        );
+        assert!(
+            report.contains("SKOS defines no status term of its own"),
+            "{report}"
+        );
+    }
+
+    /// The two things a retirement leaves standing. Counted, not phrased as findings: leaving
+    /// them is the deliberate decision `docs/adr/0040` records, not a defect.
+    #[test]
+    fn the_report_counts_what_the_retirements_left_standing() {
+        let (_directory, store) = store_with(RETIRING);
+        let report = inspect(&store, VOCABULARY).expect("a registered vocabulary");
+
+        // Wireless keeps Aerials, which is retired; Aerials keeps Masts, which is not.
+        assert!(
+            report.contains(
+                "1 of them still have concepts directly below them that are not \
+                             retired"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains("1 of them are still a scheme's top concept"),
+            "{report}"
+        );
+        // And they are counts, not complaints: nothing here becomes a finding.
+        assert!(report.contains("\nfindings: 0\n"), "{report}");
+    }
+
+    /// The half-retirement that reads as a perfectly current concept everywhere else.
+    #[test]
+    fn a_replacement_recorded_without_the_marker_is_named() {
+        let (_directory, store) = store_with(RETIRING);
+        let report = inspect(&store, VOCABULARY).expect("a registered vocabulary");
+
+        assert!(
+            report.contains(
+                "1 resource(s) record a replacement without being marked \
+                             owl:deprecated"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains("<http://example.org/telegraphy>  (\"Telegraphy\"@en)"),
+            "named rather than counted, because a count of one is not actionable: {report}"
+        );
+    }
+
+    /// The section is absent from every vocabulary that has never retired anything, which is most
+    /// of them.
+    #[test]
+    fn a_vocabulary_that_retires_nothing_has_no_retirements_section() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}ex:cats a skos:Concept ; skos:prefLabel \"Cats\"@en .\n"
+        ));
+        let report = inspect(&store, VOCABULARY).expect("a registered vocabulary");
+
+        assert!(!report.contains("retirements:"), "{report}");
     }
 }
