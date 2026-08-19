@@ -2671,3 +2671,77 @@ look competent disables the one signal that catches a stuck loop.
   was already a split item with a rename in it; but that is now the fifth iteration deferring the
   same work, and the next blind-spot pass should do the generator and nothing else. It should
   generate **breadth**, not depth: depth is the shape every number so far has been measured on.
+
+## Iteration 36 — 2026-08-19
+- **Clean start, both inboxes empty, `main` green on `e396b08`.** Took the next unchecked,
+  unblocked Phase 2 item: **the concept tree query API, part 2 — every path to a root, and the
+  cycle a path runs through**. It is the half iteration 35 split out and it closes the
+  `UNTESTED.md` entry that iteration opened so the item's wording would not read as done.
+- **"Root" had to be decided and the decision is that it is two things.** §8 states the hierarchy;
+  §4.6 states concept schemes; **nothing in either relates them.** The specification's numbered
+  statements about `skos:hasTopConcept` are S5, S6, S7 and S8 — its domain, its range, its
+  sub-property of `skos:inScheme`, its inverse — and not one mentions `skos:broader`. So a route
+  runs to a **summit**, a concept with no broader concept, and every **top concept** it passes
+  through is marked *where it passes*, including one part-way up. Stopping a route at a top concept
+  would hide what the graph puts above it; calling every summit a top concept would invent a
+  condition the specification does not state. The report names the disagreement when a vocabulary
+  actually shows it, with the S5-to-S8 reasoning attached, because a reader who found their scheme's
+  entry point half-way up a route will otherwise conclude the report lost it.
+- **A route is simple, and that is the only terminating reading of the question.** §8.6.8 marks a
+  cycle consistent, and a cycle makes the number of walks to a root *infinite* rather than merely
+  large — so "every path to a root" has no answer at all unless a route may not visit a concept
+  twice. A vocabulary whose every way up runs into a loop therefore reports **no routes**, which is
+  the answer and not a failure to find one, and the cycles are its explanation.
+- **The cycle carries the way into it, and that is the substance of the second half.** A walk from
+  one concept reports a loop only when the loop runs back through *that* concept; one two levels
+  above it is invisible from there and is still why that concept has no root to reach. Each loop is
+  rotated to its lowest concept — without that, one loop reached two ways is two cycles, which is a
+  count of ways in wearing the name of a count of loops — and carries the route that ran into it,
+  empty exactly when the loop runs through the origin. One representative approach and not all of
+  them: the loop is one fact however many ways there are in, and listing every approach would be a
+  second exponential inside the first.
+- **Its own bound, three numbers, because they fail differently.** `WalkBound` bounds a *set* and
+  costs the size of the hierarchy; this costs the number of *routes*, which is exponential where the
+  ancestor count is linear. A test asserts exactly that: on a lattice of sixteen routes the ancestry
+  is complete at eight concepts while the route list is not, from the same hierarchy at the same
+  moment. `max_cycles` is separate from `max_paths` because a hierarchy that records no routes at
+  all can still find more loops than this build should hold.
+- **The S22 asymmetry again, one level up from iteration 35's headline.** A step licensed only by
+  `skos:broaderTransitive` states containment and **not** adjacency — there may be levels between
+  the two concepts the vocabulary does not name — so `openbiz paths` draws it `⇢` rather than `→`
+  and prints the legend only when one appears. A breadcrumb drawn from such a step is a true
+  statement of containment and a false statement of adjacency.
+- **Running the product changed the output once, for the ninth iteration running.** Against a store
+  on disk, a vocabulary with a loop above one branch printed three routes and one cycle — and
+  nothing said which of the ways up ran into the loop, so a reader saw three good routes and a loop
+  "somewhere" and could not tell that a whole branch above them ends nowhere. That is what
+  `HierarchyCycle::approach` and the "reached from" line exist for, and neither was in the design
+  before the report was read.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo deny check licenses` all `rc=0`, read from the exit status and not from a pipe.
+  **716 Rust tests, up from 690.** No new dependency. UI untouched, so its suite was not run
+  locally; CI runs it.
+- **Eight mutants, all killed — and the pass had to be thrown away and redone twice.** The first
+  attempt reverted each mutation with `git checkout --`, which **fails on an untracked file**; both
+  `paths.rs` files were new, so three mutations accumulated and the verdicts were about a file with
+  three defects in it. Caught by reading the command's error output rather than its verdicts, then
+  redone against a file copy with the suite re-run green before and after. The second problem was
+  smaller and equally invalidating: `cargo test` stops after the first failing test binary, so the
+  first runs never executed the `openbiz-skos` unit tests at all and reported one killing test where
+  there were two. This is iteration 33's lesson in a third costume — **a mutation you did not verify
+  was reverted is as worthless as one you did not verify was applied**, and a mutation pass that
+  does not run every suite is measuring the suites it happened to reach.
+- **Recorded:** `adr/0033`. Three `UNTESTED.md` entries opened, one closed. No proposals.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T06:02Z.
+- **Still uncertain:** the same doubt as the last five iterations, and it has now become concrete
+  enough that I would call deferring it again a mistake. `PathBound::DEFAULT`'s route ceiling is
+  reasoning and not measurement, and the reasoning puts an ordinary ISO 25964 thesaurus **near**
+  10 000 routes rather than safely below it — the opposite of `WalkBound::DEFAULT`'s position going
+  up. What makes that unresolvable here is not effort: `scale.rs` builds a *chain*, in which every
+  concept has exactly one broader concept and therefore exactly one route up, so it cannot generate
+  a polyhierarchy **at all**. The one input shape that would exercise this entire module is the one
+  shape the harness has never been able to produce. Five previous iterations recorded a gap in the
+  generator and closed a rule instead; this is the sixth, and it is the first where the generator's
+  limitation is not merely unhelpful but makes the new code's central bound unmeasurable in
+  principle. The next blind-spot pass — iteration 40 — should widen the generator and do nothing
+  else, and it should generate **branching**, which is the axis none of the six gaps has had.

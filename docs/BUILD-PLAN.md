@@ -41,7 +41,7 @@ a `Single binary` CI job deletes `ui/dist` from disk and the release binary stil
 interface. **The roadmap is the repo, publicly:** this plan, the ADRs, and the honest gaps in
 `UNTESTED.md` are readable by anyone.
 
-**Current position:** Phase 2 (SKOS authoring model), **15 of 22 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35. **The build now knows
+**Current position:** Phase 2 (SKOS authoring model), **16 of 22 items done** — counted by counting the boxes in the phase, which is the product-owner correction from iteration 4 (`FEEDBACK-LOG.md`). The line here said "14 of 24" before iteration 35 and the phase held 21 items at the time: the total had been carried forward by memory across two splits instead of recounted, so the numerator was right and the denominator was not. 22 is 20 original items plus the two splits — mapping properties at iteration 32, the concept tree at 35; iteration 36 closed the second half of that last split, so the denominator is unchanged and recounted rather than assumed. **The hierarchy can now be read in all three directions and asked by what routes**: up (`openbiz ancestors`), down and sideways (`openbiz tree`), and every route to a root with the cycles a route runs into (`openbiz paths`) — where "root" is deliberately two notions kept apart, because SKOS relates a scheme's top concept to the hierarchy nowhere at all (`adr/0033`). **The build now knows
 what a concept is, what it is called, and how to read a thesaurus that calls things the ISO 25964
 way.** A vocabulary's lexical labels are modelled per language, both of the integrity conditions
 SKOS states on them are enforced (S13, S14), and `openbiz inspect` reports which languages a
@@ -1065,7 +1065,7 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > **Not done, and in `docs/UNTESTED.md`:** the downward walk's cost at any scale — the scale
       > harness builds a chain, which is the one shape in which a subtree is small; and the default
       > bound going down, which is a number nobody here has reached.
-- [ ] Concept tree query API, part 2 — every path to a root, and the cycle a path runs through
+- [x] Concept tree query API, part 2 — every path to a root, and the cycle a path runs through
       > What part 1 deliberately left. A breadcrumb needs *all* the routes from a concept to a top
       > concept, not the shortest one; the count is exponential in a polyhierarchy where the count
       > of ancestors is linear, so it needs a bound of its own with a different failure mode. And a
@@ -1073,6 +1073,29 @@ walk runs both ways — and going down its default is a ceiling an ordinary larg
       > cycles belongs here: part 1 shows only the cycle that runs through the concept asked about.
       > "Root" also needs deciding rather than assuming — a concept with no broader concept is not
       > the same set as a scheme's `skos:hasTopConcept`, and §8 relates neither to the other.
+      > **Done at iteration 36.** `CoreModel::paths_to_root` enumerates every *simple* route up —
+      > the only terminating reading, because §8.6.8 makes a cycle consistent and a cycle makes the
+      > number of walks to a root infinite rather than large. Production caller: `openbiz paths
+      > <graph> <concept>`. See `adr/0033`.
+      > **"Root" was decided as two things and they are kept apart.** A route runs to a *summit*, a
+      > concept with no broader concept; a *top concept* is a scheme's declared entry point. SKOS
+      > relates neither to the other — its statements about `skos:hasTopConcept` are S5 to S8, none
+      > of which mentions `skos:broader` — so a top concept part-way up a route is marked where it
+      > sits and the report names the disagreement when it occurs. Collapsing them would have
+      > invented a condition the specification does not state.
+      > **A cycle carries the way into it.** Rotated to its lowest concept, so one loop reached two
+      > ways is one cycle and not two spellings of it, and carrying the route that ran into it —
+      > empty only when the loop runs through the concept asked about, which is the one case
+      > `openbiz ancestors` can already report. Without the approach a reader sees routes that do
+      > reach a summit and a loop somewhere, and cannot tell that a branch above them ends nowhere.
+      > **Its own bound, three numbers:** routes recorded, distinct cycles named, links followed.
+      > They fail differently — a hierarchy that records no routes at all can still find many loops
+      > — and the route ceiling is the exponential one. A test asserts the thing the bound exists
+      > for: on a lattice of sixteen routes the *ancestry* is complete at eight concepts while the
+      > route list is not.
+      > **Scope, honestly:** the defaults are reasoning and not measurement, and `scale.rs` builds
+      > a chain, so it cannot generate a polyhierarchy at all — the one shape that would exercise
+      > this bound is the one shape the harness cannot make. Three `UNTESTED.md` entries.
 - [ ] Full-text search across labels with language filtering and prefix/infix matching
 - [ ] Concept IRI minting: configurable patterns, collision detection, opaque-vs-readable policy
 - [ ] Bulk operations: merge concepts, split a concept, move a subtree, deprecate with replacement

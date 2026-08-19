@@ -95,6 +95,13 @@ pub enum Command {
         /// The IRI of the concept to walk up from.
         concept: String,
     },
+    /// Report every route from one concept up to a root, and why. Reads and nothing else.
+    Paths {
+        /// The IRI of the vocabulary graph to read.
+        graph: String,
+        /// The IRI of the concept to enumerate the routes above.
+        concept: String,
+    },
     /// Report what is below one concept and beside it, and why. Reads and nothing else.
     Tree {
         /// The IRI of the vocabulary graph to read.
@@ -153,6 +160,8 @@ Usage:
   openbiz integrity <graph>  report which SKOS integrity conditions <graph> satisfies
   openbiz ancestors <graph> <concept>
                              report what is above <concept> in the hierarchy, and why
+  openbiz paths <graph> <concept>
+                             report every route from <concept> up to a root, and why
   openbiz tree <graph> <concept>
                              report what is below <concept> and beside it, and why
   openbiz notes <graph> <resource>
@@ -178,6 +187,14 @@ Ancestors only reads. It walks `skos:broaderTransitive` up from one concept and 
 concept above it with the path that reached it, which for a link nobody stated is the derivation
 S24 licensed. The closure is never stored — a legal SKOS hierarchy can be arbitrarily deep, and a
 cycle in it is legal too — so this walks it on demand and says so if it stops at its bound.
+
+Paths only reads. It is the other half of ancestors: not which concepts are above one, but by
+what routes. In a polyhierarchy the number of ancestors is linear and the number of routes is not,
+so this has a bound of its own and says when it hit it. A route stops at a concept with no broader
+concept, which is not the same thing as a scheme's top concept — SKOS relates neither to the other
+— so both are reported and kept apart. A route that runs into a cycle stops there and the cycle is
+named, including one that does not run through the concept asked about, which is the case an
+upward walk cannot see and is still the reason a breadcrumb has no root to reach.
 
 Tree only reads. It is ancestors turned round: the concepts one skos:narrower link below, the
 ones sharing a broader concept — our term, not one SKOS states — and everything below under
@@ -316,6 +333,17 @@ impl Command {
                     concept: Self::text(
                         "ancestors",
                         "the IRI of a concept to walk up from",
+                        &mut args,
+                    )?,
+                },
+            ),
+            "paths" => (
+                "paths",
+                Self::Paths {
+                    graph: Self::text("paths", "the IRI of a vocabulary to read", &mut args)?,
+                    concept: Self::text(
+                        "paths",
+                        "the IRI of a concept to enumerate the routes above",
                         &mut args,
                     )?,
                 },
@@ -1135,6 +1163,7 @@ mod tests {
             "inspect",
             "integrity",
             "ancestors",
+            "paths",
             "tree",
             "notes",
             "mappings",
