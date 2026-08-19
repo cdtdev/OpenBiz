@@ -200,7 +200,7 @@ impl Ancestry {
         Some(Derivation {
             conclusion: format!("{} skos:broaderTransitive {node}", self.origin),
             premise,
-            rule: SkosRule::S24,
+            rule: SkosRule::S24.into(),
         })
     }
 }

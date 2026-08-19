@@ -24,8 +24,8 @@
 //! vocabulary redirects to a file; an operator with a truncated report has no way to know.
 
 use openbiz_skos::{
-    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, RelationOrigin, Resource,
-    SemanticRelation, SkosClass, Statement, Term,
+    ClassOrigin, CoreModel, LabelKind, LabelOrigin, Literal, Node, NoteKind, PropertyRefinements,
+    RelationOrigin, Resource, SemanticRelation, SkosClass, Statement, Term,
 };
 use openbiz_store::{StatementRef, StatementTerm, Store};
 
@@ -40,9 +40,27 @@ use crate::cli::CommandError;
 /// store draws that distinction (see [`Store::for_each_statement`]) and losing it here would turn
 /// a typo into a report of a well-formed empty thesaurus.
 pub fn inspect(store: &Store, graph: &str) -> Result<String, CommandError> {
-    let mut builder = CoreModel::builder();
+    Ok(report(graph, &read(store, graph)?))
+}
+
+/// Read a vocabulary into the core model — **two passes over the store, not one**.
+///
+/// The first pass reads only `rdfs:subPropertyOf` and keeps the property graph; the second builds
+/// the model knowing what the vocabulary's own note properties refine. The order is forced rather
+/// than chosen: a declaration may sit after every statement that uses it, and RDF has no document
+/// order for a single pass to rely on. `docs/adr/0028` records why the alternative — buffering the
+/// unrecognised statements until the declarations arrive — was refused: it would trade a second
+/// scan of the store for holding most of the graph in memory, and "peak memory is the model rather
+/// than the graph" is a promise this command makes two paragraphs above.
+///
+/// Shared with `openbiz notes` so the two commands cannot disagree about what a vocabulary says.
+pub(crate) fn read(store: &Store, graph: &str) -> Result<CoreModel, CommandError> {
+    let mut refinements = PropertyRefinements::builder();
+    store.for_each_statement(graph, |statement| refinements.push(convert(statement)))?;
+
+    let mut builder = CoreModel::builder().with_refinements(refinements.build());
     store.for_each_statement(graph, |statement| builder.push(convert(statement)))?;
-    Ok(report(graph, &builder.build()))
+    Ok(builder.build())
 }
 
 /// The store's borrowed statement as the domain crate's owned one.
@@ -248,6 +266,13 @@ fn report(graph: &str, model: &CoreModel) -> String {
             "  §7 states no integrity condition, so an undocumented concept is consistent SKOS; \
              requiring a definition is a Z39.19 / ISO 25964 rule pack\n",
         );
+
+        // Which properties the vocabulary declared for itself, named rather than merely counted.
+        // §7.1 calls the seven "a set of extension points", and a thesaurus that has used them has
+        // note properties whose names do not appear anywhere else in this report — so an author
+        // checking "12 through a declared refinement" against their own file has nothing to search
+        // for unless this line prints it.
+        out.push_str(&refinements(model.refinements()));
     }
 
     let schemes: Vec<_> = model.instances_of(SkosClass::ConceptScheme).collect();
@@ -407,6 +432,27 @@ fn report(graph: &str, model: &CoreModel) -> String {
         }
     });
 
+    out
+}
+
+/// The note properties this vocabulary declared for itself, one line each, or nothing.
+///
+/// Silent when the vocabulary declared none, which is the common case — a section that printed
+/// "0 declared refinements" for every ordinary thesaurus would be noise, and unlike the coverage
+/// table above there is no zero here anybody is asking about.
+///
+/// The arrow is `→` and not `rdfs:subPropertyOf` because the target may be several declarations
+/// away: the line states what was *entailed*, and `openbiz notes` prints the chain that reached
+/// it for any concept carrying one.
+fn refinements(refinements: &PropertyRefinements) -> String {
+    if refinements.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("  this vocabulary declares note properties of its own:\n");
+    for (property, kinds) in refinements.iter() {
+        let targets: Vec<String> = kinds.keys().map(NoteKind::to_string).collect();
+        out.push_str(&format!("    <{property}> → {}\n", targets.join(", ")));
+    }
     out
 }
 
@@ -704,6 +750,70 @@ mod tests {
         );
         assert!(
             report.contains("1 concept(s) have no skos:prefLabel in any language"),
+            "{report}"
+        );
+    }
+
+    /// The coverage table counts a refined note, and the report **names the property** it came
+    /// from — a number an author cannot check against their own file is not a report.
+    #[test]
+    fn the_coverage_table_names_the_vocabularys_own_note_properties() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:usageNote rdfs:subPropertyOf skos:scopeNote .
+
+ex:Chemistry a skos:Concept ;
+  skos:prefLabel \"Chemistry\"@en ;
+  ex:usageNote \"Use for the discipline.\"@en ."
+        ));
+
+        let report = match inspect(&store, VOCABULARY) {
+            Ok(report) => report,
+            Err(error) => unreachable!("the vocabulary is registered: {error}"),
+        };
+
+        assert!(report.contains("documentation:"), "{report}");
+        assert!(
+            report.contains("through a declared refinement"),
+            "the scope-note row must say the note was not written under skos:scopeNote: {report}"
+        );
+        assert!(
+            report.contains("this vocabulary declares note properties of its own"),
+            "{report}"
+        );
+        assert!(
+            report.contains("<http://example.org/usageNote> → skos:scopeNote"),
+            "{report}"
+        );
+        // And S17 still runs on top of it, so `skos:note` is 1 rather than 0.
+        assert!(report.contains("inferred under S17"), "{report}");
+    }
+
+    /// An ordinary thesaurus declares nothing, and the section stays silent. A "0 declared
+    /// refinements" line on every vocabulary would be noise, unlike the coverage zeroes above it
+    /// which are the answer to a question somebody asked.
+    #[test]
+    fn a_vocabulary_that_declares_no_refinements_gets_no_refinement_section() {
+        let (_directory, store) = store_with(&format!(
+            "{PREFIXES}
+ex:Chemistry a skos:Concept ;
+  skos:prefLabel \"Chemistry\"@en ;
+  skos:definition \"The study of matter.\"@en ."
+        ));
+
+        let report = match inspect(&store, VOCABULARY) {
+            Ok(report) => report,
+            Err(error) => unreachable!("the vocabulary is registered: {error}"),
+        };
+
+        assert!(report.contains("documentation:"), "{report}");
+        assert!(
+            !report.contains("declares note properties of its own"),
+            "{report}"
+        );
+        assert!(
+            !report.contains("through a declared refinement"),
             "{report}"
         );
     }
