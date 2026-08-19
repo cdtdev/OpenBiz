@@ -2954,3 +2954,78 @@ look competent disables the one signal that catches a stuck loop.
   I should have refused to ship inference without persistence; the argument for shipping is that a
   curator writing an import file today has nothing at all, and the argument against is that a
   default which drifts is exactly the kind of quiet wrongness this ledger exists to catch.
+
+## Iteration 40 — 2026-08-19
+- **Clean start, verified rather than assumed.** `main` at `20da6f9`, tree clean, both human
+  inboxes empty (`promote-queue.json` is `[]`, `feedback.md` is zero bytes), and the CI run for the
+  previous merge already `completed success` before I read it rather than after.
+- **Took: the blind-spot pass, and the one it was told to take.** Iteration 36 nominated iteration
+  40 by name — "widen the generator and do nothing else, and it should generate **branching**" —
+  and it was the sixth iteration in a row to say a version of that. Iterations 31 to 36 each closed
+  a rule and each recorded, in that rule's words, the same finding: `scale.rs` only ever produces
+  the easy shape. So no plan item moved.
+- **The gap was worse than "the generator is narrow". It made a bound unmeasurable in principle.**
+  Every shape the harness could build — tree, star, chain — is a **monohierarchy**, one broader
+  concept per concept, so exactly one route from any concept to a summit. `PathBound::max_paths`
+  exists to stop route enumeration being exponential. A graph with one route per concept cannot
+  exercise it *at any size*, so four iterations of writing "nobody has measured this constant" were
+  not describing an untaken measurement; they were describing one this repository could not take.
+- **Two shapes, and the second is the interesting one.** `Shape::Polytree` is a balanced tree in
+  which one concept in four states extra broader links — the share and the width taken from
+  iteration 37's count of LC Genre/Form Terms (25.8% polyhierarchic, maximum 4), so the realistic
+  row is calibrated to a real vocabulary rather than to my taste. `Shape::Lattice` is levels of *w*
+  concepts each linked to the **whole** level above, so routes multiply by *w* per level: the route
+  ceiling, and the counterpart of `Chain` for the closure. Both keep every extra link pointing at an
+  earlier index, which is what makes them acyclic without a check — and, recorded honestly, is also
+  why they still cannot exercise the abandoned-enumeration path.
+- **The realistic answer is reassuring and the pathological one is alarming, which is the right way
+  round.** A million-concept polyhierarchy of LCGFT's shape enumerates **16 routes** against a
+  ceiling of 10 000 — three orders of magnitude of headroom, and the entry's original fear of being
+  "uncomfortably near the ceiling" was wrong in the safe direction. The ceiling is reached instead
+  by **thirty concepts and fifty-six links**: a binary lattice fifteen levels deep has 2¹⁴ routes.
+  So `max_paths` is not a size limit at all, it is a *shape* limit. Both sides of that boundary are
+  pinned — 29 concepts complete at 8 192 routes, 30 exhaust it — because a test that only showed the
+  bound being hit would pass equally against a bound of zero.
+- **`adr/0024`'s central finding was tested on a shape it was never measured on, and it held.** The
+  closure multiple runs 4.1× / 5.9× / 7.9× across the decades on a polyhierarchy, the same
+  one-per-decade rise the tree shows, displaced up by about two. So "the realistic multiple is the
+  average depth" survives branching: a second parent adds to the average depth rather than doing
+  something new. That is the **opposite** of what iterations 33 and 36 assumed when they reasoned
+  branching and depth would compound, and it is the second time in four iterations that reasoning
+  about this model pointed the wrong way and a measurement corrected it.
+- **Running the harness found the defect, for the eleventh iteration running, and this time it was
+  in the measurement rather than the product.** The route column was read from the last-generated
+  concept — deepest in a chain, an arbitrary *leaf* in a polytree. A narrow leaf has one route
+  however polyhierarchic the vocabulary above it is, so the first run printed `routes 1` for a graph
+  built specifically to have more, and it printed it as a fact. A benchmark whose column silently
+  measures the wrong concept is exactly the failure this module's own docstring warns about. The
+  origin is now chosen per shape and the reason is written where the choice is made.
+- **Three of my hand-computed constants were wrong and the generator was right each time** —
+  concept 8's primary parent is also 0 at branching 10, so 247 concepts widen and not 249; a
+  30-concept lattice states 56 links, not 59; and 30 concepts exhaust the bound where I had written
+  31. Recorded because the failure mode is worth naming: I wrote assertions from arithmetic and the code
+  from the definition, and the assertions were the weaker of the two.
+- **Verification.** `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+  `cargo test --workspace`, `cargo deny check licenses` — all `rc=0`, read from the exit status and
+  never through a pipe. **809 Rust tests, up from 803**, six of them new here and two of those not
+  `#[ignore]`d, because the route ceiling is reached by tens of concepts and costs milliseconds. The
+  release table was actually run: 10k, 100k and 1M rows at two widths, plus the S27 sweep over a
+  polyhierarchy. No new dependency. UI untouched — this is a test harness.
+- **Recorded:** `adr/0024` extended with the polyhierarchic table and an explicit "the decision
+  stands unchanged"; `UNTESTED.md` — **one entry closed** (`PathBound::DEFAULT`), two amended (the
+  downward walk, where only the input half is done and the `descent` measurement is still absent;
+  and the abandoned enumeration, where the missing half is a cycle no shape here can make), and two
+  opened (the four remaining generator axes, indexed so closing branching cannot read as closing
+  them; and the 8.2 GiB peak). No proposals — iteration 37's still sits unpromoted.
+- **The date agrees.** `currentDate` 2026-08-19, `date -u` 2026-08-19T07:35Z at branch creation.
+- **Still uncertain:** whether closing a doubt by measuring it on a *synthetic* shape calibrated to
+  a real one is closure or a better-dressed version of the same assumption. The polytree's share and
+  width are LCGFT's, but its branching factor, its depth, its uniform IRIs and its total absence of
+  labels are all mine, and the number I am now relying on — 16 routes at a million concepts — comes
+  from a graph whose regularity may be exactly what keeps the routes low. A real thesaurus has
+  clusters: a facet where everything is polyhierarchic sitting beside one where nothing is. My
+  generator spreads the 25% evenly because that is what "one in four" means, and evenly spread is
+  the arrangement least likely to compound. So I have replaced "the constant is unmeasured" with "the
+  constant is measured against a distribution I invented", which is better and is not the same as
+  settled — and the thing that would actually settle it is iteration 37's LCGFT fixture, which is
+  still sitting in `PROPOSED.md` unpromoted for the fourth iteration.
